@@ -32,7 +32,7 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 | 章 | 主题 | 内容 | 对应文章 | 状态 |
 |----|------|------|---------|------|
 | 1 | 接入模型与流式对话 | ChatClient + 系统提示词、按 profile 切换 Ollama / OpenAI 兼容接口、阻塞与 SSE 流式接口、超时与友好报错 | [Spring AI](https://clarence404.github.io/java-doc/ai/2_frameworks/0_spring_ai.html)、[Ollama](https://clarence404.github.io/java-doc/ai/3_integration/0_ollama.html) | [`ch01-start`](https://github.com/Clarence404/mall-assistant/tree/ch01-start) / [`ch01-done`](https://github.com/Clarence404/mall-assistant/tree/ch01-done) |
-| 2 | Prompt 与结构化输出 | 提示词模板、意图识别、输出 Java 对象 | [Prompt 工程](https://clarence404.github.io/java-doc/ai/1_concepts/1_prompt.html) | 计划中 |
+| 2 | Prompt 与结构化输出 | 带变量、分版本的提示词模板，意图识别输出 Java 对象（原生结构化输出 + 重试兜底），超出范围直接拒答，录制回放测试 | [Prompt 工程](https://clarence404.github.io/java-doc/ai/1_concepts/1_prompt.html) | [`ch02-start`](https://github.com/Clarence404/mall-assistant/tree/ch02-start) / [`ch02-done`](https://github.com/Clarence404/mall-assistant/tree/ch02-done) |
 | 3 | 工具调用 | 调 mall-evolution 的接口查订单、查库存 | [Function Calling](https://clarence404.github.io/java-doc/ai/1_concepts/2_function_calling.html) | 计划中 |
 | 4 | 知识入库 | 商城规则文档切块、向量化、存入 pgvector | [Embedding](https://clarence404.github.io/java-doc/ai/4_core_tech/0_embedding.html)、[向量数据库](https://clarence404.github.io/java-doc/ai/4_core_tech/1_vector_db.html) | 计划中 |
 | 5 | RAG | 检索增强回答、引用来源 | [RAG](https://clarence404.github.io/java-doc/ai/4_core_tech/2_rag.html) | 计划中 |
@@ -48,9 +48,11 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 1. 安装 Ollama：Windows 下载 `OllamaSetup.exe` 直接安装（装在用户目录，不需要管理员权限），装好后它在后台监听 `http://localhost:11434`
 2. 拉取模型（约 400 MB）：`ollama pull qwen2.5:0.5b`，可用 `ollama run qwen2.5:0.5b` 先在命令行试一句
 3. 启动：`./mvnw spring-boot:run`（Windows PowerShell 用 `.\mvnw.cmd spring-boot:run`），默认 profile 是 `ollama`
-4. 打开 <http://localhost:8088/>，在页面上提问；右上角可切换流式 / 阻塞，底部「调试面板」显示耗时与错误码
+4. 打开 <http://localhost:8088/>，在页面上提问；右上角可切换流式 / 阻塞，底部「调试面板」显示耗时、错误码与识别出的意图
 
-换模型：设置环境变量 `OLLAMA_CHAT_MODEL`（如 `qwen3:0.6b`），先 `ollama pull` 好。
+换模型：设置环境变量 `OLLAMA_CHAT_MODEL`（如 `qwen2.5:1.5b`，约 1 GB），先 `ollama pull` 好。0.5b 能跑通全部流程，但第 2 章起的意图识别只分对一半左右；1.5b 明显更准（录制的 12 条消息分对 11 条）。
+
+提示词版本：`assistant.prompt.version`（默认 `v2`，可改回 `v1` 对比）；商城名、服务范围等模板变量在 `application.yml` 的 `assistant.prompt.*`。
 
 ### 端口规划
 
@@ -98,8 +100,9 @@ cp application-local.example.yml application-local.yml   # 已被 .gitignore 忽
 
 | 层 | 命名 | 需要 Docker | 覆盖 |
 |----|------|------------|------|
-| 单元 / 切片测试 | `*Test` | 否 | 用不联网的 `FakeChatModel` 替换模型：系统提示词、阻塞与流式回答、超时与不可用的错误映射、SSE 事件序列、profile 切换 |
-| 集成测试 | `*IT` | 是 | Testcontainers 起真实 Ollama、拉取 `qwen2.5:0.5b`，走一遍阻塞与流式接口 |
+| 单元 / 切片测试 | `*Test` | 否 | 用不联网的 `FakeChatModel` 替换模型：提示词模板、阻塞与流式回答、意图识别的解析 / 重试 / 兜底、超时与不可用的错误映射、SSE 事件序列、profile 切换 |
+| 录制回放 | `IntentReplayTest` | 否 | 回放 `src/test/resources/recordings/` 里真实模型（qwen2.5 0.5b / 1.5b）录下的原样输出，验证代码能处理真实输出；重新录制见 [`docs/ch02.md`](docs/ch02.md#录制回放) |
+| 集成测试 | `*IT` | 是 | Testcontainers 起真实 Ollama、拉取 `qwen2.5:0.5b`，走一遍阻塞与流式接口和意图识别（录制工具 `IntentRecordingIT` 只在设置了 `RECORD_OLLAMA_URL` 时运行） |
 
 没有 Docker 的机器上集成测试自动跳过（`@Testcontainers(disabledWithoutDocker = true)`）。模型文件缓存在 `~/.cache/mall-assistant/ollama`（可用 `OLLAMA_MODELS_CACHE` 指定），只下载一次。
 
@@ -114,14 +117,17 @@ cp application-local.example.yml application-local.yml   # 已被 .gitignore 忽
 ```text
 mall-assistant/
 ├── src/main/java/io/github/clarence404/assistant/
-│   ├── chat/                 ChatClient 配置、ChatService、阻塞与 SSE 接口、事件定义
+│   ├── chat/                 ChatClient 配置、ChatService（意图 → 拒答或回答）、阻塞与 SSE 接口、事件定义
+│   ├── prompt/               提示词模板：按版本选文件、渲染变量、拒答话术
+│   ├── intent/               意图识别：IntentResult、结构化输出与重试兜底、/api/intent
 │   └── error/                模型失败分类（MODEL_UNAVAILABLE / MODEL_TIMEOUT）与 ProblemDetail
 ├── src/main/resources/
 │   ├── application.yml       公共配置：超时、重试、ProblemDetail
 │   ├── application-ollama.yml / application-openai.yml   按 profile 切换模型厂商
-│   ├── prompts/system.st     客服人设（系统提示词）
+│   ├── prompts/              客服人设 system-v1.st / system-v2.st、意图识别 intent-v1.st、拒答话术 refusal.st
 │   └── static/index.html     聊天页面（原生 HTML/CSS/JS）
-├── src/test/java/            FakeChatModel、单元与接口测试、OllamaChatIT
+├── src/test/java/            FakeChatModel、单元与接口测试、录制回放、OllamaChatIT
+├── src/test/resources/recordings/   真实模型的录制输出（录制回放用）
 ├── docs/chNN.md              每章的练习说明
 ├── application-local.example.yml   本地覆盖配置模板（复制为 application-local.yml，不入库）
 ├── .run/                     IntelliJ IDEA 共享运行配置

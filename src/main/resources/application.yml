@@ -33,6 +33,13 @@ spring:
 assistant:
   chat:
     stream-timeout: 30s      # 流式：首段和相邻两段之间最多等多久
+    refuse-min-confidence: 0.6   # 意图为 OUT_OF_SCOPE 且把握不低于它才直接拒答（不调回答模型）
+  prompt:
+    version: v2              # 系统提示词版本：prompts/system-v2.st；改回 v1 可对比效果
+    shop-name: 示例商城
+    assistant-name: 小示
+    support-scope: 商品、下单、支付、物流、退换货与售后、账户与积分
+    zone: Asia/Shanghai      # 渲染「今天」用的时区
 
 server:
   port: ${SERVER_PORT:8088}    # 与 mall-evolution（8080 / 8082 / 8083 / 9000）错开，两个项目可以同时运行

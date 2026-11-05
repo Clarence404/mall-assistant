@@ -1,9 +1,11 @@
 package io.github.clarence404.assistant.chat;
 
 /**
- * 流式接口 {@code POST /api/chat/stream} 推给前端的三种 SSE 事件，data 都是 JSON。
+ * 流式接口 {@code POST /api/chat/stream} 推给前端的 SSE 事件，data 都是 JSON。
  *
  * <ul>
+ *   <li>{@code event: intent}，data 为 {@code IntentResult}：第 2 章新增，最先推送，告诉前端识别出的意图；只认 token / done / error
+ *       的旧前端忽略它即可
  *   <li>{@code event: token}，data 为 {@link Token}：一段增量文本，前端按顺序拼接
  *   <li>{@code event: done}，data 为 {@link Done}：回答结束，之后连接关闭
  *   <li>{@code event: error}，data 为 {@link Error}：出错，之后连接关闭，不再有 done
@@ -13,6 +15,7 @@ package io.github.clarence404.assistant.chat;
  */
 public final class StreamEvents {
 
+    public static final String INTENT = "intent";
     public static final String TOKEN = "token";
     public static final String DONE = "done";
     public static final String ERROR = "error";

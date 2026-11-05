@@ -27,7 +27,7 @@ class ChatApiTest extends FakeModelWebTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reply").value("您好，订单付款后一般 48 小时内发货。"));
 
-        assertThat(model.lastPrompt().getSystemMessage().getText()).contains("示例商城");
+        assertThat(model.lastPrompt().getSystemMessage().getText()).contains("客服");
         assertThat(model.lastPrompt().getUserMessage().getText()).isEqualTo("什么时候发货？");
     }
 

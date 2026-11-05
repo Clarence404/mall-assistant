@@ -24,6 +24,10 @@ class IndexPageTest extends FakeModelWebTest {
                 .getResponse()
                 .getContentAsString(StandardCharsets.UTF_8);
 
-        assertThat(html).contains("示例商城智能客服").contains("/api/chat/stream").contains("调试面板");
+        assertThat(html)
+                .contains("示例商城智能客服")
+                .contains("/api/chat/stream")
+                .contains("调试面板")
+                .contains("dbgIntent");
     }
 }

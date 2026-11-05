@@ -5,10 +5,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.clarence404.assistant.error.ModelCallException;
 import io.github.clarence404.assistant.error.ModelFailure;
-import java.io.IOException;
+import io.github.clarence404.assistant.intent.IntentService;
+import io.github.clarence404.assistant.prompt.TestPrompts;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,7 +19,7 @@ import org.springframework.web.client.ResourceAccessException;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
-/** 第 1 章：ChatClient 配置与 ChatService，假模型，不联网。 */
+/** 第 1 章：ChatClient 与 ChatService 的阻塞、流式调用和错误归类，假模型，不联网。系统提示词的模板渲染见第 2 章的 AssistantPromptsTest。 */
 class ChatServiceTest {
 
     private final FakeChatModel model = new FakeChatModel();
@@ -27,19 +27,18 @@ class ChatServiceTest {
 
     @BeforeEach
     void setUp() {
-        ChatClient chatClient = new ChatClientConfig()
-                .chatClient(ChatClient.builder(model), new ClassPathResource("prompts/system.st"));
-        service = new ChatService(chatClient, new ChatProperties(Duration.ofMillis(300)));
+        ChatClient chatClient = new ChatClientConfig().chatClient(ChatClient.builder(model));
+        IntentService intentService = new IntentService(chatClient, new ClassPathResource("prompts/intent-v1.st"));
+        service = new ChatService(
+                chatClient, new ChatProperties(Duration.ofMillis(300), 0.6), TestPrompts.prompts("v2"), intentService);
     }
 
     @Test
-    void systemPromptFromClasspathIsSentWithEveryRequest() throws IOException {
-        String expected = new ClassPathResource("prompts/system.st").getContentAsString(StandardCharsets.UTF_8);
-
+    void systemPromptIsSentWithEveryRequest() {
         service.reply("你们支持七天无理由退货吗？");
 
         SystemMessage system = model.lastPrompt().getSystemMessage();
-        assertThat(system.getText()).isEqualToIgnoringWhitespace(expected).contains("示例商城");
+        assertThat(system.getText()).contains("客服");
         assertThat(model.lastPrompt().getUserMessage().getText()).isEqualTo("你们支持七天无理由退货吗？");
     }
 
@@ -57,7 +56,7 @@ class ChatServiceTest {
         StepVerifier.create(service.stream("能退货吗"))
                 .expectNext("签收后", "七天内", "可以申请退货。")
                 .verifyComplete();
-        assertThat(model.lastPrompt().getSystemMessage().getText()).contains("示例商城");
+        assertThat(model.lastPrompt().getSystemMessage().getText()).contains("客服");
     }
 
     @Test

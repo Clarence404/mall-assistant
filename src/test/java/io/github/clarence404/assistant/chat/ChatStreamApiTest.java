@@ -15,7 +15,7 @@ import org.springframework.web.client.ResourceAccessException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-/** 第 1 章：流式接口 POST /api/chat/stream（SSE）。 */
+/** 第 1 章：流式接口 POST /api/chat/stream（SSE）。第 2 章起最前面多一个 intent 事件，这里只看它后面的事件序列。 */
 class ChatStreamApiTest extends FakeModelWebTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
@@ -27,14 +27,14 @@ class ChatStreamApiTest extends FakeModelWebTest {
         MvcResult result = stream("什么时候发货？");
 
         assertThat(result.getResponse().getContentType()).startsWith(MediaType.TEXT_EVENT_STREAM_VALUE);
-        List<Sse> events = parse(result);
+        List<Sse> events = afterIntent(parse(result));
         assertThat(events).hasSizeGreaterThanOrEqualTo(3);
         List<Sse> tokens = events.subList(0, events.size() - 1);
         assertThat(tokens).allSatisfy(e -> assertThat(e.event()).isEqualTo("token"));
         assertThat(tokens.stream().map(e -> e.json().get("text").asString()))
                 .containsExactly("您好，", "订单付款后", "\n一般 48 小时内发货。");
         assertThat(events.getLast().event()).isEqualTo("done");
-        assertThat(model.lastPrompt().getSystemMessage().getText()).contains("示例商城");
+        assertThat(model.lastPrompt().getSystemMessage().getText()).contains("客服");
     }
 
     @Test
@@ -45,13 +45,20 @@ class ChatStreamApiTest extends FakeModelWebTest {
         MvcResult result = stream("在吗");
 
         List<Sse> events = parse(result);
-        assertThat(events).extracting(Sse::event).containsExactly("token", "error");
+        assertThat(events).extracting(Sse::event).containsExactly("intent", "token", "error");
         JsonNode error = events.getLast().json();
         assertThat(error.get("code").asString()).isEqualTo("MODEL_UNAVAILABLE");
         assertThat(error.get("message").asString()).isNotBlank();
         assertThat(result.getResponse().getContentAsString(StandardCharsets.UTF_8))
                 .doesNotContain("Exception")
                 .doesNotContain("Connection refused");
+    }
+
+    /** 去掉最前面的 intent 事件（第 2 章新增）。 */
+    static List<Sse> afterIntent(List<Sse> events) {
+        assertThat(events).isNotEmpty();
+        assertThat(events.getFirst().event()).isEqualTo("intent");
+        return events.subList(1, events.size());
     }
 
     private MvcResult stream(String message) throws Exception {
@@ -69,7 +76,7 @@ class ChatStreamApiTest extends FakeModelWebTest {
     record Sse(String event, JsonNode json) {}
 
     /** 按 SSE 规范解析：事件之间空行分隔，多行 data 用换行拼接。 */
-    private static List<Sse> parse(MvcResult result) throws Exception {
+    static List<Sse> parse(MvcResult result) throws Exception {
         String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
         List<Sse> events = new ArrayList<>();
         for (String block : body.replace("\r\n", "\n").split("\n\n")) {

@@ -95,6 +95,15 @@
         </dl>
       </section>
       <section>
+        <h3>意图识别</h3>
+        <dl>
+          <dt>意图</dt><dd id="dbgIntent">-</dd>
+          <dt>把握</dt><dd id="dbgConfidence">-</dd>
+          <dt>订单号</dt><dd id="dbgOrderNo">-</dd>
+          <dt>SKU</dt><dd id="dbgSku">-</dd>
+        </dl>
+      </section>
+      <section>
         <h3>工具调用</h3>
         <p class="placeholder">第 3 章接入工具后，这里显示模型调用了哪些工具、参数与结果。</p>
       </section>
@@ -130,8 +139,27 @@
   }
 
   function debug(values) {
-    const map = { endpoint: 'dbgEndpoint', status: 'dbgStatus', first: 'dbgFirst', total: 'dbgTotal', chunks: 'dbgChunks', error: 'dbgError' };
+    const map = {
+      endpoint: 'dbgEndpoint', status: 'dbgStatus', first: 'dbgFirst', total: 'dbgTotal', chunks: 'dbgChunks', error: 'dbgError',
+      intent: 'dbgIntent', confidence: 'dbgConfidence', orderNo: 'dbgOrderNo', sku: 'dbgSku'
+    };
     for (const [k, v] of Object.entries(values)) $(map[k]).textContent = v;
+  }
+
+  // 第 2 章：先识别出的意图。阻塞接口在响应体的 intent 字段里，流式接口是最先推送的 intent 事件
+  const INTENT_LABELS = {
+    ORDER_STATUS: '查订单', PRODUCT_INFO: '问商品', AFTER_SALES: '售后',
+    CHITCHAT: '闲聊', OUT_OF_SCOPE: '超出范围，直接拒答', UNKNOWN: '未识别'
+  };
+
+  function showIntent(r) {
+    if (!r) return;
+    debug({
+      intent: r.intent + (INTENT_LABELS[r.intent] ? '（' + INTENT_LABELS[r.intent] + '）' : ''),
+      confidence: typeof r.confidence === 'number' ? r.confidence.toFixed(2) : '-',
+      orderNo: r.orderNo || '-',
+      sku: r.skuId || '-'
+    });
   }
 
   // 非 2xx 时尽量读出 ProblemDetail 的 detail，读不出就给通用提示
@@ -153,6 +181,7 @@
     });
     if (!res.ok) throw await problemMessage(res);
     const body = await res.json();
+    showIntent(body.intent);
     bubble.textContent = body.reply;
     debug({ status: 'done', first: '-', chunks: '1', total: (performance.now() - t0).toFixed(0) + ' ms' });
   }
@@ -173,7 +202,9 @@
     let finished = false;
 
     const handle = (event, data) => {
-      if (event === 'token') {
+      if (event === 'intent') {
+        showIntent(JSON.parse(data));
+      } else if (event === 'token') {
         if (chunks === 0) debug({ first: (performance.now() - t0).toFixed(0) + ' ms' });
         chunks++;
         bubble.textContent += JSON.parse(data).text;
@@ -218,7 +249,7 @@
     addMessage('user', text);
     const bubble = addMessage('bot pending', '');
     send.disabled = true;
-    debug({ status: 'waiting', first: '-', total: '-', chunks: '0', error: '-' });
+    debug({ status: 'waiting', first: '-', total: '-', chunks: '0', error: '-', intent: '-', confidence: '-', orderNo: '-', sku: '-' });
     const t0 = performance.now();
     try {
       if (streamMode.checked) await askStreaming(text, bubble, t0);

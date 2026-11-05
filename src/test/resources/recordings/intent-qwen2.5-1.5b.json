@@ -1,0 +1,161 @@
+{
+  "model" : "qwen2.5:1.5b",
+  "recordedAt" : "2026-11-05",
+  "cases" : [ {
+    "message" : "我的订单 1849203385720832512 到哪了？",
+    "expected" : "ORDER_STATUS",
+    "calls" : [ {
+      "promptHash" : "556dd696bf6e14f9",
+      "output" : "{\"confidence\":0.95,\"intent\":\"ORDER_STATUS\",\"orderNo\":\"1849203385720832512\",\"skuId\":\"}\"}"
+    } ],
+    "result" : {
+      "intent" : "ORDER_STATUS",
+      "confidence" : 0.95,
+      "orderNo" : "1849203385720832512",
+      "skuId" : null
+    }
+  }, {
+    "message" : "订单 18492033857208325120001 怎么还没发货",
+    "expected" : "ORDER_STATUS",
+    "calls" : [ {
+      "promptHash" : "da55629c9ebe54f9",
+      "output" : "{\"confidence\":0.95,\"intent\":\"ORDER_STATUS\",\"orderNo\":\"18492033857208325120001\",\"skuId\":\"}\"}"
+    } ],
+    "result" : {
+      "intent" : "ORDER_STATUS",
+      "confidence" : 0.95,
+      "orderNo" : "18492033857208325120001",
+      "skuId" : null
+    }
+  }, {
+    "message" : "订单号是 ABC123，帮我查一下物流",
+    "expected" : "ORDER_STATUS",
+    "calls" : [ {
+      "promptHash" : "bd94ec9f4f17fe44",
+      "output" : "{\"confidence\":0.95,\"intent\":\"ORDER_STATUS\",\"orderNo\":\"ABC123\",\"skuId\":\"}\" }"
+    } ],
+    "result" : {
+      "intent" : "ORDER_STATUS",
+      "confidence" : 0.95,
+      "orderNo" : null,
+      "skuId" : null
+    }
+  }, {
+    "message" : "Where is my package?",
+    "expected" : "ORDER_STATUS",
+    "calls" : [ {
+      "promptHash" : "6d8d52b1b4398ba0",
+      "output" : "{\"confidence\":0.95,\"intent\":\"ORDER_STATUS\",\"orderNo\":\"null\",\"skuId\":\"null\"}"
+    } ],
+    "result" : {
+      "intent" : "ORDER_STATUS",
+      "confidence" : 0.95,
+      "orderNo" : null,
+      "skuId" : null
+    }
+  }, {
+    "message" : "这款蓝牙耳机 SKU 20002 还有货吗",
+    "expected" : "PRODUCT_INFO",
+    "calls" : [ {
+      "promptHash" : "2a35fe2438144942",
+      "output" : "{\"confidence\":0.95,\"intent\":\"PRODUCT_INFO\",\"orderNo\": \"\", \"skuId\":\"20002\"}"
+    } ],
+    "result" : {
+      "intent" : "PRODUCT_INFO",
+      "confidence" : 0.95,
+      "orderNo" : null,
+      "skuId" : "20002"
+    }
+  }, {
+    "message" : "这件外套尺码偏大还是偏小？",
+    "expected" : "PRODUCT_INFO",
+    "calls" : [ {
+      "promptHash" : "4f7e491d89ebb90c",
+      "output" : "{\"confidence\":0.9,\"intent\":\"PRODUCT_INFO\",\"orderNo\": \"\", \"skuId\": \"null\"}"
+    } ],
+    "result" : {
+      "intent" : "PRODUCT_INFO",
+      "confidence" : 0.9,
+      "orderNo" : null,
+      "skuId" : null
+    }
+  }, {
+    "message" : "收到的杯子碎了，怎么申请退款",
+    "expected" : "AFTER_SALES",
+    "calls" : [ {
+      "promptHash" : "f0a7c8381fec2f27",
+      "output" : "{\"confidence\":0.9,\"intent\":\"AFTER_SALES\",\"orderNo\": \"\", \"skuId\": \"null\"}"
+    } ],
+    "result" : {
+      "intent" : "AFTER_SALES",
+      "confidence" : 0.9,
+      "orderNo" : null,
+      "skuId" : null
+    }
+  }, {
+    "message" : "七天无理由退货的运费谁出？",
+    "expected" : "AFTER_SALES",
+    "calls" : [ {
+      "promptHash" : "0cd94196f400ff0e",
+      "output" : "{\"confidence\":0.9,\"intent\":\"AFTER_SALES\",\"orderNo\": \"\", \"skuId\": \"\"}"
+    } ],
+    "result" : {
+      "intent" : "AFTER_SALES",
+      "confidence" : 0.9,
+      "orderNo" : null,
+      "skuId" : null
+    }
+  }, {
+    "message" : "你好",
+    "expected" : "CHITCHAT",
+    "calls" : [ {
+      "promptHash" : "0f9bbbafb2bd9729",
+      "output" : "{\"confidence\":0.9,\"intent\":\"CHITCHAT\",\"orderNo\": \"\", \"skuId\": \"\"}"
+    } ],
+    "result" : {
+      "intent" : "CHITCHAT",
+      "confidence" : 0.9,
+      "orderNo" : null,
+      "skuId" : null
+    }
+  }, {
+    "message" : "谢谢你，帮了大忙",
+    "expected" : "CHITCHAT",
+    "calls" : [ {
+      "promptHash" : "861df8e8e45e2387",
+      "output" : "{\"confidence\":0.9,\"intent\":\"CHITCHAT\",\"orderNo\": \"\", \"skuId\": \"\"}"
+    } ],
+    "result" : {
+      "intent" : "CHITCHAT",
+      "confidence" : 0.9,
+      "orderNo" : null,
+      "skuId" : null
+    }
+  }, {
+    "message" : "帮我写一段 Python 冒泡排序",
+    "expected" : "OUT_OF_SCOPE",
+    "calls" : [ {
+      "promptHash" : "f75f7e995e871ecb",
+      "output" : "{\"confidence\":0.9,\"intent\":\"UNKNOWN\",\"orderNo\": \"\", \"skuId\": \"\"}"
+    } ],
+    "result" : {
+      "intent" : "UNKNOWN",
+      "confidence" : 0.9,
+      "orderNo" : null,
+      "skuId" : null
+    }
+  }, {
+    "message" : "明天北京天气怎么样",
+    "expected" : "OUT_OF_SCOPE",
+    "calls" : [ {
+      "promptHash" : "1e56db8ad89cb9f8",
+      "output" : "{\"confidence\":0.9,\"intent\":\"OUT_OF_SCOPE\",\"orderNo\": \"\", \"skuId\": \"\"}"
+    } ],
+    "result" : {
+      "intent" : "OUT_OF_SCOPE",
+      "confidence" : 0.9,
+      "orderNo" : null,
+      "skuId" : null
+    }
+  } ]
+}

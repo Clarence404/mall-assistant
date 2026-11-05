@@ -1,0 +1,14 @@
+[
+  { "message": "我的订单 1849203385720832512 到哪了？", "expected": "ORDER_STATUS" },
+  { "message": "订单 18492033857208325120001 怎么还没发货", "expected": "ORDER_STATUS" },
+  { "message": "订单号是 ABC123，帮我查一下物流", "expected": "ORDER_STATUS" },
+  { "message": "Where is my package?", "expected": "ORDER_STATUS" },
+  { "message": "这款蓝牙耳机 SKU 20002 还有货吗", "expected": "PRODUCT_INFO" },
+  { "message": "这件外套尺码偏大还是偏小？", "expected": "PRODUCT_INFO" },
+  { "message": "收到的杯子碎了，怎么申请退款", "expected": "AFTER_SALES" },
+  { "message": "七天无理由退货的运费谁出？", "expected": "AFTER_SALES" },
+  { "message": "你好", "expected": "CHITCHAT" },
+  { "message": "谢谢你，帮了大忙", "expected": "CHITCHAT" },
+  { "message": "帮我写一段 Python 冒泡排序", "expected": "OUT_OF_SCOPE" },
+  { "message": "明天北京天气怎么样", "expected": "OUT_OF_SCOPE" }
+]
