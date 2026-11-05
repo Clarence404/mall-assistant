@@ -1,0 +1,16 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="智能客服（本地 Ollama）" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
+    <option name="ACTIVE_PROFILES" value="ollama,local" />
+    <!-- 带上 local profile：项目根目录有 application-local.yml（不入库）时自动加载，用来指向远程 Ollama 等；没有也能启动 -->
+    <envs>
+      <env name="OLLAMA_CHAT_MODEL" value="qwen2.5:0.5b" />
+    </envs>
+    <option name="SPRING_BOOT_MAIN_CLASS" value="io.github.clarence404.assistant.AssistantApplication" />
+    <module name="mall-assistant" />
+    <option name="VM_PARAMETERS" value="-Dfile.encoding=UTF-8" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

@@ -1,0 +1,21 @@
+# 本地覆盖配置模板：复制为项目根目录下的 application-local.yml（已被 .gitignore 忽略，不会提交），按需修改
+#   cp application-local.example.yml application-local.yml
+# 以 local profile 启动时生效（IDEA 运行配置已带上：ollama,local / openai,local；命令行加 --spring.profiles.active=ollama,local）
+# Spring Boot 默认会加载工作目录下的 application-{profile}.yml，所以无需额外配置；工作目录须是仓库根目录
+# 这里的内部地址、密钥都只留在你本机，不要写进 src/main/resources
+
+spring:
+  ai:
+    # —— 用远程 / 共享开发机上的 Ollama（ollama profile）——
+    # 远程机器上要让 Ollama 监听外部地址：设置环境变量 OLLAMA_HOST=0.0.0.0:11434 后重启 Ollama
+    ollama:
+      base-url: http://<ollama-host>:11434
+      chat:
+        model: qwen2.5:0.5b
+
+    # —— 用 OpenAI 兼容接口（openai profile）：取消注释并填写 ——
+    # openai:
+    #   base-url: https://<your-endpoint>/v1
+    #   api-key: <your-api-key>
+    #   chat:
+    #     model: <model-name>

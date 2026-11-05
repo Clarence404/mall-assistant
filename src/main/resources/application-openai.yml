@@ -1,0 +1,18 @@
+# 可选 profile：任意 OpenAI 兼容接口（OpenAI、DeepSeek、通义千问兼容模式、vLLM、Ollama 的 /v1……）
+# 用法：提供 OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL 三个值后以 openai profile 启动
+#   - 方式一：环境变量（IDEA 运行配置「智能客服（OpenAI 兼容接口）」里已列出，填上即可）
+#   - 方式二：复制 application-local.example.yml 为 application-local.yml（不入库），直接写 spring.ai.openai.* 三项，
+#     再加上 local profile（IDEA 运行配置已带 local）；它的优先级更高，环境变量留空也不影响
+# 密钥只放这两处，不写进仓库
+spring:
+  ai:
+    model:
+      chat: openai
+    openai:
+      base-url: ${OPENAI_BASE_URL}     # 含 /v1，例如 https://api.deepseek.com/v1、http://localhost:11434/v1
+      api-key: ${OPENAI_API_KEY}
+      timeout: 60s
+      max-retries: 1
+      chat:
+        model: ${OPENAI_MODEL}
+        temperature: 0.3

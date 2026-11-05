@@ -1,0 +1,41 @@
+# 公共配置；模型厂商按 profile 切换：默认 ollama（本机 Ollama），可选 openai（任意 OpenAI 兼容接口）
+spring:
+  application:
+    name: mall-assistant
+  profiles:
+    default: ollama
+  threads:
+    virtual:
+      enabled: true
+  mvc:
+    problemdetails:
+      enabled: true          # 参数校验失败等 MVC 自带异常也返回 ProblemDetail
+    async:
+      request-timeout: 3m    # 流式接口整体最长时长，兜底
+  http:
+    clients:                 # 作用于自动配置的 RestClient（阻塞调用）与 WebClient（流式调用）
+      connect-timeout: 3s
+      read-timeout: 60s      # 阻塞调用要等整段回答生成完，给足时间；流式调用是两段之间的间隔
+  ai:
+    model:                   # 本章只用对话模型，其余能力关掉，免得 openai Starter 要求配置 api-key
+      embedding: none
+      image: none
+      audio:
+        speech: none
+        transcription: none
+      moderation: none
+    retry:                   # 默认会重试 10 次、指数退避，模型挂了要等好几分钟才报错；客服场景快速失败
+      max-attempts: 1
+      backoff:
+        initial-interval: 500ms
+        max-interval: 2s
+
+assistant:
+  chat:
+    stream-timeout: 30s      # 流式：首段和相邻两段之间最多等多久
+
+server:
+  port: ${SERVER_PORT:8088}    # 与 mall-evolution（8080 / 8082 / 8083 / 9000）错开，两个项目可以同时运行
+  error:
+    include-stacktrace: never
+    include-message: never

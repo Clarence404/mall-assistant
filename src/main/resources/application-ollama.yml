@@ -1,0 +1,11 @@
+# 默认 profile：本机 Ollama（http://localhost:11434），先执行 ollama pull qwen2.5:0.5b
+spring:
+  ai:
+    model:
+      chat: ollama
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      chat:
+        model: ${OLLAMA_CHAT_MODEL:qwen2.5:0.5b}
+        temperature: 0.3
+        keep-alive: 10m

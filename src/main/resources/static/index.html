@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>示例商城智能客服</title>
+<style>
+  :root {
+    --bg: #f5f6fa; --card: #ffffff; --fg: #1f2937; --muted: #6b7280; --border: #e5e7eb;
+    --brand: #4f46e5; --brand-fg: #ffffff; --user: #eef2ff; --bot: #ffffff;
+    --err-bg: #fef2f2; --err-fg: #b91c1c; --code-bg: #f3f4f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111827; --card: #1f2937; --fg: #e5e7eb; --muted: #9ca3af; --border: #374151;
+      --brand: #818cf8; --brand-fg: #111827; --user: #312e81; --bot: #1f2937;
+      --err-bg: #3f1d1d; --err-fg: #fca5a5; --code-bg: #111827;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex; justify-content: center;
+  }
+  .app { width: 100%; max-width: 820px; height: 100%; display: flex; flex-direction: column; padding: 16px; gap: 12px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .mode { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .messages {
+    flex: 1; overflow-y: auto; background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: var(--user); border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: var(--bot); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .msg.bot.pending::after { content: "▍"; animation: blink 1s steps(1) infinite; color: var(--muted); }
+  .msg.error { align-self: stretch; max-width: none; background: var(--err-bg); color: var(--err-fg); font-size: 14px; }
+  .hint { color: var(--muted); font-size: 13px; text-align: center; margin: auto 0; }
+  @keyframes blink { 50% { opacity: 0; } }
+  form { display: flex; gap: 8px; align-items: flex-end; }
+  textarea {
+    flex: 1; resize: none; min-height: 44px; max-height: 160px; padding: 10px 12px; font: inherit; color: var(--fg);
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px; outline: none;
+  }
+  textarea:focus { border-color: var(--brand); }
+  button {
+    height: 44px; padding: 0 20px; border: 0; border-radius: 10px; font: inherit; cursor: pointer;
+    background: var(--brand); color: var(--brand-fg);
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  details { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 8px 14px; font-size: 13px; }
+  summary { cursor: pointer; color: var(--muted); }
+  .debug { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 16px; margin-top: 8px; }
+  .debug section h3 { font-size: 13px; margin: 4px 0; }
+  .debug dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; }
+  .debug dt { color: var(--muted); }
+  .debug dd { margin: 0; font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
+  .placeholder { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div>
+      <h1>示例商城智能客服</h1>
+      <div class="sub">商品、下单、支付、物流、售后，都可以问我</div>
+    </div>
+    <label class="mode"><input type="checkbox" id="streamMode" checked> 流式输出</label>
+  </header>
+
+  <main class="messages" id="messages" aria-live="polite">
+    <p class="hint" id="hint">你好，我是示例商城客服，有什么可以帮你？</p>
+  </main>
+
+  <form id="chatForm">
+    <textarea id="input" rows="1" maxlength="2000" placeholder="输入问题，Enter 发送，Shift + Enter 换行" required></textarea>
+    <button type="submit" id="send">发送</button>
+  </form>
+
+  <details id="debugPanel">
+    <summary>调试面板</summary>
+    <div class="debug">
+      <section>
+        <h3>本次请求</h3>
+        <dl>
+          <dt>接口</dt><dd id="dbgEndpoint">-</dd>
+          <dt>状态</dt><dd id="dbgStatus">-</dd>
+          <dt>首段耗时</dt><dd id="dbgFirst">-</dd>
+          <dt>总耗时</dt><dd id="dbgTotal">-</dd>
+          <dt>片段数</dt><dd id="dbgChunks">-</dd>
+          <dt>错误码</dt><dd id="dbgError">-</dd>
+        </dl>
+      </section>
+      <section>
+        <h3>工具调用</h3>
+        <p class="placeholder">第 3 章接入工具后，这里显示模型调用了哪些工具、参数与结果。</p>
+      </section>
+      <section>
+        <h3>引用来源</h3>
+        <p class="placeholder">第 5 章接入 RAG 后，这里显示回答引用的知识片段。</p>
+      </section>
+      <section>
+        <h3>Token 用量</h3>
+        <p class="placeholder">第 9 章评估与上线时，这里显示输入 / 输出 token 数。</p>
+      </section>
+    </div>
+  </details>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const messages = $('messages');
+  const form = $('chatForm');
+  const input = $('input');
+  const send = $('send');
+  const streamMode = $('streamMode');
+
+  function addMessage(kind, text) {
+    $('hint')?.remove();
+    const el = document.createElement('div');
+    el.className = 'msg ' + kind;
+    el.textContent = text;
+    messages.appendChild(el);
+    messages.scrollTop = messages.scrollHeight;
+    return el;
+  }
+
+  function debug(values) {
+    const map = { endpoint: 'dbgEndpoint', status: 'dbgStatus', first: 'dbgFirst', total: 'dbgTotal', chunks: 'dbgChunks', error: 'dbgError' };
+    for (const [k, v] of Object.entries(values)) $(map[k]).textContent = v;
+  }
+
+  // 非 2xx 时尽量读出 ProblemDetail 的 detail，读不出就给通用提示
+  async function problemMessage(res) {
+    try {
+      const body = await res.json();
+      return { code: body.code || 'HTTP_' + res.status, message: body.detail || body.title || '请求失败' };
+    } catch {
+      return { code: 'HTTP_' + res.status, message: '请求失败（HTTP ' + res.status + '）' };
+    }
+  }
+
+  async function askBlocking(text, bubble, t0) {
+    debug({ endpoint: 'POST /api/chat' });
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ message: text })
+    });
+    if (!res.ok) throw await problemMessage(res);
+    const body = await res.json();
+    bubble.textContent = body.reply;
+    debug({ status: 'done', first: '-', chunks: '1', total: (performance.now() - t0).toFixed(0) + ' ms' });
+  }
+
+  // POST + fetch 读 text/event-stream：EventSource 只支持 GET，消息放请求体更合适
+  async function askStreaming(text, bubble, t0) {
+    debug({ endpoint: 'POST /api/chat/stream' });
+    const res = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+      body: JSON.stringify({ message: text })
+    });
+    if (!res.ok) throw await problemMessage(res);
+
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = '';
+    let chunks = 0;
+    let finished = false;
+
+    const handle = (event, data) => {
+      if (event === 'token') {
+        if (chunks === 0) debug({ first: (performance.now() - t0).toFixed(0) + ' ms' });
+        chunks++;
+        bubble.textContent += JSON.parse(data).text;
+        messages.scrollTop = messages.scrollHeight;
+        debug({ chunks: String(chunks), status: 'streaming' });
+      } else if (event === 'done') {
+        finished = true;
+        debug({ status: 'done' });
+      } else if (event === 'error') {
+        finished = true;
+        throw JSON.parse(data);
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value.replace(/\r\n/g, '\n');
+      let sep;
+      // 一条 SSE 以空行结束；按行解析 event: 与 data:
+      while ((sep = buffer.indexOf('\n\n')) >= 0) {
+        const raw = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        let event = 'message';
+        const data = [];
+        for (const line of raw.split('\n')) {
+          if (line.startsWith('event:')) event = line.slice(6).trim();
+          else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+        }
+        if (data.length) handle(event, data.join('\n'));
+      }
+    }
+    debug({ total: (performance.now() - t0).toFixed(0) + ' ms' });
+    if (!finished) throw { code: 'STREAM_INTERRUPTED', message: '连接意外中断，请重试。' };
+  }
+
+  async function submit() {
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    autosize();
+    addMessage('user', text);
+    const bubble = addMessage('bot pending', '');
+    send.disabled = true;
+    debug({ status: 'waiting', first: '-', total: '-', chunks: '0', error: '-' });
+    const t0 = performance.now();
+    try {
+      if (streamMode.checked) await askStreaming(text, bubble, t0);
+      else await askBlocking(text, bubble, t0);
+    } catch (e) {
+      const err = (e && e.code) ? e :{ code: 'NETWORK_ERROR', message: '网络异常，请检查服务是否启动。' };
+      if (!bubble.textContent) bubble.remove();
+      addMessage('error', err.message);
+      debug({ status: 'error', error: err.code || '-', total: (performance.now() - t0).toFixed(0) + ' ms' });
+    } finally {
+      bubble.classList.remove('pending');
+      send.disabled = false;
+      input.focus();
+    }
+  }
+
+  function autosize() {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+  }
+
+  form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
+  input.addEventListener('input', autosize);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!send.disabled) submit(); }
+  });
+  input.focus();
+})();
+</script>
+</body>
+</html>

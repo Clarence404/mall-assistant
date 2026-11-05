@@ -1,0 +1,18 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="智能客服（OpenAI 兼容接口）" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
+    <option name="ACTIVE_PROFILES" value="openai,local" />
+    <!-- 三个变量留空：在 Run/Debug Configurations 里填，或写进不入库的 application-local.yml（复制 application-local.example.yml，见 README），不要把密钥提交进仓库 -->
+    <envs>
+      <env name="OPENAI_BASE_URL" value="" />
+      <env name="OPENAI_API_KEY" value="" />
+      <env name="OPENAI_MODEL" value="" />
+    </envs>
+    <option name="SPRING_BOOT_MAIN_CLASS" value="io.github.clarence404.assistant.AssistantApplication" />
+    <module name="mall-assistant" />
+    <option name="VM_PARAMETERS" value="-Dfile.encoding=UTF-8" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>
