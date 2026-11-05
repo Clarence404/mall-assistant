@@ -1,5 +1,12 @@
 package io.github.clarence404.assistant.error;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
@@ -10,9 +17,18 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 public class ApiExceptionHandler {
 
-    // TODO ch01-5：加一个处理 ModelCallException 的 @ExceptionHandler 方法，返回 ResponseEntity<ProblemDetail>：
-    //  - 状态码 503 Service Unavailable，响应头 Retry-After: 5
-    //  - ProblemDetail 的 detail 用 failure.message()，title 用 failure.title()，再加一个属性 code = failure.name()
-    //  - 异常细节（含 cause）只打到日志（warn），不要放进响应体
-    //  验收：ChatApiTest.modelUnavailableBecomes503ProblemDetail / modelTimeoutBecomes503WithTimeoutCode
+    private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    @ExceptionHandler(ModelCallException.class)
+    public ResponseEntity<ProblemDetail> handleModelFailure(ModelCallException e) {
+        ModelFailure failure = e.failure();
+        // 细节只进日志，不给前端
+        log.warn("调用模型失败：{}", failure, e.getCause());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, failure.message());
+        problem.setTitle(failure.title());
+        problem.setProperty("code", failure.name());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "5")
+                .body(problem);
+    }
 }

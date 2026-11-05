@@ -17,9 +17,6 @@ public class ChatClientConfig {
     @Bean
     public ChatClient chatClient(
             ChatClient.Builder builder, @Value("classpath:prompts/system.st") Resource systemPrompt) {
-        // TODO ch01-1：把 systemPrompt（src/main/resources/prompts/system.st）设为默认系统消息，再 build。
-        //  这样之后每次 chatClient.prompt() 都会自动带上客服人设，业务代码只需要写用户消息。
-        //  验收：ChatServiceTest.systemPromptFromClasspathIsSentWithEveryRequest
-        return builder.build();
+        return builder.defaultSystem(systemPrompt).build();
     }
 }
