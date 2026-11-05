@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ModelCallException.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.error</a> &gt; <span class="el_source">ModelCallException.java</span></div><h1>ModelCallException.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.error;
+
+import java.net.SocketTimeoutException;
+import java.net.http.HttpTimeoutException;
+import java.util.concurrent.TimeoutException;
+
+/** 调用模型失败：把各种底层异常（连接拒绝、读超时、HTTP 5xx……）归成 {@link ModelFailure} 的两类。 */
+public class ModelCallException extends RuntimeException {
+
+    private static final int MAX_CAUSE_DEPTH = 16;
+
+    private final ModelFailure failure;
+
+    public ModelCallException(ModelFailure failure, Throwable cause) {
+<span class="fc" id="L15">        super(failure.title(), cause);</span>
+<span class="fc" id="L16">        this.failure = failure;</span>
+<span class="fc" id="L17">    }</span>
+
+    public ModelFailure failure() {
+<span class="fc" id="L20">        return failure;</span>
+    }
+
+    /**
+     * 把调用模型时抛出的任意异常归类：沿 cause 链找到超时类异常记为 {@link ModelFailure#MODEL_TIMEOUT}，其余一律记为
+     * {@link ModelFailure#MODEL_UNAVAILABLE}；已经归过类的原样返回。
+     */
+    public static ModelCallException from(Throwable error) {
+<span class="fc bfc" id="L28" title="All 2 branches covered.">        if (error instanceof ModelCallException alreadyClassified) {</span>
+<span class="fc" id="L29">            return alreadyClassified;</span>
+        }
+<span class="fc bfc" id="L31" title="All 2 branches covered.">        ModelFailure failure = isTimeout(error) ? ModelFailure.MODEL_TIMEOUT : ModelFailure.MODEL_UNAVAILABLE;</span>
+<span class="fc" id="L32">        return new ModelCallException(failure, error);</span>
+    }
+
+    private static boolean isTimeout(Throwable error) {
+<span class="fc" id="L36">        Throwable current = error;</span>
+<span class="pc bpc" id="L37" title="1 of 4 branches missed.">        for (int depth = 0; current != null &amp;&amp; depth &lt; MAX_CAUSE_DEPTH; depth++) {</span>
+<span class="fc bfc" id="L38" title="All 6 branches covered.">            if (current instanceof TimeoutException // Reactor 的 Flux.timeout</span>
+                    || current instanceof SocketTimeoutException // RestClient 阻塞调用读超时
+                    || current instanceof HttpTimeoutException // JDK HttpClient
+                    // Netty 的 ReadTimeoutException 等第三方超时异常，按类名识别，避免编译期依赖它们
+<span class="pc bpc" id="L42" title="1 of 2 branches missed.">                    || current.getClass().getSimpleName().endsWith(&quot;TimeoutException&quot;)) {</span>
+<span class="fc" id="L43">                return true;</span>
+            }
+<span class="fc" id="L45">            current = current.getCause();</span>
+        }
+<span class="fc" id="L47">        return false;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
