@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ChatClientConfig.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.chat</a> &gt; <span class="el_source">ChatClientConfig.java</span></div><h1>ChatClientConfig.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.chat;
+
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.io.Resource;
+
+/** 组装客服用的 ChatClient：模型由 Starter 按 profile 提供，这里只负责「人设」。 */
+@Configuration(proxyBeanMethods = false)
+<span class="fc" id="L11">public class ChatClientConfig {</span>
+
+    /**
+     * {@link ChatClient.Builder} 由 Spring AI 自动配置注入（原型作用域，每次注入一个新的），背后的 ChatModel 是 Ollama 还是
+     * OpenAI 兼容接口由 {@code spring.ai.model.chat} 决定，这里不关心。
+     */
+    @Bean
+    public ChatClient chatClient(
+            ChatClient.Builder builder, @Value(&quot;classpath:prompts/system.st&quot;) Resource systemPrompt) {
+<span class="fc" id="L20">        return builder.defaultSystem(systemPrompt).build();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
