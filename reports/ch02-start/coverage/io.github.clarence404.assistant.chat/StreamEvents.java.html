@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StreamEvents.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.chat</a> &gt; <span class="el_source">StreamEvents.java</span></div><h1>StreamEvents.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.chat;
+
+/**
+ * 流式接口 {@code POST /api/chat/stream} 推给前端的 SSE 事件，data 都是 JSON。
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;{@code event: intent}，data 为 {@code IntentResult}：第 2 章新增，最先推送，告诉前端识别出的意图；只认 token / done / error
+ *       的旧前端忽略它即可
+ *   &lt;li&gt;{@code event: token}，data 为 {@link Token}：一段增量文本，前端按顺序拼接
+ *   &lt;li&gt;{@code event: done}，data 为 {@link Done}：回答结束，之后连接关闭
+ *   &lt;li&gt;{@code event: error}，data 为 {@link Error}：出错，之后连接关闭，不再有 done
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;data 用 JSON 而不是纯文本：增量文本里常有换行和前导空格，纯文本 SSE 会把换行拆成多行 data、 把行首空格吃掉。
+ */
+public final class StreamEvents {
+
+    public static final String INTENT = &quot;intent&quot;;
+    public static final String TOKEN = &quot;token&quot;;
+    public static final String DONE = &quot;done&quot;;
+    public static final String ERROR = &quot;error&quot;;
+
+    private StreamEvents() {}
+
+    /** 一段增量文本。 */
+<span class="fc" id="L26">    public record Token(String text) {}</span>
+
+    /** 正常结束。 */
+<span class="fc" id="L29">    public record Done(String reason) {</span>
+
+        public static Done stop() {
+<span class="fc" id="L32">            return new Done(&quot;stop&quot;);</span>
+        }
+    }
+
+    /** 出错结束：code 与阻塞接口 ProblemDetail 里的 code 一致。 */
+<span class="fc" id="L37">    public record Error(String code, String message) {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

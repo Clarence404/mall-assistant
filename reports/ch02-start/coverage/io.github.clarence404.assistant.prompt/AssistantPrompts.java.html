@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AssistantPrompts.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.prompt</a> &gt; <span class="el_source">AssistantPrompts.java</span></div><h1>AssistantPrompts.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.prompt;
+
+import java.time.Clock;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.PromptTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.Resource;
+import org.springframework.stereotype.Component;
+
+/**
+ * 客服的提示词模板：按 {@code assistant.prompt.version} 选系统提示词文件，每次请求时用当前变量渲染。
+ *
+ * &lt;p&gt;模板放在 {@code src/main/resources/prompts/}，占位符写成 {@code {shopName}} 这样（StringTemplate 语法），由 Spring AI
+ * 在发请求前填值。
+ */
+@Component
+public class AssistantPrompts {
+
+<span class="fc" id="L25">    private static final Logger log = LoggerFactory.getLogger(AssistantPrompts.class);</span>
+<span class="fc" id="L26">    private static final DateTimeFormatter TODAY = DateTimeFormatter.ofPattern(&quot;yyyy年M月d日 EEEE&quot;, Locale.CHINA);</span>
+
+    private final PromptProperties properties;
+    private final Clock clock;
+<span class="fc" id="L30">    private final Resource refusalTemplate = new ClassPathResource(&quot;prompts/refusal.st&quot;);</span>
+
+    @Autowired
+    public AssistantPrompts(PromptProperties properties) {
+<span class="fc" id="L34">        this(properties, Clock.system(properties.zone()));</span>
+<span class="fc" id="L35">    }</span>
+
+    /** 测试用：传入固定的时钟，「今天」就是确定的。 */
+<span class="fc" id="L38">    public AssistantPrompts(PromptProperties properties, Clock clock) {</span>
+<span class="fc" id="L39">        this.properties = properties;</span>
+<span class="fc" id="L40">        this.clock = clock;</span>
+        // 启动时就确认模板文件存在：版本号写错了应当起不来，而不是等到第一个用户提问才报错
+<span class="fc" id="L42">        log.info(&quot;系统提示词：{}&quot;, systemTemplate().getFilename());</span>
+<span class="fc" id="L43">    }</span>
+
+    /** 当前版本的系统提示词模板：{@code classpath:prompts/system-&lt;version&gt;.st}，文件不存在时抛 IllegalStateException。 */
+    public Resource systemTemplate() {
+        // TODO ch02-1：按 properties.version() 选模板文件 prompts/system-&lt;version&gt;.st（如 v2 → system-v2.st）。
+        //  文件不存在时抛 IllegalStateException，消息里带上文件路径：版本号写错了，应用启动时（构造器里会调用本方法）就该失败。
+        //  验收：AssistantPromptsTest.versionPropertySelectsTemplateFile / unknownVersionFailsFastAtStartup
+<span class="fc" id="L50">        return new ClassPathResource(&quot;prompts/system-v1.st&quot;);</span>
+    }
+
+    /** 渲染模板用的变量。每次请求都重新计算，「今天」才不会停在应用启动那天。 */
+    public Map&lt;String, Object&gt; variables() {
+        // TODO ch02-2：返回模板里用到的全部变量：shopName、assistantName、supportScope（取自 properties）
+        //  和 today（用 clock 取当天日期，按 TODAY 格式化成「2026年11月5日 星期四」）。
+        //  现在返回空表，Spring AI 就不渲染模板，模型收到的是带 {shopName} 的原文；少给一个变量则渲染时报错。
+        //  验收：AssistantPromptsTest.variablesCarryShopScopeAndTodayInShopTimeZone /
+        //  renderedSystemMessageHasNoPlaceholdersLeft / refusalNamesShopAndScope
+<span class="fc" id="L60">        return Map.of();</span>
+    }
+
+    /** 给一次请求设置系统消息：{@code chatClient.prompt().system(prompts::applySystem)}。 */
+    public void applySystem(ChatClient.PromptSystemSpec spec) {
+<span class="fc" id="L65">        spec.text(systemTemplate()).params(variables());</span>
+<span class="fc" id="L66">    }</span>
+
+    /** 拒答话术：超出客服范围的问题直接回这句，不调模型。 */
+    public String refusal() {
+<span class="pc" id="L70">        return PromptTemplate.builder()</span>
+<span class="fc" id="L71">                .resource(refusalTemplate)</span>
+<span class="fc" id="L72">                .variables(variables())</span>
+<span class="fc" id="L73">                .build()</span>
+<span class="nc" id="L74">                .render()</span>
+<span class="nc" id="L75">                .strip();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
