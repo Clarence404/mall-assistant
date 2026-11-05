@@ -2,6 +2,7 @@
 
 import io.github.clarence404.assistant.error.ModelCallException;
 import io.github.clarence404.assistant.error.ModelFailure;
+import io.github.clarence404.assistant.intent.IntentService;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,42 +17,50 @@ import reactor.core.publisher.Mono;
 @RestController
 public class ChatController {
 
-<span class="fc" id="L19">    private static final Logger log = LoggerFactory.getLogger(ChatController.class);</span>
+<span class="fc" id="L20">    private static final Logger log = LoggerFactory.getLogger(ChatController.class);</span>
 
     private final ChatService chatService;
+    private final IntentService intentService;
 
-<span class="fc" id="L23">    public ChatController(ChatService chatService) {</span>
-<span class="fc" id="L24">        this.chatService = chatService;</span>
-<span class="fc" id="L25">    }</span>
+<span class="fc" id="L25">    public ChatController(ChatService chatService, IntentService intentService) {</span>
+<span class="fc" id="L26">        this.chatService = chatService;</span>
+<span class="fc" id="L27">        this.intentService = intentService;</span>
+<span class="fc" id="L28">    }</span>
 
-    /** 阻塞接口：{&quot;message&quot;: &quot;...&quot;} → {&quot;reply&quot;: &quot;...&quot;}；模型调用失败由 ApiExceptionHandler 转成 503。 */
+    /** 阻塞接口：{&quot;message&quot;: &quot;...&quot;} → {&quot;reply&quot;: &quot;...&quot;, &quot;intent&quot;: {...}}；模型调用失败由 ApiExceptionHandler 转成 503。 */
     @PostMapping(&quot;/api/chat&quot;)
     public ChatReply chat(@Valid @RequestBody ChatRequest request) {
-<span class="fc" id="L30">        return new ChatReply(chatService.reply(request.message()));</span>
+<span class="fc" id="L33">        return chatService.chat(request.message());</span>
     }
 
     /**
-     * 流式接口：返回 text/event-stream，依次推送若干 token 事件，最后一个 done 事件；出错时推一个 error 事件后结束。
+     * 流式接口：返回 text/event-stream，先推一个 intent 事件，再推若干 token 事件，最后一个 done 事件；出错时推一个 error 事件后结束。
      *
-     * &lt;p&gt;Spring MVC 直接支持返回 Flux：每个元素写成一条 SSE，Flux 结束时关闭连接。
+     * &lt;p&gt;Spring MVC 直接支持返回 Flux：每个元素写成一条 SSE，Flux 结束时关闭连接。意图识别是一次阻塞调用，放进
+     * {@code Mono.fromCallable}，它失败时同样走 error 事件。
      */
     @PostMapping(value = &quot;/api/chat/stream&quot;, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux&lt;ServerSentEvent&lt;Object&gt;&gt; stream(@Valid @RequestBody ChatRequest request) {
-<span class="fc" id="L40">        return chatService.stream(request.message())</span>
-<span class="pc bpc" id="L41" title="1 of 2 branches missed.">                .filter(text -&gt; !text.isEmpty())</span>
-<span class="fc" id="L42">                .map(text -&gt; event(StreamEvents.TOKEN, new StreamEvents.Token(text)))</span>
-<span class="fc" id="L43">                .concatWith(Mono.fromSupplier(() -&gt; event(StreamEvents.DONE, StreamEvents.Done.stop())))</span>
-<span class="fc" id="L44">                .onErrorResume(e -&gt; Mono.just(errorEvent(e)));</span>
+<span class="fc" id="L44">        String message = request.message();</span>
+<span class="fc" id="L45">        return Mono.fromCallable(() -&gt; intentService.classify(message))</span>
+<span class="fc" id="L46">                .flatMapMany(intent -&gt; Flux.concat(</span>
+<span class="fc" id="L47">                        Mono.just(event(StreamEvents.INTENT, intent)),</span>
+                        chatService
+<span class="fc" id="L49">                                .answerStream(message, intent)</span>
+<span class="pc bpc" id="L50" title="1 of 2 branches missed.">                                .filter(text -&gt; !text.isEmpty())</span>
+<span class="fc" id="L51">                                .map(text -&gt; event(StreamEvents.TOKEN, new StreamEvents.Token(text)))))</span>
+<span class="fc" id="L52">                .concatWith(Mono.fromSupplier(() -&gt; event(StreamEvents.DONE, StreamEvents.Done.stop())))</span>
+<span class="fc" id="L53">                .onErrorResume(e -&gt; Mono.just(errorEvent(e)));</span>
     }
 
     private static ServerSentEvent&lt;Object&gt; errorEvent(Throwable e) {
-<span class="fc" id="L48">        ModelFailure failure = ModelCallException.from(e).failure();</span>
-<span class="fc" id="L49">        log.warn(&quot;流式调用模型失败：{}&quot;, failure, e);</span>
-<span class="fc" id="L50">        return event(StreamEvents.ERROR, new StreamEvents.Error(failure.name(), failure.message()));</span>
+<span class="fc" id="L57">        ModelFailure failure = ModelCallException.from(e).failure();</span>
+<span class="fc" id="L58">        log.warn(&quot;流式调用模型失败：{}&quot;, failure, e);</span>
+<span class="fc" id="L59">        return event(StreamEvents.ERROR, new StreamEvents.Error(failure.name(), failure.message()));</span>
     }
 
     private static ServerSentEvent&lt;Object&gt; event(String name, Object data) {
-<span class="fc" id="L54">        return ServerSentEvent.builder(data).event(name).build();</span>
+<span class="fc" id="L63">        return ServerSentEvent.builder(data).event(name).build();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
