@@ -1,6 +1,7 @@
 package io.github.clarence404.assistant.prompt;
 
 import java.time.Clock;
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.Map;
@@ -44,20 +45,22 @@ public class AssistantPrompts {
 
     /** 当前版本的系统提示词模板：{@code classpath:prompts/system-<version>.st}，文件不存在时抛 IllegalStateException。 */
     public Resource systemTemplate() {
-        // TODO ch02-1：按 properties.version() 选模板文件 prompts/system-<version>.st（如 v2 → system-v2.st）。
-        //  文件不存在时抛 IllegalStateException，消息里带上文件路径：版本号写错了，应用启动时（构造器里会调用本方法）就该失败。
-        //  验收：AssistantPromptsTest.versionPropertySelectsTemplateFile / unknownVersionFailsFastAtStartup
-        return new ClassPathResource("prompts/system-v1.st");
+        String path = "prompts/system-" + properties.version() + ".st";
+        Resource template = new ClassPathResource(path);
+        if (!template.exists()) {
+            throw new IllegalStateException(
+                    "找不到系统提示词模板 " + path + "，检查 assistant.prompt.version=" + properties.version());
+        }
+        return template;
     }
 
     /** 渲染模板用的变量。每次请求都重新计算，「今天」才不会停在应用启动那天。 */
     public Map<String, Object> variables() {
-        // TODO ch02-2：返回模板里用到的全部变量：shopName、assistantName、supportScope（取自 properties）
-        //  和 today（用 clock 取当天日期，按 TODAY 格式化成「2026年11月5日 星期四」）。
-        //  现在返回空表，Spring AI 就不渲染模板，模型收到的是带 {shopName} 的原文；少给一个变量则渲染时报错。
-        //  验收：AssistantPromptsTest.variablesCarryShopScopeAndTodayInShopTimeZone /
-        //  renderedSystemMessageHasNoPlaceholdersLeft / refusalNamesShopAndScope
-        return Map.of();
+        return Map.of(
+                "shopName", properties.shopName(),
+                "assistantName", properties.assistantName(),
+                "supportScope", properties.supportScope(),
+                "today", LocalDate.now(clock).format(TODAY));
     }
 
     /** 给一次请求设置系统消息：{@code chatClient.prompt().system(prompts::applySystem)}。 */

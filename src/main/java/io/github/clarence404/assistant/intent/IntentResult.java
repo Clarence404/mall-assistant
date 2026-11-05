@@ -37,12 +37,16 @@ public record IntentResult(
      * 去掉首尾空白后格式不对就置为 null，不把模型编的订单号往下游传。
      */
     public IntentResult sanitized() {
-        // TODO ch02-5：返回校验后的新 IntentResult（record 不可变）：
-        //  1. intent 为 null → Intent.UNKNOWN
-        //  2. confidence 夹到 [0, 1]，NaN 记为 0（模型可能给 95、-1，甚至字符串转过来的怪值）
-        //  3. orderNo、skuId 先去掉首尾空白，再分别用 ORDER_NO、SKU_ID 整串匹配，不匹配就置为 null
-        //     （小模型会把没有的字段写成字符串 "null"、"}"，或者编一个订单号）
-        //  验收：IntentResultTest、IntentServiceTest.resultIsSanitized
-        return this;
+        Intent safeIntent = intent == null ? Intent.UNKNOWN : intent;
+        double safeConfidence = Double.isNaN(confidence) ? 0.0 : Math.clamp(confidence, 0.0, 1.0);
+        return new IntentResult(safeIntent, safeConfidence, valid(orderNo, ORDER_NO), valid(skuId, SKU_ID));
+    }
+
+    private static String valid(String value, Pattern pattern) {
+        if (value == null) {
+            return null;
+        }
+        String stripped = value.strip();
+        return pattern.matcher(stripped).matches() ? stripped : null;
     }
 }

@@ -4,9 +4,11 @@ import io.github.clarence404.assistant.error.ModelCallException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
+import tools.jackson.core.JacksonException;
 
 /**
  * 意图识别：让模型按 {@link IntentResult} 的 JSON Schema 输出，再转成 Java 对象。
@@ -46,13 +48,18 @@ public class IntentService {
 
     /** 识别一条用户消息的意图，结果已经过 {@link IntentResult#sanitized()} 校验。最多调两次模型，解析失败时兜底为 UNKNOWN。 */
     public IntentResult classify(String message) {
-        // TODO ch02-4：用 callModel 识别意图，解析失败（返回 null）时带上 STRICT_REMINDER 再试一次（callModel(message, true)），
-        //  两次都失败就返回 IntentResult.unknown()；成功时返回 sanitized() 之后的结果。
-        //  模型调不通抛出的 ModelCallException 不要捕获，原样往上抛（接口会返回 503）。
-        //  现在直接返回 UNKNOWN、不调模型，所以对话接口照常可用（第 1 章的测试仍然通过）。
-        //  验收：IntentServiceTest.garbageIsRetried… / retrySucceedsOnSecondAttempt / modelUnavailableIsNotSwallowed，
-        //  以及 IntentReplayTest（回放真实模型的输出）
-        return IntentResult.unknown();
+        IntentResult result = callModel(message, false);
+        if (result == null) {
+            log.info("意图识别：模型输出无法解析，带上更严格的提醒重试一次");
+            result = callModel(message, true);
+        }
+        if (result == null) {
+            log.warn("意图识别：重试后仍无法解析，按 UNKNOWN 处理");
+            return IntentResult.unknown();
+        }
+        IntentResult sanitized = result.sanitized();
+        log.debug("意图识别：{} -> {}", message, sanitized);
+        return sanitized;
     }
 
     /**
@@ -63,15 +70,20 @@ public class IntentService {
      * @throws ModelCallException 模型调用本身失败
      */
     IntentResult callModel(String message, boolean strict) {
-        // TODO ch02-3：调一次模型，让它直接返回 IntentResult：
-        //  1. 系统消息用 intentPrompt；用户消息用 USER_TEMPLATE 渲染，变量 message 填用户原文；strict 为 true 时模板后面再接上
-        //     "\n\n" + STRICT_REMINDER
-        //  2. 本次请求把温度设为 TEMPERATURE（只覆盖这一项，模型名等仍用配置文件的）
-        //  3. 用 entity 把输出转成 IntentResult，并让 Spring AI 把 JSON Schema 交给厂商的原生结构化输出
-        //  4. 输出不是合法 JSON（Jackson 3 的 tools.jackson.core.JacksonException）→ 返回 null；
-        //     其他 RuntimeException（连不上、超时……）→ 转成 ModelCallException 抛出
-        //  验收：IntentServiceTest.parsesValidJsonIntoIntentResult / schemaGoesToProviderAndTemperatureIsZero /
-        //  markdownFenceAroundJsonIsTolerated
-        throw new UnsupportedOperationException("TODO ch02-3：实现 IntentService#callModel");
+        String template = strict ? USER_TEMPLATE + "\n\n" + STRICT_REMINDER : USER_TEMPLATE;
+        try {
+            return chatClient
+                    .prompt()
+                    .system(intentPrompt)
+                    .user(u -> u.text(template).param("message", message))
+                    .options(ChatOptions.builder().temperature(TEMPERATURE))
+                    .call()
+                    .entity(IntentResult.class, spec -> spec.useProviderStructuredOutput());
+        } catch (JacksonException e) {
+            log.info("意图识别：输出不是合法的 JSON：{}", e.getOriginalMessage());
+            return null;
+        } catch (RuntimeException e) {
+            throw ModelCallException.from(e);
+        }
     }
 }
