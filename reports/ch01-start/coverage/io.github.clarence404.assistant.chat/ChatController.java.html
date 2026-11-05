@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ChatController.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.chat</a> &gt; <span class="el_source">ChatController.java</span></div><h1>ChatController.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.chat;
+
+import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Flux;
+
+@RestController
+public class ChatController {
+
+    private final ChatService chatService;
+
+<span class="fc" id="L16">    public ChatController(ChatService chatService) {</span>
+<span class="fc" id="L17">        this.chatService = chatService;</span>
+<span class="fc" id="L18">    }</span>
+
+    /** 阻塞接口：{&quot;message&quot;: &quot;...&quot;} → {&quot;reply&quot;: &quot;...&quot;}；模型调用失败由 ApiExceptionHandler 转成 503。 */
+    @PostMapping(&quot;/api/chat&quot;)
+    public ChatReply chat(@Valid @RequestBody ChatRequest request) {
+<span class="nc" id="L23">        return new ChatReply(chatService.reply(request.message()));</span>
+    }
+
+    /**
+     * 流式接口：返回 text/event-stream，依次推送若干 token 事件，最后一个 done 事件；出错时推一个 error 事件后结束。
+     *
+     * &lt;p&gt;Spring MVC 直接支持返回 Flux：每个元素写成一条 SSE，Flux 结束时关闭连接。
+     */
+    @PostMapping(value = &quot;/api/chat/stream&quot;, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux&lt;ServerSentEvent&lt;Object&gt;&gt; stream(@Valid @RequestBody ChatRequest request) {
+        // TODO ch01-6：把 chatService.stream(...) 的文本流转成 SSE 事件流（事件名与 data 结构见 StreamEvents）：
+        //  1. 每段非空文本 → event 为 token，data 为 StreamEvents.Token
+        //  2. 正常结束后再追加一个 event 为 done 的事件，data 为 StreamEvents.Done.stop()
+        //  3. 任何错误 → 只推一个 event 为 error 的事件（data 为 StreamEvents.Error，code 取 ModelFailure 的 name()，
+        //     message 取 ModelFailure#message()），然后正常结束；出错时不能再发 done，也不能把异常信息推给前端
+        //  构造事件：ServerSentEvent.builder(data).event(name).build()
+        //  验收：ChatStreamApiTest
+<span class="fc" id="L40">        return Flux.error(new UnsupportedOperationException(&quot;TODO ch01-6：实现 ChatController#stream&quot;));</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

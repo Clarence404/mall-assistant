@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ModelCallException.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.error</a> &gt; <span class="el_source">ModelCallException.java</span></div><h1>ModelCallException.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.error;
+
+/** 调用模型失败：把各种底层异常（连接拒绝、读超时、HTTP 5xx……）归成 {@link ModelFailure} 的两类。 */
+public class ModelCallException extends RuntimeException {
+
+    private final ModelFailure failure;
+
+    public ModelCallException(ModelFailure failure, Throwable cause) {
+<span class="fc" id="L9">        super(failure.title(), cause);</span>
+<span class="fc" id="L10">        this.failure = failure;</span>
+<span class="fc" id="L11">    }</span>
+
+    public ModelFailure failure() {
+<span class="nc" id="L14">        return failure;</span>
+    }
+
+    /**
+     * 把调用模型时抛出的任意异常归类：沿 cause 链找到超时类异常记为 {@link ModelFailure#MODEL_TIMEOUT}，其余一律记为
+     * {@link ModelFailure#MODEL_UNAVAILABLE}；已经归过类的原样返回。
+     */
+    public static ModelCallException from(Throwable error) {
+        // TODO ch01-2：实现异常归类。
+        //  1. error 本身已经是 ModelCallException 的，原样返回，不要再包一层
+        //  2. 沿 getCause() 逐层查找（注意防止无限循环，限制层数即可），任意一层是超时类异常就是 MODEL_TIMEOUT：
+        //     java.util.concurrent.TimeoutException（Reactor 的 timeout）、java.net.SocketTimeoutException（阻塞读超时）、
+        //     java.net.http.HttpTimeoutException；Netty 的 ReadTimeoutException 可以按类名以 &quot;TimeoutException&quot; 结尾识别
+        //  3. 其余一律是 MODEL_UNAVAILABLE；新异常的 cause 要设为原始 error，日志里才看得到根因
+        //  验收：ModelCallExceptionTest
+<span class="fc" id="L29">        throw new UnsupportedOperationException(&quot;TODO ch01-2：实现 ModelCallException#from&quot;, error);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
