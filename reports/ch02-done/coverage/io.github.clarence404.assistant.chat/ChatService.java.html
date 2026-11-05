@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ChatService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.chat</a> &gt; <span class="el_source">ChatService.java</span></div><h1>ChatService.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.chat;
+
+import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.intent.Intent;
+import io.github.clarence404.assistant.intent.IntentResult;
+import io.github.clarence404.assistant.intent.IntentService;
+import io.github.clarence404.assistant.prompt.AssistantPrompts;
+import java.util.Objects;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
+
+/** 和模型对话：先识别意图，超出范围的直接拒答；其余一问一答（阻塞）或逐段输出（流式）。调用失败统一转成 {@link ModelCallException}。 */
+@Service
+public class ChatService {
+
+    private final ChatClient chatClient;
+    private final ChatProperties properties;
+    private final AssistantPrompts prompts;
+    private final IntentService intentService;
+
+    public ChatService(
+<span class="fc" id="L23">            ChatClient chatClient, ChatProperties properties, AssistantPrompts prompts, IntentService intentService) {</span>
+<span class="fc" id="L24">        this.chatClient = chatClient;</span>
+<span class="fc" id="L25">        this.properties = properties;</span>
+<span class="fc" id="L26">        this.prompts = prompts;</span>
+<span class="fc" id="L27">        this.intentService = intentService;</span>
+<span class="fc" id="L28">    }</span>
+
+    /** 阻塞接口的完整流程：识别意图 → 超出范围就回拒答话术（不调回答模型）→ 否则让模型回答。 */
+    public ChatReply chat(String message) {
+<span class="fc" id="L32">        IntentResult intent = intentService.classify(message);</span>
+<span class="fc bfc" id="L33" title="All 2 branches covered.">        if (shouldRefuse(intent)) {</span>
+<span class="fc" id="L34">            return new ChatReply(prompts.refusal(), intent);</span>
+        }
+<span class="fc" id="L36">        return new ChatReply(reply(message), intent);</span>
+    }
+
+    /** 流式接口的回答部分：意图已经识别好，超出范围就只推一段拒答话术，否则流式调用模型。 */
+    public Flux&lt;String&gt; answerStream(String message, IntentResult intent) {
+<span class="fc bfc" id="L41" title="All 2 branches covered.">        if (shouldRefuse(intent)) {</span>
+<span class="fc" id="L42">            return Flux.just(prompts.refusal());</span>
+        }
+<span class="fc" id="L44">        return stream(message);</span>
+    }
+
+    /** 只有把握够大的 OUT_OF_SCOPE 才拒答。 */
+    boolean shouldRefuse(IntentResult intent) {
+<span class="fc bfc" id="L49" title="All 4 branches covered.">        return intent.intent() == Intent.OUT_OF_SCOPE &amp;&amp; intent.confidence() &gt;= properties.refuseMinConfidence();</span>
+    }
+
+    /** 阻塞调用：等模型生成完整回答再返回。超时由 HTTP 客户端的 read-timeout 控制（见 application.yml）。 */
+    public String reply(String message) {
+        try {
+<span class="fc" id="L55">            String content = chatClient</span>
+<span class="fc" id="L56">                    .prompt()</span>
+<span class="fc" id="L57">                    .system(prompts::applySystem)</span>
+<span class="fc" id="L58">                    .user(message)</span>
+<span class="fc" id="L59">                    .call()</span>
+<span class="fc" id="L60">                    .content();</span>
+<span class="fc" id="L61">            return Objects.requireNonNullElse(content, &quot;&quot;);</span>
+<span class="fc" id="L62">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L63">            throw ModelCallException.from(e);</span>
+        }
+    }
+
+    /** 流式调用：模型每生成一段就推一段。首段和相邻两段之间超过 streamTimeout 没动静，按超时结束。 */
+    public Flux&lt;String&gt; stream(String message) {
+<span class="fc" id="L69">        return chatClient.prompt().system(prompts::applySystem).user(message).stream()</span>
+<span class="fc" id="L70">                .content()</span>
+<span class="fc" id="L71">                .timeout(properties.streamTimeout())</span>
+<span class="fc" id="L72">                .onErrorMap(ModelCallException::from);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
