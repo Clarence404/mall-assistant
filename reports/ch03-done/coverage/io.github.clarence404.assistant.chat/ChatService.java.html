@@ -180,7 +180,7 @@ public class ChatService {
      * &lt;ul&gt;
      *   &lt;li&gt;开了 {@code direct-lookup} 且 {@link #directLookup} 查了：用户消息换成 {@link #LOOKUP_TEMPLATE}，这次&lt;b&gt;不&lt;/b&gt;注册工具
      *       （结果已经在提示词里了，再给模型工具，它可能再调一次同样的查询，白白多一轮）
-     *   &lt;li&gt;否则开了 {@code native-calling}：{@code toolCallbacks(...)} 注册经 {@link ToolCallRecorder#wrap} 包装的工具，
+     *   &lt;li&gt;否则开了 {@code native-calling}：{@code tools(...)} 注册经 {@link ToolCallRecorder#wrap} 包装的工具（{@code tools} 既收带 {@code @Tool} 的对象，也收 {@code ToolCallback}；2.0 起 {@code toolCallbacks(...)} 已标记为将删除），
      *       {@code toolContext(...)} 放令牌。Spring AI 把工具的名字、说明、参数 Schema 随请求发给模型；令牌只留在本进程里，执行工具时传给工具方法
      *   &lt;li&gt;两者都不满足：和第 2 章一样，只带用户原话
      * &lt;/ul&gt;
@@ -201,7 +201,7 @@ public class ChatService {
         }
 <span class="fc" id="L202">        spec = spec.user(message);</span>
 <span class="fc bfc" id="L203" title="All 2 branches covered.">        if (toolProperties.nativeCalling()) {</span>
-<span class="fc" id="L204">            spec = spec.toolCallbacks(recorder.wrap(mallTools.callbacks())).toolContext(MallTools.context(mallToken));</span>
+<span class="fc" id="L204">            spec = spec.tools(recorder.wrap(mallTools.callbacks()).toArray()).toolContext(MallTools.context(mallToken));</span>
         }
 <span class="fc" id="L206">        return spec;</span>
     }
