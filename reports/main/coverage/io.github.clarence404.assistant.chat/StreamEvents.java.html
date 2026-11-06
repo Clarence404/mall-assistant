@@ -6,10 +6,14 @@
  * &lt;ul&gt;
  *   &lt;li&gt;{@code event: intent}，data 为 {@code IntentResult}：第 2 章新增，最先推送，告诉前端识别出的意图；只认 token / done / error
  *       的旧前端忽略它即可
+ *   &lt;li&gt;{@code event: tool}，data 为 {@code ToolInvocation}：第 3 章新增，0 到多个，在它之后的文字之前推送，告诉前端调用了哪个工具、
+ *       参数和结果；不认识它的前端同样可以忽略
  *   &lt;li&gt;{@code event: token}，data 为 {@link Token}：一段增量文本，前端按顺序拼接
  *   &lt;li&gt;{@code event: done}，data 为 {@link Done}：回答结束，之后连接关闭
  *   &lt;li&gt;{@code event: error}，data 为 {@link Error}：出错，之后连接关闭，不再有 done
  * &lt;/ul&gt;
+ *
+ * &lt;p&gt;顺序：{@code intent → tool* → token* → done | error}（第 3 章起 tool 也可能夹在 token 之间：模型先说了几句再调工具时）。
  *
  * &lt;p&gt;data 用 JSON 而不是纯文本：增量文本里常有换行和前导空格，纯文本 SSE 会把换行拆成多行 data、 把行首空格吃掉。
  *
@@ -21,6 +25,7 @@
 public final class StreamEvents {
 
     public static final String INTENT = &quot;intent&quot;;
+    public static final String TOOL = &quot;tool&quot;;
     public static final String TOKEN = &quot;token&quot;;
     public static final String DONE = &quot;done&quot;;
     public static final String ERROR = &quot;error&quot;;
@@ -32,18 +37,18 @@ public final class StreamEvents {
      *
      * @param text 模型新生成的一小段文字（通常是一个到几个 token），前端追加到气泡末尾
      */
-<span class="fc" id="L35">    public record Token(String text) {}</span>
+<span class="fc" id="L40">    public record Token(String text) {}</span>
 
     /**
      * 正常结束。
      *
      * @param reason 结束原因，目前只有 {@code stop}（模型自然说完）
      */
-<span class="fc" id="L42">    public record Done(String reason) {</span>
+<span class="fc" id="L47">    public record Done(String reason) {</span>
 
         /** 模型自然说完。 */
         public static Done stop() {
-<span class="fc" id="L46">            return new Done(&quot;stop&quot;);</span>
+<span class="fc" id="L51">            return new Done(&quot;stop&quot;);</span>
         }
     }
 
@@ -53,6 +58,6 @@ public final class StreamEvents {
      * @param code 错误码，取 {@code ModelFailure} 的 name()，如 MODEL_TIMEOUT
      * @param message 给用户看的提示，不含内部细节
      */
-<span class="fc" id="L56">    public record Error(String code, String message) {}</span>
+<span class="fc" id="L61">    public record Error(String code, String message) {}</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

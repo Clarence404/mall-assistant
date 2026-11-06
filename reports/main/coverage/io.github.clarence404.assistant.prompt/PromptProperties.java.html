@@ -10,7 +10,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * &lt;p&gt;所在层：业务层的配置（第 2 章引入）。由 {@code @ConfigurationPropertiesScan} 绑定，注入 {@link AssistantPrompts}。
  * 默认值与 application.yml 里写的一致；可以用环境变量覆盖，如 {@code ASSISTANT_PROMPT_VERSION=v1}（Spring Boot 的宽松绑定）。
  *
- * @param version 系统提示词版本，对应 {@code prompts/system-&lt;version&gt;.st}，如 v1、v2；改提示词时新增一个版本，旧版本留着对比与回滚
+ * @param version 系统提示词版本，对应 {@code prompts/system-&lt;version&gt;.st}，如 v1、v2、v3；改提示词时新增一个版本，旧版本留着对比与回滚
  * @param shopName 商城名，渲染进系统提示词与拒答话术
  * @param assistantName 客服的名字
  * @param supportScope 客服能回答的范围，一句话列出
@@ -18,7 +18,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties(&quot;assistant.prompt&quot;)
 <span class="fc" id="L20">public record PromptProperties(</span>
-        @DefaultValue(&quot;v2&quot;) String version,
+        @DefaultValue(&quot;v3&quot;) String version,
         @DefaultValue(&quot;示例商城&quot;) String shopName,
         @DefaultValue(&quot;小示&quot;) String assistantName,
         @DefaultValue(&quot;商品、下单、支付、物流、退换货与售后、账户与积分&quot;) String supportScope,

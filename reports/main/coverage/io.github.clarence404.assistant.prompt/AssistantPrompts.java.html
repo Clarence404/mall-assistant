@@ -35,8 +35,9 @@ import org.springframework.stereotype.Component;
  * &lt;p&gt;目前用到的模板（都在 {@code src/main/resources/prompts/}，模板里不能写注释，否则会一起发给模型；同目录的 README.md 有同样的说明）：
  *
  * &lt;ul&gt;
- *   &lt;li&gt;{@code system-v1.st} / {@code system-v2.st}：回答用的系统提示词（客服人设与规则），按版本二选一；v2 比 v1 多了
- *       {@code {today}}、更明确的「不编造」规则和 few-shot 示例。变量：shopName、assistantName、supportScope、today（v1 不用 today）
+ *   &lt;li&gt;{@code system-v1.st} / {@code system-v2.st} / {@code system-v3.st}：回答用的系统提示词（客服人设与规则），按版本三选一；v2 比 v1 多了
+ *       {@code {today}}、更明确的「不编造」规则和 few-shot 示例；v3（第 3 章，默认）让模型先调工具查、事实只能来自工具或查询结果，
+ *       而且刻意写得很短（长提示词会让小模型不调工具）。变量：shopName、assistantName、supportScope、today（v1 不用 today）
  *   &lt;li&gt;{@code refusal.st}：拒答话术，直接返回给用户，不发给模型。变量同上
  *   &lt;li&gt;{@code intent-v1.st}：意图识别的系统提示词，没有变量，由 {@code IntentService} 直接加载，不经过这个类
  * &lt;/ul&gt;
@@ -44,12 +45,12 @@ import org.springframework.stereotype.Component;
 @Component
 public class AssistantPrompts {
 
-<span class="fc" id="L47">    private static final Logger log = LoggerFactory.getLogger(AssistantPrompts.class);</span>
-<span class="fc" id="L48">    private static final DateTimeFormatter TODAY = DateTimeFormatter.ofPattern(&quot;yyyy年M月d日 EEEE&quot;, Locale.CHINA);</span>
+<span class="fc" id="L48">    private static final Logger log = LoggerFactory.getLogger(AssistantPrompts.class);</span>
+<span class="fc" id="L49">    private static final DateTimeFormatter TODAY = DateTimeFormatter.ofPattern(&quot;yyyy年M月d日 EEEE&quot;, Locale.CHINA);</span>
 
     private final PromptProperties properties;
     private final Clock clock;
-<span class="fc" id="L52">    private final Resource refusalTemplate = new ClassPathResource(&quot;prompts/refusal.st&quot;);</span>
+<span class="fc" id="L53">    private final Resource refusalTemplate = new ClassPathResource(&quot;prompts/refusal.st&quot;);</span>
 
     /**
      * Spring 用的构造器：「今天」按 {@code assistant.prompt.zone} 时区的系统时钟计算。
@@ -59,8 +60,8 @@ public class AssistantPrompts {
      */
     @Autowired
     public AssistantPrompts(PromptProperties properties) {
-<span class="fc" id="L62">        this(properties, Clock.system(properties.zone()));</span>
-<span class="fc" id="L63">    }</span>
+<span class="fc" id="L63">        this(properties, Clock.system(properties.zone()));</span>
+<span class="fc" id="L64">    }</span>
 
     /**
      * 测试用：传入固定的时钟，「今天」就是确定的。
@@ -69,12 +70,12 @@ public class AssistantPrompts {
      * @param clock 计算「今天」用的时钟
      * @throws IllegalStateException 配置的版本找不到对应模板文件
      */
-<span class="fc" id="L72">    public AssistantPrompts(PromptProperties properties, Clock clock) {</span>
-<span class="fc" id="L73">        this.properties = properties;</span>
-<span class="fc" id="L74">        this.clock = clock;</span>
+<span class="fc" id="L73">    public AssistantPrompts(PromptProperties properties, Clock clock) {</span>
+<span class="fc" id="L74">        this.properties = properties;</span>
+<span class="fc" id="L75">        this.clock = clock;</span>
         // 启动时就确认模板文件存在：版本号写错了应当起不来，而不是等到第一个用户提问才报错
-<span class="fc" id="L76">        log.info(&quot;系统提示词：{}&quot;, systemTemplate().getFilename());</span>
-<span class="fc" id="L77">    }</span>
+<span class="fc" id="L77">        log.info(&quot;系统提示词：{}&quot;, systemTemplate().getFilename());</span>
+<span class="fc" id="L78">    }</span>
 
     /**
      * 当前版本的系统提示词模板：{@code classpath:prompts/system-&lt;version&gt;.st}，文件不存在时抛 IllegalStateException。
@@ -83,13 +84,13 @@ public class AssistantPrompts {
      * @throws IllegalStateException 文件不存在
      */
     public Resource systemTemplate() {
-<span class="fc" id="L86">        String path = &quot;prompts/system-&quot; + properties.version() + &quot;.st&quot;;</span>
-<span class="fc" id="L87">        Resource template = new ClassPathResource(path);</span>
-<span class="fc bfc" id="L88" title="All 2 branches covered.">        if (!template.exists()) {</span>
-<span class="fc" id="L89">            throw new IllegalStateException(</span>
-<span class="fc" id="L90">                    &quot;找不到系统提示词模板 &quot; + path + &quot;，检查 assistant.prompt.version=&quot; + properties.version());</span>
+<span class="fc" id="L87">        String path = &quot;prompts/system-&quot; + properties.version() + &quot;.st&quot;;</span>
+<span class="fc" id="L88">        Resource template = new ClassPathResource(path);</span>
+<span class="fc bfc" id="L89" title="All 2 branches covered.">        if (!template.exists()) {</span>
+<span class="fc" id="L90">            throw new IllegalStateException(</span>
+<span class="fc" id="L91">                    &quot;找不到系统提示词模板 &quot; + path + &quot;，检查 assistant.prompt.version=&quot; + properties.version());</span>
         }
-<span class="fc" id="L92">        return template;</span>
+<span class="fc" id="L93">        return template;</span>
     }
 
     /**
@@ -101,11 +102,11 @@ public class AssistantPrompts {
      * @return 变量名 → 值，键名与模板里的占位符一一对应
      */
     public Map&lt;String, Object&gt; variables() {
-<span class="fc" id="L104">        return Map.of(</span>
-<span class="fc" id="L105">                &quot;shopName&quot;, properties.shopName(),</span>
-<span class="fc" id="L106">                &quot;assistantName&quot;, properties.assistantName(),</span>
-<span class="fc" id="L107">                &quot;supportScope&quot;, properties.supportScope(),</span>
-<span class="fc" id="L108">                &quot;today&quot;, LocalDate.now(clock).format(TODAY));</span>
+<span class="fc" id="L105">        return Map.of(</span>
+<span class="fc" id="L106">                &quot;shopName&quot;, properties.shopName(),</span>
+<span class="fc" id="L107">                &quot;assistantName&quot;, properties.assistantName(),</span>
+<span class="fc" id="L108">                &quot;supportScope&quot;, properties.supportScope(),</span>
+<span class="fc" id="L109">                &quot;today&quot;, LocalDate.now(clock).format(TODAY));</span>
     }
 
     /**
@@ -116,8 +117,8 @@ public class AssistantPrompts {
      * @param spec ChatClient 提供的系统消息配置器
      */
     public void applySystem(ChatClient.PromptSystemSpec spec) {
-<span class="fc" id="L119">        spec.text(systemTemplate()).params(variables());</span>
-<span class="fc" id="L120">    }</span>
+<span class="fc" id="L120">        spec.text(systemTemplate()).params(variables());</span>
+<span class="fc" id="L121">    }</span>
 
     /**
      * 拒答话术：超出客服范围的问题直接回这句，不调模型。
@@ -127,12 +128,12 @@ public class AssistantPrompts {
      * @return 渲染好的话术，去掉了首尾空白（模板文件末尾的换行）
      */
     public String refusal() {
-<span class="fc" id="L130">        return PromptTemplate.builder()</span>
-<span class="fc" id="L131">                .resource(refusalTemplate)</span>
-<span class="fc" id="L132">                .variables(variables())</span>
-<span class="fc" id="L133">                .build()</span>
-<span class="fc" id="L134">                .render()</span>
-<span class="fc" id="L135">                .strip();</span>
+<span class="fc" id="L131">        return PromptTemplate.builder()</span>
+<span class="fc" id="L132">                .resource(refusalTemplate)</span>
+<span class="fc" id="L133">                .variables(variables())</span>
+<span class="fc" id="L134">                .build()</span>
+<span class="fc" id="L135">                .render()</span>
+<span class="fc" id="L136">                .strip();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
