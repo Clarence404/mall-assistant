@@ -57,7 +57,8 @@ class ReplayChatModel implements ChatModel {
         String output = outputs.get(hash);
         if (output == null) {
             throw new IllegalStateException("没有 " + model + " 对这个 Prompt（指纹 " + hash + "）的录制："
-                    + "提示词、用户消息模板或 IntentResult 的字段变了，按 docs/ch02.md「录制回放」重新录制");
+                    + "意图提示词或用户消息模板变了，按 docs/ch02.md「录制回放」重新录制"
+                    + "（注意：只改 IntentResult 的字段不会触发这个报错，Schema 不在消息里，也要手动重新录制）");
         }
         return new ChatResponse(List.of(new Generation(new AssistantMessage(output))));
     }
