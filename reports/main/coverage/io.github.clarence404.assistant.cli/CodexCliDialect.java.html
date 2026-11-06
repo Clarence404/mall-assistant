@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CodexCliDialect.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.cli</a> &gt; <span class="el_source">CodexCliDialect.java</span></div><h1>CodexCliDialect.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.cli;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import tools.jackson.databind.JsonNode;
+
+/**
+ * OpenAI Codex CLI（{@code codex exec}）的参数与输出格式，按 0.166.0 的 {@code codex exec --help} 与 {@code --json} 事件验证。
+ *
+ * &lt;p&gt;Codex 是编码代理，没有「关掉全部工具」的单个开关，这里能收紧的都收紧了：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;{@code --sandbox read-only}：模型生成的命令只能在只读沙箱里跑（不能写文件、不能联网）
+ *   &lt;li&gt;{@code --disable shell_tool / unified_exec / …}：关掉执行命令、子代理、插件、应用、浏览器、图片等功能；{@code -c web_search=&quot;disabled&quot;}
+ *       关掉联网搜索
+ *   &lt;li&gt;{@code --ignore-user-config --ignore-rules}：不加载 {@code ~/.codex/config.toml}（其中的 MCP 服务、模型提供方）与 execpolicy
+ *       规则；登录凭据仍从 CODEX_HOME 读取
+ *   &lt;li&gt;{@code --ephemeral}：会话不写盘；{@code --skip-git-repo-check} + {@code -C &lt;空临时目录&gt;}：不在任何仓库里运行
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;即便如此，只读沙箱仍允许读取本机文件，所以 codex-cli profile 只适合本机学习，不要把服务暴露给别人用。
+ *
+ * &lt;p&gt;{@code codex exec} 没有系统提示词参数：系统提示词拼在 stdin 内容的前面。结构化输出用 {@code --output-schema &lt;文件&gt;}，最终的 agent
+ * 消息就是 JSON 文本。{@code --json} 只在一条 agent 消息完整生成后才输出它，所以流式接口是整段推送。
+ */
+<span class="fc" id="L27">public class CodexCliDialect implements CliDialect {</span>
+
+    /** 关掉的功能（{@code codex features list} 里的名字）：只留下「回答文字」这一件事。 */
+<span class="fc" id="L30">    static final List&lt;String&gt; DISABLED_FEATURES = List.of(</span>
+            &quot;shell_tool&quot;,
+            &quot;unified_exec&quot;,
+            &quot;multi_agent&quot;,
+            &quot;apps&quot;,
+            &quot;plugins&quot;,
+            &quot;image_generation&quot;,
+            &quot;view_image&quot;,
+            &quot;browser_use&quot;,
+            &quot;computer_use&quot;,
+            &quot;hooks&quot;);
+
+    @Override
+    public String name() {
+<span class="fc" id="L44">        return &quot;codex&quot;;</span>
+    }
+
+    @Override
+    public List&lt;String&gt; arguments(CliRequest request, CliWorkspace workspace, List&lt;String&gt; extraArgs)
+            throws IOException {
+<span class="fc" id="L50">        List&lt;String&gt; args = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L51">        args.addAll(List.of(&quot;exec&quot;, &quot;--json&quot;));</span>
+<span class="fc" id="L52">        args.addAll(List.of(&quot;--sandbox&quot;, &quot;read-only&quot;));</span>
+<span class="fc" id="L53">        args.add(&quot;--skip-git-repo-check&quot;);</span>
+<span class="fc" id="L54">        args.add(&quot;--ephemeral&quot;);</span>
+<span class="fc" id="L55">        args.add(&quot;--ignore-user-config&quot;);</span>
+<span class="fc" id="L56">        args.add(&quot;--ignore-rules&quot;);</span>
+<span class="fc" id="L57">        args.addAll(List.of(&quot;--color&quot;, &quot;never&quot;));</span>
+<span class="fc" id="L58">        args.addAll(List.of(&quot;-C&quot;, workspace.cwd().toAbsolutePath().toString()));</span>
+<span class="fc bfc" id="L59" title="All 2 branches covered.">        for (String feature : DISABLED_FEATURES) {</span>
+<span class="fc" id="L60">            args.addAll(List.of(&quot;--disable&quot;, feature));</span>
+<span class="fc" id="L61">        }</span>
+<span class="fc" id="L62">        args.addAll(List.of(&quot;-c&quot;, &quot;web_search=\&quot;disabled\&quot;&quot;));</span>
+<span class="pc bpc" id="L63" title="1 of 2 branches missed.">        if (request.model() != null) {</span>
+<span class="fc" id="L64">            args.addAll(List.of(&quot;-m&quot;, request.model()));</span>
+        }
+<span class="fc bfc" id="L66" title="All 2 branches covered.">        if (request.hasOutputSchema()) {</span>
+<span class="fc" id="L67">            args.addAll(List.of(</span>
+                    &quot;--output-schema&quot;,
+                    workspace
+<span class="fc" id="L70">                            .write(&quot;output-schema.json&quot;, request.outputSchema())</span>
+<span class="fc" id="L71">                            .toString()));</span>
+        }
+<span class="fc" id="L73">        args.addAll(extraArgs);</span>
+<span class="fc" id="L74">        args.add(&quot;-&quot;); // 指令从 stdin 读</span>
+<span class="fc" id="L75">        return args;</span>
+    }
+
+    @Override
+    public String stdin(CliRequest request) {
+<span class="pc bpc" id="L80" title="1 of 2 branches missed.">        if (!request.hasSystemPrompt()) {</span>
+<span class="nc" id="L81">            return request.conversation();</span>
+        }
+<span class="fc" id="L83">        return &quot;&quot;&quot;</span>
+                &lt;system&gt;
+                %s
+                &lt;/system&gt;
+
+<span class="fc" id="L88">                %s&quot;&quot;&quot;.formatted(request.systemPrompt().strip(), request.conversation());</span>
+    }
+
+    @Override
+    public CliReply parseReply(String stdout) {
+<span class="fc" id="L93">        CodexEvents events = new CodexEvents();</span>
+<span class="fc bfc" id="L94" title="All 2 branches covered.">        for (String line : stdout.split(&quot;\\R&quot;)) {</span>
+<span class="fc" id="L95">            events.onLine(line);</span>
+        }
+<span class="fc" id="L97">        events.requireCompleted();</span>
+<span class="pc bpc" id="L98" title="1 of 2 branches missed.">        if (events.messages.isEmpty()) {</span>
+<span class="nc" id="L99">            throw new CliExecutionException(&quot;codex 的输出里没有 agent 消息：&quot; + ClaudeCliDialect.abbreviate(stdout));</span>
+        }
+<span class="fc" id="L101">        return new CliReply(events.messages.getLast(), null, events.inputTokens, events.outputTokens, null);</span>
+    }
+
+    @Override
+    public StreamParser streamParser() {
+<span class="fc" id="L106">        CodexEvents events = new CodexEvents();</span>
+<span class="fc" id="L107">        return new StreamParser() {</span>
+
+            @Override
+            public List&lt;String&gt; onLine(String line) {
+<span class="fc" id="L111">                int before = events.messages.size();</span>
+<span class="fc" id="L112">                events.onLine(line);</span>
+<span class="fc" id="L113">                List&lt;String&gt; fresh = events.messages.subList(before, events.messages.size());</span>
+<span class="fc bfc" id="L114" title="All 2 branches covered.">                if (fresh.isEmpty()) {</span>
+<span class="fc" id="L115">                    return List.of();</span>
+                }
+                // 多条 agent 消息之间空一行
+<span class="fc" id="L118">                List&lt;String&gt; out = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L119" title="All 2 branches covered.">                for (int i = 0; i &lt; fresh.size(); i++) {</span>
+<span class="pc bpc" id="L120" title="1 of 2 branches missed.">                    out.add(before + i == 0 ? fresh.get(i) : &quot;\n\n&quot; + fresh.get(i));</span>
+                }
+<span class="fc" id="L122">                return out;</span>
+            }
+
+            @Override
+            public List&lt;String&gt; onEnd() {
+<span class="fc" id="L127">                events.requireCompleted();</span>
+<span class="fc" id="L128">                return List.of();</span>
+            }
+        };
+    }
+
+    /**
+     * 容错地收集 {@code --json} 事件：{@code item.completed}（item.type 为 agent_message）里的 text 是回答，{@code turn.completed} 带
+     * usage，{@code turn.failed} 表示失败；type 为 error 的事件是重连之类的提示，不算失败。也兼容旧版的 {@code {&quot;msg&quot;:{&quot;type&quot;:&quot;agent_message&quot;}}}。
+     */
+<span class="fc" id="L137">    static final class CodexEvents {</span>
+
+<span class="fc" id="L139">        private final List&lt;String&gt; messages = new ArrayList&lt;&gt;();</span>
+        private boolean completed;
+        private Integer inputTokens;
+        private Integer outputTokens;
+
+        void onLine(String line) {
+<span class="fc" id="L145">            JsonNode node = ClaudeCliDialect.parse(line);</span>
+<span class="pc bpc" id="L146" title="1 of 2 branches missed.">            if (node == null) {</span>
+<span class="nc" id="L147">                return;</span>
+            }
+<span class="fc" id="L149">            String type = node.path(&quot;type&quot;).asString();</span>
+<span class="fc bfc" id="L150" title="All 4 branches covered.">            switch (type) {</span>
+                case &quot;item.completed&quot; -&gt; {
+<span class="fc" id="L152">                    JsonNode item = node.path(&quot;item&quot;);</span>
+<span class="fc" id="L153">                    String itemType = item.path(&quot;type&quot;).asString();</span>
+<span class="pc bpc" id="L154" title="1 of 4 branches missed.">                    if (&quot;agent_message&quot;.equals(itemType) || &quot;assistant_message&quot;.equals(itemType)) {</span>
+<span class="fc" id="L155">                        messages.add(item.path(&quot;text&quot;).asString(&quot;&quot;));</span>
+                    }
+<span class="fc" id="L157">                }</span>
+                case &quot;turn.completed&quot; -&gt; {
+<span class="fc" id="L159">                    completed = true;</span>
+<span class="fc" id="L160">                    JsonNode usage = node.path(&quot;usage&quot;);</span>
+<span class="pc bpc" id="L161" title="1 of 2 branches missed.">                    if (usage.has(&quot;input_tokens&quot;)) {</span>
+<span class="fc" id="L162">                        inputTokens = usage.path(&quot;input_tokens&quot;).asInt();</span>
+                    }
+<span class="pc bpc" id="L164" title="1 of 2 branches missed.">                    if (usage.has(&quot;output_tokens&quot;)) {</span>
+<span class="fc" id="L165">                        outputTokens = usage.path(&quot;output_tokens&quot;).asInt();</span>
+                    }
+<span class="fc" id="L167">                }</span>
+                case &quot;turn.failed&quot; -&gt;
+<span class="fc" id="L169">                    throw new CliExecutionException(&quot;codex 报告失败：&quot;</span>
+<span class="fc" id="L170">                            + ClaudeCliDialect.abbreviate(</span>
+<span class="fc" id="L171">                                    node.path(&quot;error&quot;).path(&quot;message&quot;).asString(&quot;&quot;)));</span>
+                default -&gt; {
+<span class="fc" id="L173">                    JsonNode msg = node.path(&quot;msg&quot;);</span>
+<span class="pc bpc" id="L174" title="1 of 2 branches missed.">                    if (&quot;agent_message&quot;.equals(msg.path(&quot;type&quot;).asString())) {</span>
+<span class="nc" id="L175">                        messages.add(msg.path(&quot;message&quot;).asString(&quot;&quot;));</span>
+<span class="nc" id="L176">                        completed = true;</span>
+                    }
+                }
+            }
+<span class="fc" id="L180">        }</span>
+
+        void requireCompleted() {
+<span class="pc bpc" id="L183" title="3 of 4 branches missed.">            if (!completed &amp;&amp; messages.isEmpty()) {</span>
+<span class="nc" id="L184">                throw new CliExecutionException(&quot;codex 的输出没有 turn.completed 事件就结束了&quot;);</span>
+            }
+<span class="fc" id="L186">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

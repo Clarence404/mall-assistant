@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CliRequest.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.cli</a> &gt; <span class="el_source">CliRequest.java</span></div><h1>CliRequest.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.cli;
+
+/**
+ * 一次命令行调用要发给模型的内容。
+ *
+ * @param systemPrompt 系统提示词，可能为空串
+ * @param conversation 对话内容（一般就是用户消息）
+ * @param outputSchema 结构化输出的 JSON Schema，不需要时为 null
+ * @param model 模型名，null 表示用工具的默认模型
+ * @param stream 是否流式输出
+ */
+<span class="fc" id="L12">public record CliRequest(String systemPrompt, String conversation, String outputSchema, String model, boolean stream) {</span>
+
+    public boolean hasSystemPrompt() {
+<span class="pc bpc" id="L15" title="1 of 4 branches missed.">        return systemPrompt != null &amp;&amp; !systemPrompt.isBlank();</span>
+    }
+
+    public boolean hasOutputSchema() {
+<span class="pc bpc" id="L19" title="1 of 4 branches missed.">        return outputSchema != null &amp;&amp; !outputSchema.isBlank();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

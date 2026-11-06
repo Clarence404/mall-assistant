@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CliCommandResolver.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.cli</a> &gt; <span class="el_source">CliCommandResolver.java</span></div><h1>CliCommandResolver.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.cli;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * 把配置的命令名解析成真正要执行的程序。
+ *
+ * &lt;p&gt;npm 全局安装的 claude / codex 在 Windows 上是 {@code claude.cmd} 这样的批处理包装，最终执行 {@code node &lt;包&gt;\cli.js}。直接执行
+ * .cmd 要经过 cmd.exe：系统提示词里的换行、JSON Schema 里的引号和 {@code &lt; &gt; &amp; |} 都会被 cmd.exe 再解释一遍，很难转义对。所以遇到
+ * npm 的 .cmd 包装时，从里面读出脚本路径，改为直接执行 {@code node.exe &lt;脚本&gt;}，完全绕开 cmd.exe。
+ */
+public final class CliCommandResolver {
+
+    /** npm 生成的 .cmd 包装里的脚本路径：{@code &quot;%dp0%\node_modules\@anthropic-ai\claude-code\cli.js&quot;}。 */
+<span class="fc" id="L25">    private static final Pattern NPM_SHIM_SCRIPT = Pattern.compile(&quot;\&quot;%dp0%\\\\([^\&quot;]+?\\.[cm]?js)\&quot;&quot;);</span>
+
+    private CliCommandResolver() {}
+
+    /** 按当前操作系统与环境变量解析。 */
+    public static List&lt;String&gt; resolve(String command) {
+<span class="fc" id="L31">        return resolve(command, isWindows(), System.getenv(&quot;PATH&quot;), System.getenv(&quot;PATHEXT&quot;));</span>
+    }
+
+    /**
+     * @param command 命令名（在 PATH 里找）或路径
+     * @param windows 是否按 Windows 规则（PATHEXT、.cmd 包装）解析
+     * @param path PATH 环境变量
+     * @param pathExt PATHEXT 环境变量（Windows）
+     * @return 程序及其前置参数，如 {@code [C:\nodejs\node.exe, C:\nodejs\node_modules\...\cli.js]}
+     * @throws CliExecutionException 找不到命令
+     */
+    public static List&lt;String&gt; resolve(String command, boolean windows, String path, String pathExt) {
+<span class="fc" id="L43">        Path executable = find(command, windows, path, pathExt)</span>
+<span class="fc" id="L44">                .orElseThrow(() -&gt; new CliExecutionException(</span>
+                        &quot;找不到命令行工具 &quot; + command + &quot;：确认已安装并在 PATH 里，或用 assistant.cli.command 指定完整路径&quot;));
+<span class="fc bfc" id="L46" title="All 4 branches covered.">        if (windows &amp;&amp; isBatchFile(executable)) {</span>
+<span class="fc" id="L47">            return unwrapNpmShim(executable, path, pathExt);</span>
+        }
+<span class="fc" id="L49">        return List.of(executable.toString());</span>
+    }
+
+    static Optional&lt;Path&gt; find(String command, boolean windows, String path, String pathExt) {
+<span class="pc bpc" id="L53" title="1 of 4 branches missed.">        if (command.contains(&quot;/&quot;) || command.contains(&quot;\\&quot;)) {</span>
+<span class="fc" id="L54">            return candidates(Path.of(command), windows, pathExt).stream()</span>
+<span class="fc" id="L55">                    .filter(Files::isRegularFile)</span>
+<span class="fc" id="L56">                    .findFirst();</span>
+        }
+<span class="pc bpc" id="L58" title="2 of 4 branches missed.">        if (path == null || path.isBlank()) {</span>
+<span class="nc" id="L59">            return Optional.empty();</span>
+        }
+<span class="fc bfc" id="L61" title="All 2 branches covered.">        String separator = windows ? &quot;;&quot; : File.pathSeparator;</span>
+<span class="fc bfc" id="L62" title="All 2 branches covered.">        for (String dir : path.split(Pattern.quote(separator))) {</span>
+<span class="pc bpc" id="L63" title="1 of 2 branches missed.">            if (dir.isBlank()) {</span>
+<span class="nc" id="L64">                continue;</span>
+            }
+            Path base;
+            try {
+<span class="fc" id="L68">                base = Path.of(dir.strip().replace(&quot;\&quot;&quot;, &quot;&quot;)).resolve(command);</span>
+<span class="nc" id="L69">            } catch (RuntimeException e) {</span>
+<span class="nc" id="L70">                continue; // PATH 里的非法条目</span>
+<span class="fc" id="L71">            }</span>
+<span class="fc" id="L72">            Optional&lt;Path&gt; found = candidates(base, windows, pathExt).stream()</span>
+<span class="pc bpc" id="L73" title="3 of 6 branches missed.">                    .filter(p -&gt; Files.isRegularFile(p) &amp;&amp; (windows || Files.isExecutable(p)))</span>
+<span class="fc" id="L74">                    .findFirst();</span>
+<span class="fc bfc" id="L75" title="All 2 branches covered.">            if (found.isPresent()) {</span>
+<span class="fc" id="L76">                return found;</span>
+            }
+        }
+<span class="fc" id="L79">        return Optional.empty();</span>
+    }
+
+    /** Windows 下按 PATHEXT 依次尝试 claude.exe、claude.cmd……；不带扩展名的同名文件（给 Git Bash 用的 sh 脚本）不能直接执行，跳过。 */
+    private static List&lt;Path&gt; candidates(Path base, boolean windows, String pathExt) {
+<span class="fc bfc" id="L84" title="All 2 branches covered.">        if (!windows) {</span>
+<span class="fc" id="L85">            return List.of(base);</span>
+        }
+<span class="fc" id="L87">        String fileName = base.getFileName().toString().toLowerCase(Locale.ROOT);</span>
+<span class="fc" id="L88">        List&lt;String&gt; extensions = extensions(pathExt);</span>
+<span class="fc bfc" id="L89" title="All 2 branches covered.">        if (extensions.stream().anyMatch(fileName::endsWith)) {</span>
+<span class="fc" id="L90">            return List.of(base);</span>
+        }
+<span class="fc" id="L92">        List&lt;Path&gt; result = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L93" title="All 2 branches covered.">        for (String ext : extensions) {</span>
+<span class="fc" id="L94">            result.add(base.resolveSibling(base.getFileName() + ext));</span>
+<span class="fc" id="L95">        }</span>
+<span class="fc" id="L96">        return result;</span>
+    }
+
+    private static List&lt;String&gt; extensions(String pathExt) {
+<span class="pc bpc" id="L100" title="1 of 4 branches missed.">        String value = pathExt == null || pathExt.isBlank() ? &quot;.COM;.EXE;.BAT;.CMD&quot; : pathExt;</span>
+<span class="fc" id="L101">        List&lt;String&gt; result = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L102" title="All 2 branches covered.">        for (String ext : value.split(&quot;;&quot;)) {</span>
+<span class="pc bpc" id="L103" title="1 of 2 branches missed.">            if (!ext.isBlank()) {</span>
+<span class="fc" id="L104">                result.add(ext.strip().toLowerCase(Locale.ROOT));</span>
+            }
+        }
+<span class="fc" id="L107">        return result;</span>
+    }
+
+    private static boolean isBatchFile(Path file) {
+<span class="fc" id="L111">        String name = file.getFileName().toString().toLowerCase(Locale.ROOT);</span>
+<span class="pc bpc" id="L112" title="1 of 4 branches missed.">        return name.endsWith(&quot;.cmd&quot;) || name.endsWith(&quot;.bat&quot;);</span>
+    }
+
+    private static List&lt;String&gt; unwrapNpmShim(Path shim, String path, String pathExt) {
+        String content;
+        try {
+<span class="fc" id="L118">            content = Files.readString(shim, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L119">        } catch (IOException e) {</span>
+<span class="nc" id="L120">            throw new CliExecutionException(&quot;读取 &quot; + shim + &quot; 失败&quot;, e);</span>
+<span class="fc" id="L121">        }</span>
+<span class="fc" id="L122">        Matcher matcher = NPM_SHIM_SCRIPT.matcher(content);</span>
+<span class="fc bfc" id="L123" title="All 2 branches covered.">        if (!matcher.find()) {</span>
+<span class="fc" id="L124">            throw new CliExecutionException(</span>
+                    shim + &quot; 不是 npm 生成的包装脚本，不支持直接执行批处理文件：&quot; + &quot;请用 assistant.cli.command 指向 .exe 或 node 脚本&quot;);
+        }
+<span class="fc" id="L127">        Path dir = shim.toAbsolutePath().getParent();</span>
+<span class="fc" id="L128">        Path script = dir.resolve(matcher.group(1).replace('\\', '/'));</span>
+<span class="pc bpc" id="L129" title="1 of 2 branches missed.">        if (!Files.isRegularFile(script)) {</span>
+<span class="nc" id="L130">            throw new CliExecutionException(&quot;npm 包装脚本指向的 &quot; + script + &quot; 不存在&quot;);</span>
+        }
+<span class="fc" id="L132">        Path bundledNode = dir.resolve(&quot;node.exe&quot;);</span>
+<span class="pc bpc" id="L133" title="1 of 2 branches missed.">        String node = Files.isRegularFile(bundledNode)</span>
+<span class="fc" id="L134">                ? bundledNode.toString()</span>
+<span class="pc" id="L135">                : find(&quot;node&quot;, true, path, pathExt).map(Path::toString).orElse(&quot;node&quot;);</span>
+<span class="fc" id="L136">        return List.of(node, script.toString());</span>
+    }
+
+    public static boolean isWindows() {
+<span class="fc" id="L140">        return System.getProperty(&quot;os.name&quot;, &quot;&quot;).toLowerCase(Locale.ROOT).startsWith(&quot;windows&quot;);</span>
+    }
+
+    /**
+     * 按 Windows C 运行库（node.exe、java.exe 都用它）的规则给一个参数加引号。
+     *
+     * &lt;p&gt;{@link ProcessBuilder} 在 Windows 上只在参数含空格时简单地包一层引号，不转义参数里的双引号：JSON 这样的参数会被子进程拆坏。
+     * 这里自己转义好并包上引号，ProcessBuilder 看到已经带引号的参数就原样传递。不需要引号的参数原样返回。
+     */
+    public static String quoteWindowsArg(String arg) {
+<span class="pc bpc" id="L150" title="2 of 12 branches missed.">        if (!arg.isEmpty() &amp;&amp; arg.chars().noneMatch(c -&gt; c == ' ' || c == '\t' || c == '&quot;' || c == '\n')) {</span>
+<span class="fc" id="L151">            return arg;</span>
+        }
+<span class="fc" id="L153">        StringBuilder quoted = new StringBuilder(&quot;\&quot;&quot;);</span>
+<span class="fc" id="L154">        int backslashes = 0;</span>
+<span class="fc bfc" id="L155" title="All 2 branches covered.">        for (int i = 0; i &lt; arg.length(); i++) {</span>
+<span class="fc" id="L156">            char c = arg.charAt(i);</span>
+<span class="fc bfc" id="L157" title="All 2 branches covered.">            if (c == '\\') {</span>
+<span class="fc" id="L158">                backslashes++;</span>
+<span class="fc" id="L159">                continue;</span>
+            }
+<span class="fc bfc" id="L161" title="All 2 branches covered.">            if (c == '&quot;') {</span>
+<span class="fc" id="L162">                quoted.append(&quot;\\&quot;.repeat(backslashes * 2 + 1)).append('&quot;');</span>
+            } else {
+<span class="fc" id="L164">                quoted.append(&quot;\\&quot;.repeat(backslashes)).append(c);</span>
+            }
+<span class="fc" id="L166">            backslashes = 0;</span>
+        }
+        // 结尾的反斜杠后面紧跟收尾引号，要成对写
+<span class="fc" id="L169">        quoted.append(&quot;\\&quot;.repeat(backslashes * 2)).append('&quot;');</span>
+<span class="fc" id="L170">        return quoted.toString();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

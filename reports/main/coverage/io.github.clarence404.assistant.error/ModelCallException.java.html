@@ -39,7 +39,7 @@ public class ModelCallException extends RuntimeException {
                     || current instanceof SocketTimeoutException // RestClient 阻塞调用读超时
                     || current instanceof HttpTimeoutException // JDK HttpClient
                     // Netty 的 ReadTimeoutException 等第三方超时异常，按类名识别，避免编译期依赖它们
-<span class="pc bpc" id="L42" title="1 of 2 branches missed.">                    || current.getClass().getSimpleName().endsWith(&quot;TimeoutException&quot;)) {</span>
+<span class="fc bfc" id="L42" title="All 2 branches covered.">                    || current.getClass().getSimpleName().endsWith(&quot;TimeoutException&quot;)) {</span>
 <span class="fc" id="L43">                return true;</span>
             }
 <span class="fc" id="L45">            current = current.getCause();</span>

@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CliChatModel.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.cli</a> &gt; <span class="el_source">CliChatModel.java</span></div><h1>CliChatModel.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.cli;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.StructuredOutputChatOptions;
+import reactor.core.publisher.Flux;
+
+/**
+ * 把本机已安装、已登录的 AI 编程命令行工具（Claude Code / Codex CLI）当作对话模型：每次调用起一个进程，内容走 stdin，结果从 stdout 解析。
+ *
+ * &lt;p&gt;只当纯文本模型用：工具、MCP、本地设置与会话持久化都关掉，工作目录是每次新建的空临时目录（具体参数见各 {@link CliDialect}）。
+ *
+ * &lt;p&gt;结构化输出：默认声明支持原生结构化输出（选项是 {@link StructuredOutputChatOptions}），{@code entity(..., useProviderStructuredOutput())}
+ * 时 Spring AI 把 JSON Schema 放进 {@code outputSchema} 选项，这里转成 claude 的 {@code --json-schema} / codex 的
+ * {@code --output-schema}；{@code assistant.cli.native-structured-output=false} 时退回到把格式说明拼进用户消息。
+ *
+ * &lt;p&gt;温度等采样参数命令行工具不支持，忽略；模型名取请求选项里的 model，没有就用 {@code assistant.cli.model}。
+ */
+public class CliChatModel implements ChatModel {
+
+<span class="fc" id="L36">    private static final Logger log = LoggerFactory.getLogger(CliChatModel.class);</span>
+
+    private final CliProperties properties;
+    private final CliDialect dialect;
+    private final CliProcessRunner runner;
+    private volatile List&lt;String&gt; resolvedCommand;
+
+    public CliChatModel(CliProperties properties) {
+<span class="fc" id="L44">        this(</span>
+                properties,
+<span class="fc" id="L46">                Objects.requireNonNull(properties.flavor(), &quot;assistant.cli.flavor&quot;)</span>
+<span class="fc" id="L47">                        .dialect(),</span>
+<span class="fc" id="L48">                new CliProcessRunner(properties.env(), properties.timeout()));</span>
+<span class="fc" id="L49">    }</span>
+
+<span class="fc" id="L51">    CliChatModel(CliProperties properties, CliDialect dialect, CliProcessRunner runner) {</span>
+<span class="fc" id="L52">        this.properties = properties;</span>
+<span class="fc" id="L53">        this.dialect = dialect;</span>
+<span class="fc" id="L54">        this.runner = runner;</span>
+<span class="fc" id="L55">    }</span>
+
+    @Override
+    public ChatOptions getOptions() {
+<span class="fc bfc" id="L59" title="All 2 branches covered.">        return properties.nativeStructuredOutput()</span>
+<span class="fc" id="L60">                ? StructuredOutputChatOptions.builder()</span>
+<span class="fc" id="L61">                        .model(properties.model())</span>
+<span class="fc" id="L62">                        .build()</span>
+<span class="fc" id="L63">                : ChatOptions.builder().model(properties.model()).build();</span>
+    }
+
+    @Override
+    public ChatResponse call(Prompt prompt) {
+<span class="fc" id="L68">        CliRequest request = toRequest(prompt, false);</span>
+<span class="fc" id="L69">        long start = System.nanoTime();</span>
+<span class="fc" id="L70">        try (CliWorkspace workspace = CliWorkspace.create(properties.workDir())) {</span>
+<span class="fc" id="L71">            List&lt;String&gt; command = command(request, workspace);</span>
+<span class="fc" id="L72">            String stdout = runner.run(command, workspace.cwd(), dialect.stdin(request));</span>
+<span class="fc" id="L73">            CliReply reply = dialect.parseReply(stdout);</span>
+<span class="fc" id="L74">            log.info(</span>
+                    &quot;{} 调用完成：{} ms，模型 {}，tokens 输入 {} / 输出 {}，费用 {}&quot;,
+<span class="fc" id="L76">                    dialect.name(),</span>
+<span class="fc" id="L77">                    (System.nanoTime() - start) / 1_000_000,</span>
+<span class="fc bfc" id="L78" title="All 2 branches covered.">                    reply.model() != null ? reply.model() : request.model(),</span>
+<span class="fc" id="L79">                    reply.inputTokens(),</span>
+<span class="fc" id="L80">                    reply.outputTokens(),</span>
+<span class="fc bfc" id="L81" title="All 2 branches covered.">                    reply.costUsd() != null ? &quot;$&quot; + reply.costUsd() : &quot;未知&quot;);</span>
+<span class="fc" id="L82">            return response(reply);</span>
+<span class="fc" id="L83">        } catch (CliExecutionException e) {</span>
+<span class="fc" id="L84">            log.warn(&quot;{} 调用失败：{}&quot;, dialect.name(), e.getMessage());</span>
+<span class="fc" id="L85">            throw e;</span>
+        }
+    }
+
+    @Override
+    public Flux&lt;ChatResponse&gt; stream(Prompt prompt) {
+<span class="fc" id="L91">        CliRequest request = toRequest(prompt, true);</span>
+<span class="fc" id="L92">        return Flux.using(</span>
+<span class="fc" id="L93">                        () -&gt; CliWorkspace.create(properties.workDir()),</span>
+<span class="fc" id="L94">                        workspace -&gt; Flux.defer(() -&gt; {</span>
+<span class="fc" id="L95">                            CliDialect.StreamParser parser = dialect.streamParser();</span>
+<span class="fc" id="L96">                            List&lt;String&gt; command = command(request, workspace);</span>
+<span class="fc" id="L97">                            return runner.lines(command, workspace.cwd(), dialect.stdin(request))</span>
+<span class="fc" id="L98">                                    .concatMapIterable(parser::onLine)</span>
+<span class="fc" id="L99">                                    .concatWith(Flux.defer(() -&gt; Flux.fromIterable(parser.onEnd())));</span>
+                        }),
+                        CliWorkspace::close)
+<span class="pc bpc" id="L102" title="1 of 2 branches missed.">                .filter(text -&gt; !text.isEmpty())</span>
+<span class="fc" id="L103">                .map(text -&gt; new ChatResponse(List.of(new Generation(new AssistantMessage(text)))))</span>
+<span class="fc" id="L104">                .doOnError(CliExecutionException.class, e -&gt; log.warn(&quot;{} 流式调用失败：{}&quot;, dialect.name(), e.getMessage()));</span>
+    }
+
+    private List&lt;String&gt; command(CliRequest request, CliWorkspace workspace) {
+<span class="fc" id="L108">        List&lt;String&gt; command = new ArrayList&lt;&gt;(resolvedCommand());</span>
+<span class="fc" id="L109">        command.addAll(properties.commandArgs());</span>
+        try {
+<span class="fc" id="L111">            command.addAll(dialect.arguments(request, workspace, properties.extraArgs()));</span>
+<span class="nc" id="L112">        } catch (IOException e) {</span>
+<span class="nc" id="L113">            throw new CliExecutionException(&quot;准备 &quot; + dialect.name() + &quot; 的输入文件失败&quot;, e);</span>
+<span class="fc" id="L114">        }</span>
+<span class="fc" id="L115">        return command;</span>
+    }
+
+    /** 第一次调用时才解析命令：没装 CLI 的机器（如 CI）照样能启动应用、跑测试。 */
+    private List&lt;String&gt; resolvedCommand() {
+<span class="fc" id="L120">        List&lt;String&gt; current = resolvedCommand;</span>
+<span class="fc bfc" id="L121" title="All 2 branches covered.">        if (current == null) {</span>
+<span class="fc" id="L122">            current = CliCommandResolver.resolve(properties.commandOrDefault());</span>
+<span class="fc" id="L123">            log.info(&quot;{} 命令：{}&quot;, dialect.name(), current);</span>
+<span class="fc" id="L124">            resolvedCommand = current;</span>
+        }
+<span class="fc" id="L126">        return current;</span>
+    }
+
+    CliRequest toRequest(Prompt prompt, boolean stream) {
+<span class="fc" id="L130">        String system = prompt.getInstructions().stream()</span>
+<span class="fc bfc" id="L131" title="All 2 branches covered.">                .filter(m -&gt; m.getMessageType() == MessageType.SYSTEM)</span>
+<span class="fc" id="L132">                .map(Message::getText)</span>
+<span class="fc" id="L133">                .filter(Objects::nonNull)</span>
+<span class="fc" id="L134">                .collect(Collectors.joining(&quot;\n\n&quot;));</span>
+<span class="fc" id="L135">        List&lt;Message&gt; conversation = prompt.getInstructions().stream()</span>
+<span class="fc bfc" id="L136" title="All 2 branches covered.">                .filter(m -&gt; m.getMessageType() != MessageType.SYSTEM)</span>
+<span class="fc" id="L137">                .toList();</span>
+        String schema =
+<span class="fc bfc" id="L139" title="All 2 branches covered.">                prompt.getOptions() instanceof StructuredOutputChatOptions options ? options.getOutputSchema() : null;</span>
+<span class="pc bpc" id="L140" title="1 of 4 branches missed.">        String model = prompt.getOptions() != null &amp;&amp; prompt.getOptions().getModel() != null</span>
+<span class="fc" id="L141">                ? prompt.getOptions().getModel()</span>
+<span class="fc" id="L142">                : properties.model();</span>
+<span class="fc" id="L143">        return new CliRequest(system, render(conversation), schema, model, stream);</span>
+    }
+
+    /** 只有一条用户消息时原样发送；多轮对话（第 6 章起）按「用户：/ 助手：」拼成一段文本。 */
+    static String render(List&lt;Message&gt; conversation) {
+<span class="pc bpc" id="L148" title="2 of 4 branches missed.">        if (conversation.size() == 1 &amp;&amp; conversation.getFirst().getMessageType() == MessageType.USER) {</span>
+<span class="fc" id="L149">            return Objects.requireNonNullElse(conversation.getFirst().getText(), &quot;&quot;);</span>
+        }
+<span class="nc" id="L151">        return conversation.stream()</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">                .map(m -&gt; (m.getMessageType() == MessageType.ASSISTANT ? &quot;助手：&quot; : &quot;用户：&quot;)</span>
+<span class="nc" id="L153">                        + Objects.requireNonNullElse(m.getText(), &quot;&quot;))</span>
+<span class="nc" id="L154">                .collect(Collectors.joining(&quot;\n\n&quot;));</span>
+    }
+
+    private static ChatResponse response(CliReply reply) {
+<span class="fc" id="L158">        ChatResponseMetadata.Builder metadata = ChatResponseMetadata.builder();</span>
+<span class="fc bfc" id="L159" title="All 2 branches covered.">        if (reply.model() != null) {</span>
+<span class="fc" id="L160">            metadata.model(reply.model());</span>
+        }
+<span class="pc bpc" id="L162" title="3 of 4 branches missed.">        if (reply.inputTokens() != null || reply.outputTokens() != null) {</span>
+<span class="fc" id="L163">            metadata.usage(new DefaultUsage(reply.inputTokens(), reply.outputTokens()));</span>
+        }
+<span class="fc" id="L165">        return new ChatResponse(List.of(new Generation(new AssistantMessage(reply.text()))), metadata.build());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

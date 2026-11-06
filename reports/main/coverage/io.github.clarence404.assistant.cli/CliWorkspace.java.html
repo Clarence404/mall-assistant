@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CliWorkspace.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.cli</a> &gt; <span class="el_source">CliWorkspace.java</span></div><h1>CliWorkspace.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.cli;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * 每次调用独占的临时目录：{@code root/} 下放系统提示词、Schema 等输入文件，{@code root/cwd/} 是空目录，作为工具进程的工作目录。
+ *
+ * &lt;p&gt;工作目录为空：工具读不到任何项目文件（也就读不到项目里的 CLAUDE.md / AGENTS.md），调用结束后整个目录删除。
+ */
+public final class CliWorkspace implements AutoCloseable {
+
+<span class="fc" id="L21">    private static final Logger log = LoggerFactory.getLogger(CliWorkspace.class);</span>
+
+    private final Path root;
+    private final Path cwd;
+<span class="fc" id="L25">    private final AtomicBoolean closed = new AtomicBoolean();</span>
+
+<span class="fc" id="L27">    private CliWorkspace(Path root, Path cwd) {</span>
+<span class="fc" id="L28">        this.root = root;</span>
+<span class="fc" id="L29">        this.cwd = cwd;</span>
+<span class="fc" id="L30">    }</span>
+
+    /** 在 parent 下新建一个临时目录。 */
+    public static CliWorkspace create(Path parent) {
+        try {
+<span class="fc" id="L35">            Files.createDirectories(parent);</span>
+<span class="fc" id="L36">            Path root = Files.createTempDirectory(parent, &quot;mall-assistant-cli-&quot;);</span>
+<span class="fc" id="L37">            return new CliWorkspace(root, Files.createDirectory(root.resolve(&quot;cwd&quot;)));</span>
+<span class="nc" id="L38">        } catch (IOException e) {</span>
+<span class="nc" id="L39">            throw new UncheckedIOException(&quot;无法创建命令行调用的临时目录：&quot; + parent, e);</span>
+        }
+    }
+
+    public Path root() {
+<span class="fc" id="L44">        return root;</span>
+    }
+
+    /** 工具进程的工作目录：空目录。 */
+    public Path cwd() {
+<span class="fc" id="L49">        return cwd;</span>
+    }
+
+    /** 在 root 下写一个 UTF-8 文本文件（不在工作目录里），返回其绝对路径。 */
+    public Path write(String fileName, String content) throws IOException {
+<span class="fc" id="L54">        Path file = root.resolve(fileName);</span>
+<span class="fc" id="L55">        Files.writeString(file, content, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L56">        return file.toAbsolutePath();</span>
+    }
+
+    /** 删除整个临时目录；可重复调用。删不掉（Windows 上进程尚未完全退出）只记日志。 */
+    @Override
+    public void close() {
+<span class="pc bpc" id="L62" title="1 of 2 branches missed.">        if (!closed.compareAndSet(false, true)) {</span>
+<span class="nc" id="L63">            return;</span>
+        }
+<span class="fc" id="L65">        try (Stream&lt;Path&gt; paths = Files.walk(root)) {</span>
+<span class="fc" id="L66">            paths.sorted(Comparator.reverseOrder()).forEach(path -&gt; {</span>
+                try {
+<span class="fc" id="L68">                    Files.deleteIfExists(path);</span>
+<span class="nc" id="L69">                } catch (IOException e) {</span>
+<span class="nc" id="L70">                    log.debug(&quot;删除临时文件失败：{}&quot;, path, e);</span>
+<span class="fc" id="L71">                }</span>
+<span class="fc" id="L72">            });</span>
+<span class="nc" id="L73">        } catch (IOException e) {</span>
+<span class="nc" id="L74">            log.debug(&quot;清理临时目录失败：{}&quot;, root, e);</span>
+<span class="fc" id="L75">        }</span>
+<span class="pc bpc" id="L76" title="1 of 2 branches missed.">        if (Files.exists(root)) {</span>
+<span class="nc" id="L77">            log.warn(&quot;临时目录没有删干净：{}&quot;, root);</span>
+        }
+<span class="fc" id="L79">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

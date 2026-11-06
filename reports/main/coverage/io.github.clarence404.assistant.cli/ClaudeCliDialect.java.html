@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ClaudeCliDialect.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.cli</a> &gt; <span class="el_source">ClaudeCliDialect.java</span></div><h1>ClaudeCliDialect.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.cli;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * Claude Code（{@code claude -p}）的参数与输出格式，按 2.1.112 验证。
+ *
+ * &lt;p&gt;只把它当一个纯文本模型用，不让它碰本机的任何东西：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;{@code --tools &quot;&quot;}：禁用全部内置工具（Bash、读写文件、联网……），init 事件里 tools 为空数组
+ *   &lt;li&gt;{@code --strict-mcp-config --mcp-config {&quot;mcpServers&quot;:{}}}：只用这里给的（空的）MCP 配置，忽略用户与项目里配置的 MCP 服务
+ *   &lt;li&gt;{@code --setting-sources &quot;&quot;}：不加载 user / project / local 三级 settings（其中的 hooks、权限规则、插件都不生效）
+ *   &lt;li&gt;{@code --disable-slash-commands}：不加载 skills / 斜杠命令
+ *   &lt;li&gt;{@code --permission-mode dontAsk}：万一还有工具，没有预先允许的一律拒绝，不会卡在等人确认
+ *   &lt;li&gt;{@code --no-session-persistence}：会话不写盘，不能被 resume
+ *   &lt;li&gt;工作目录是每次新建的空临时目录；CLAUDE.md 与自动记忆用环境变量关掉（见 application-claude-cli.yml）
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;系统提示词用 {@code --system-prompt-file} 传文件（替换掉 Claude Code 自带的编码助手提示词），用户消息走 stdin。
+ */
+<span class="fc" id="L27">public class ClaudeCliDialect implements CliDialect {</span>
+
+<span class="fc" id="L29">    static final JsonMapper JSON = JsonMapper.builder().build();</span>
+
+    @Override
+    public String name() {
+<span class="fc" id="L33">        return &quot;claude&quot;;</span>
+    }
+
+    @Override
+    public List&lt;String&gt; arguments(CliRequest request, CliWorkspace workspace, List&lt;String&gt; extraArgs)
+            throws IOException {
+<span class="fc" id="L39">        List&lt;String&gt; args = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L40">        args.add(&quot;-p&quot;);</span>
+<span class="fc" id="L41">        args.add(&quot;--output-format&quot;);</span>
+<span class="fc bfc" id="L42" title="All 2 branches covered.">        if (request.stream()) {</span>
+<span class="fc" id="L43">            args.addAll(List.of(&quot;stream-json&quot;, &quot;--verbose&quot;, &quot;--include-partial-messages&quot;));</span>
+        } else {
+<span class="fc" id="L45">            args.add(&quot;json&quot;);</span>
+        }
+<span class="fc bfc" id="L47" title="All 2 branches covered.">        if (request.model() != null) {</span>
+<span class="fc" id="L48">            args.addAll(List.of(&quot;--model&quot;, request.model()));</span>
+        }
+<span class="fc" id="L50">        args.addAll(List.of(&quot;--tools&quot;, &quot;&quot;));</span>
+<span class="fc" id="L51">        args.addAll(List.of(&quot;--strict-mcp-config&quot;, &quot;--mcp-config&quot;, &quot;{\&quot;mcpServers\&quot;:{}}&quot;));</span>
+<span class="fc" id="L52">        args.addAll(List.of(&quot;--setting-sources&quot;, &quot;&quot;));</span>
+<span class="fc" id="L53">        args.add(&quot;--disable-slash-commands&quot;);</span>
+<span class="fc" id="L54">        args.addAll(List.of(&quot;--permission-mode&quot;, &quot;dontAsk&quot;));</span>
+<span class="fc" id="L55">        args.add(&quot;--no-session-persistence&quot;);</span>
+<span class="fc bfc" id="L56" title="All 2 branches covered.">        if (request.hasSystemPrompt()) {</span>
+<span class="fc" id="L57">            args.addAll(List.of(</span>
+                    &quot;--system-prompt-file&quot;,
+<span class="fc" id="L59">                    workspace.write(&quot;system-prompt.txt&quot;, request.systemPrompt()).toString()));</span>
+        }
+<span class="fc bfc" id="L61" title="All 2 branches covered.">        if (request.hasOutputSchema()) {</span>
+            // 结构化输出：Claude Code 内部加一个 StructuredOutput 工具并校验，结果放在 result 事件的 structured_output 字段
+<span class="fc" id="L63">            args.addAll(List.of(&quot;--json-schema&quot;, compact(request.outputSchema())));</span>
+        }
+<span class="fc" id="L65">        args.addAll(extraArgs);</span>
+<span class="fc" id="L66">        return args;</span>
+    }
+
+    @Override
+    public String stdin(CliRequest request) {
+<span class="fc" id="L71">        return request.conversation();</span>
+    }
+
+    /** {@code --output-format json}：stdout 是一个 type 为 result 的 JSON 对象。容错：取最后一个能解析的 result 行。 */
+    @Override
+    public CliReply parseReply(String stdout) {
+<span class="fc" id="L77">        JsonNode result = null;</span>
+<span class="fc bfc" id="L78" title="All 2 branches covered.">        for (String line : stdout.split(&quot;\\R&quot;)) {</span>
+<span class="fc" id="L79">            JsonNode node = parse(line);</span>
+<span class="pc bpc" id="L80" title="1 of 4 branches missed.">            if (node != null &amp;&amp; &quot;result&quot;.equals(node.path(&quot;type&quot;).asString())) {</span>
+<span class="fc" id="L81">                result = node;</span>
+            }
+        }
+<span class="fc bfc" id="L84" title="All 2 branches covered.">        if (result == null) {</span>
+<span class="fc" id="L85">            throw new CliExecutionException(&quot;claude 的输出里没有 result 对象：&quot; + abbreviate(stdout));</span>
+        }
+<span class="fc" id="L87">        return toReply(result);</span>
+    }
+
+    static CliReply toReply(JsonNode result) {
+<span class="fc" id="L91">        String subtype = result.path(&quot;subtype&quot;).asString();</span>
+<span class="fc bfc" id="L92" title="All 4 branches covered.">        if (result.path(&quot;is_error&quot;).asBoolean(false) &amp;&amp; !&quot;error_max_structured_output_retries&quot;.equals(subtype)) {</span>
+<span class="fc" id="L93">            throw new CliExecutionException(&quot;claude 报告失败：&quot; + subtype + &quot; &quot;</span>
+<span class="fc" id="L94">                    + abbreviate(result.path(&quot;result&quot;).asString()));</span>
+        }
+        // 结构化输出重试用完时照常返回文本：解析失败由意图识别的重试与兜底处理
+<span class="fc" id="L97">        JsonNode structured = result.path(&quot;structured_output&quot;);</span>
+<span class="pc bpc" id="L98" title="1 of 4 branches missed.">        String text = structured.isMissingNode() || structured.isNull()</span>
+<span class="fc" id="L99">                ? result.path(&quot;result&quot;).asString(&quot;&quot;)</span>
+<span class="fc" id="L100">                : JSON.writeValueAsString(structured);</span>
+<span class="fc" id="L101">        JsonNode usage = result.path(&quot;usage&quot;);</span>
+<span class="fc bfc" id="L102" title="All 2 branches covered.">        Integer input = usage.has(&quot;input_tokens&quot;)</span>
+<span class="fc" id="L103">                ? usage.path(&quot;input_tokens&quot;).asInt()</span>
+<span class="fc" id="L104">                        + usage.path(&quot;cache_read_input_tokens&quot;).asInt(0)</span>
+<span class="fc" id="L105">                        + usage.path(&quot;cache_creation_input_tokens&quot;).asInt(0)</span>
+<span class="fc" id="L106">                : null;</span>
+        Integer output =
+<span class="fc bfc" id="L108" title="All 2 branches covered.">                usage.has(&quot;output_tokens&quot;) ? usage.path(&quot;output_tokens&quot;).asInt() : null;</span>
+        Double cost =
+<span class="fc bfc" id="L110" title="All 2 branches covered.">                result.has(&quot;total_cost_usd&quot;) ? result.path(&quot;total_cost_usd&quot;).asDouble() : null;</span>
+<span class="fc" id="L111">        String model =</span>
+<span class="fc" id="L112">                result.path(&quot;modelUsage&quot;).propertyNames().stream().findFirst().orElse(null);</span>
+<span class="fc" id="L113">        return new CliReply(text, model, input, output, cost);</span>
+    }
+
+    @Override
+    public StreamParser streamParser() {
+<span class="fc" id="L118">        return new ClaudeStreamParser();</span>
+    }
+
+    /**
+     * {@code --output-format stream-json --verbose --include-partial-messages}：每行一个事件。增量文本在
+     * {@code stream_event / content_block_delta / text_delta} 里（thinking_delta 不输出），最后一个 result 事件表示结束。
+     */
+<span class="fc" id="L125">    static final class ClaudeStreamParser implements StreamParser {</span>
+
+        private boolean emittedText;
+        private JsonNode result;
+
+        @Override
+        public List&lt;String&gt; onLine(String line) {
+<span class="fc" id="L132">            JsonNode node = parse(line);</span>
+<span class="fc bfc" id="L133" title="All 2 branches covered.">            if (node == null) {</span>
+<span class="fc" id="L134">                return List.of();</span>
+            }
+<span class="fc" id="L136">            String type = node.path(&quot;type&quot;).asString();</span>
+<span class="fc bfc" id="L137" title="All 2 branches covered.">            if (&quot;stream_event&quot;.equals(type)) {</span>
+<span class="fc" id="L138">                JsonNode event = node.path(&quot;event&quot;);</span>
+<span class="fc" id="L139">                JsonNode delta = event.path(&quot;delta&quot;);</span>
+<span class="pc bpc" id="L140" title="1 of 2 branches missed.">                if (&quot;content_block_delta&quot;.equals(event.path(&quot;type&quot;).asString())</span>
+<span class="fc bfc" id="L141" title="All 2 branches covered.">                        &amp;&amp; &quot;text_delta&quot;.equals(delta.path(&quot;type&quot;).asString())) {</span>
+<span class="fc" id="L142">                    String text = delta.path(&quot;text&quot;).asString(&quot;&quot;);</span>
+<span class="pc bpc" id="L143" title="1 of 2 branches missed.">                    if (!text.isEmpty()) {</span>
+<span class="fc" id="L144">                        emittedText = true;</span>
+<span class="fc" id="L145">                        return List.of(text);</span>
+                    }
+                }
+<span class="fc" id="L148">                return List.of();</span>
+            }
+<span class="fc bfc" id="L150" title="All 2 branches covered.">            if (&quot;result&quot;.equals(type)) {</span>
+<span class="fc" id="L151">                result = node;</span>
+<span class="fc" id="L152">                CliReply reply = toReply(node);</span>
+                // 没有逐段输出时（比如关掉了 partial messages），把完整结果一次发出
+<span class="pc bpc" id="L154" title="3 of 4 branches missed.">                if (!emittedText &amp;&amp; !reply.text().isEmpty()) {</span>
+<span class="nc" id="L155">                    emittedText = true;</span>
+<span class="nc" id="L156">                    return List.of(reply.text());</span>
+                }
+            }
+<span class="fc" id="L159">            return List.of();</span>
+        }
+
+        @Override
+        public List&lt;String&gt; onEnd() {
+<span class="fc bfc" id="L164" title="All 2 branches covered.">            if (result == null) {</span>
+<span class="fc" id="L165">                throw new CliExecutionException(&quot;claude 的流式输出没有 result 事件就结束了&quot;);</span>
+            }
+<span class="fc" id="L167">            return List.of();</span>
+        }
+    }
+
+    static JsonNode parse(String line) {
+<span class="fc" id="L172">        String trimmed = line.strip();</span>
+<span class="fc bfc" id="L173" title="All 2 branches covered.">        if (!trimmed.startsWith(&quot;{&quot;)) {</span>
+<span class="fc" id="L174">            return null;</span>
+        }
+        try {
+<span class="fc" id="L177">            return JSON.readTree(trimmed);</span>
+<span class="nc" id="L178">        } catch (JacksonException e) {</span>
+<span class="nc" id="L179">            return null;</span>
+        }
+    }
+
+    /** Schema 压成一行：命令行参数里不要有换行。 */
+    static String compact(String json) {
+        try {
+<span class="fc" id="L186">            return JSON.writeValueAsString(JSON.readTree(json));</span>
+<span class="nc" id="L187">        } catch (JacksonException e) {</span>
+<span class="nc" id="L188">            return json.replaceAll(&quot;\\s*\\R\\s*&quot;, &quot; &quot;);</span>
+        }
+    }
+
+    static String abbreviate(String text) {
+<span class="pc bpc" id="L193" title="1 of 2 branches missed.">        String oneLine = text == null ? &quot;&quot; : text.strip().replaceAll(&quot;\\s+&quot;, &quot; &quot;);</span>
+<span class="pc bpc" id="L194" title="1 of 2 branches missed.">        return oneLine.length() &gt; 300 ? oneLine.substring(0, 300) + &quot;…&quot; : oneLine;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

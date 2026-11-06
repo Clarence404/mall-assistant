@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CliProperties.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.cli</a> &gt; <span class="el_source">CliProperties.java</span></div><h1>CliProperties.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.cli;
+
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
+
+/**
+ * 命令行模型提供方的配置，前缀 {@code assistant.cli}，由 {@code claude-cli} / {@code codex-cli} profile 设置。
+ *
+ * @param flavor 用哪个命令行工具：{@code claude}（Claude Code）或 {@code codex}（Codex CLI）；不设置时不启用命令行提供方
+ * @param command 可执行文件名或完整路径；为空时用 flavor 的默认名（claude / codex），在 PATH 里查找，Windows 下自动识别 npm 的 .cmd 包装
+ * @param commandArgs 紧跟在可执行文件后面的参数（一般为空；测试用它启动假 CLI：{@code -cp &lt;dir&gt; FakeCli}）
+ * @param model 模型名：claude 的 {@code --model}（如 haiku、sonnet），codex 的 {@code -m}；为空时用工具自己的默认模型
+ * @param timeout 一次调用（含进程启动）最长多久，超时杀掉整棵进程树，按 MODEL_TIMEOUT 处理
+ * @param extraArgs 追加的命令行参数（安全相关的参数已经写死在代码里，这里只放额外的）
+ * @param workDir 每次调用新建的临时目录放在哪个目录下，默认系统临时目录
+ * @param env 额外的环境变量，如 claude 的 {@code CLAUDE_CODE_DISABLE_CLAUDE_MDS=1}
+ * @param nativeStructuredOutput 意图识别是否把 JSON Schema 交给工具原生处理（claude 的 {@code --json-schema}、codex 的
+ *     {@code --output-schema}）；false 时 Spring AI 退回到把格式说明拼进用户消息
+ */
+@ConfigurationProperties(&quot;assistant.cli&quot;)
+public record CliProperties(
+        CliFlavor flavor,
+        String command,
+        List&lt;String&gt; commandArgs,
+        String model,
+        @DefaultValue(&quot;120s&quot;) Duration timeout,
+        List&lt;String&gt; extraArgs,
+        Path workDir,
+        Map&lt;String, String&gt; env,
+        @DefaultValue(&quot;true&quot;) boolean nativeStructuredOutput) {
+
+<span class="fc" id="L36">    public CliProperties {</span>
+<span class="fc bfc" id="L37" title="All 2 branches covered.">        commandArgs = commandArgs == null ? List.of() : List.copyOf(commandArgs);</span>
+<span class="fc bfc" id="L38" title="All 2 branches covered.">        extraArgs = extraArgs == null ? List.of() : List.copyOf(extraArgs);</span>
+<span class="fc bfc" id="L39" title="All 2 branches covered.">        env = env == null ? Map.of() : Map.copyOf(env);</span>
+<span class="fc bfc" id="L40" title="All 2 branches covered.">        if (workDir == null) {</span>
+<span class="fc" id="L41">            workDir = Path.of(System.getProperty(&quot;java.io.tmpdir&quot;));</span>
+        }
+<span class="fc bfc" id="L43" title="All 4 branches covered.">        if (model != null &amp;&amp; model.isBlank()) {</span>
+<span class="fc" id="L44">            model = null;</span>
+        }
+<span class="fc" id="L46">    }</span>
+
+    /** 实际要执行的命令名：配置了就用配置的，否则用 flavor 的默认名。 */
+    public String commandOrDefault() {
+<span class="pc bpc" id="L50" title="2 of 4 branches missed.">        if (command != null &amp;&amp; !command.isBlank()) {</span>
+<span class="fc" id="L51">            return command.strip();</span>
+        }
+<span class="nc bnc" id="L53" title="All 2 branches missed.">        if (flavor == null) {</span>
+<span class="nc" id="L54">            throw new IllegalStateException(&quot;没有配置 assistant.cli.flavor（claude / codex）&quot;);</span>
+        }
+<span class="nc" id="L56">        return flavor.defaultCommand();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

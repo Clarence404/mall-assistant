@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CliProcessRunner.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.cli</a> &gt; <span class="el_source">CliProcessRunner.java</span></div><h1>CliProcessRunner.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.cli;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxSink;
+
+/**
+ * 启动命令行工具进程：stdin 写入 UTF-8 文本，按 UTF-8 读 stdout，stderr 只保留末尾几行进日志。
+ *
+ * &lt;p&gt;超时由看门狗处理：到点杀掉整棵进程树（npm 包装下 node 还可能再起子进程），调用方得到 {@link CliTimeoutException}。
+ */
+public class CliProcessRunner {
+
+<span class="fc" id="L32">    private static final Logger log = LoggerFactory.getLogger(CliProcessRunner.class);</span>
+
+    /** stderr 只保留最后这么多行。 */
+    static final int STDERR_TAIL_LINES = 20;
+
+<span class="fc" id="L37">    private static final ScheduledExecutorService WATCHDOG = Executors.newSingleThreadScheduledExecutor(</span>
+<span class="fc" id="L38">            Thread.ofPlatform().name(&quot;cli-watchdog&quot;).daemon().factory());</span>
+
+    private final Map&lt;String, String&gt; env;
+    private final Duration timeout;
+    private final boolean windows;
+
+    public CliProcessRunner(Map&lt;String, String&gt; env, Duration timeout) {
+<span class="fc" id="L45">        this(env, timeout, CliCommandResolver.isWindows());</span>
+<span class="fc" id="L46">    }</span>
+
+<span class="fc" id="L48">    CliProcessRunner(Map&lt;String, String&gt; env, Duration timeout, boolean windows) {</span>
+<span class="fc" id="L49">        this.env = Map.copyOf(env);</span>
+<span class="fc" id="L50">        this.timeout = timeout;</span>
+<span class="fc" id="L51">        this.windows = windows;</span>
+<span class="fc" id="L52">    }</span>
+
+    /** 阻塞执行，返回完整 stdout。 */
+    public String run(List&lt;String&gt; command, Path cwd, String stdin) {
+<span class="fc" id="L56">        Running running = start(command, cwd, stdin);</span>
+        try {
+<span class="fc" id="L58">            String stdout = new String(running.process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);</span>
+<span class="fc" id="L59">            int exitCode = running.process.waitFor();</span>
+<span class="fc" id="L60">            running.checkExit(exitCode);</span>
+<span class="fc" id="L61">            return stdout;</span>
+<span class="nc" id="L62">        } catch (IOException e) {</span>
+<span class="nc" id="L63">            running.checkTimedOut();</span>
+<span class="nc" id="L64">            throw new CliExecutionException(&quot;读取 &quot; + running.name + &quot; 的输出失败&quot;, e);</span>
+<span class="nc" id="L65">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L66">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L67">            throw new CliExecutionException(&quot;等待 &quot; + running.name + &quot; 时被中断&quot;, e);</span>
+        } finally {
+<span class="fc" id="L69">            running.stop();</span>
+        }
+    }
+
+    /**
+     * 流式执行：stdout 每一行发出一个元素；进程正常退出后完成，退出码非 0 或超时以错误结束。取消订阅（下游超时、客户端断开）时杀掉进程树。
+     */
+    public Flux&lt;String&gt; lines(List&lt;String&gt; command, Path cwd, String stdin) {
+<span class="fc" id="L77">        return Flux.create(sink -&gt; {</span>
+            Running running;
+            try {
+<span class="fc" id="L80">                running = start(command, cwd, stdin);</span>
+<span class="nc" id="L81">            } catch (RuntimeException e) {</span>
+<span class="nc" id="L82">                sink.error(e);</span>
+<span class="nc" id="L83">                return;</span>
+<span class="fc" id="L84">            }</span>
+<span class="fc" id="L85">            sink.onDispose(running::stop);</span>
+<span class="fc" id="L86">            Thread.ofVirtual().name(&quot;cli-stdout&quot;).start(() -&gt; pump(running, sink));</span>
+<span class="fc" id="L87">        });</span>
+    }
+
+    private static void pump(Running running, FluxSink&lt;String&gt; sink) {
+<span class="fc" id="L91">        try (BufferedReader reader =</span>
+<span class="fc" id="L92">                new BufferedReader(new InputStreamReader(running.process.getInputStream(), StandardCharsets.UTF_8))) {</span>
+            String line;
+<span class="pc bpc" id="L94" title="1 of 4 branches missed.">            while ((line = reader.readLine()) != null &amp;&amp; !sink.isCancelled()) {</span>
+<span class="fc" id="L95">                sink.next(line);</span>
+            }
+<span class="fc bfc" id="L97" title="All 2 branches covered.">            if (sink.isCancelled()) {</span>
+<span class="fc" id="L98">                return;</span>
+            }
+<span class="fc" id="L100">            running.checkExit(running.process.waitFor());</span>
+<span class="fc" id="L101">            sink.complete();</span>
+<span class="fc" id="L102">        } catch (IOException e) {</span>
+<span class="pc bpc" id="L103" title="1 of 2 branches missed.">            if (!sink.isCancelled()) {</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">                sink.error(running.timedOut.get() ? running.timeoutError() : new CliExecutionException(&quot;读取输出失败&quot;, e));</span>
+            }
+<span class="nc" id="L106">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L107">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L108">            sink.error(new CliExecutionException(&quot;等待进程时被中断&quot;, e));</span>
+<span class="fc" id="L109">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L110">            sink.error(e);</span>
+<span class="pc" id="L111">        }</span>
+<span class="fc" id="L112">    }</span>
+
+    private Running start(List&lt;String&gt; command, Path cwd, String stdin) {
+<span class="pc bpc" id="L115" title="1 of 2 branches missed.">        List&lt;String&gt; args = windows ? quoteForWindows(command) : command;</span>
+<span class="fc" id="L116">        ProcessBuilder builder = new ProcessBuilder(args).directory(cwd.toFile());</span>
+<span class="fc" id="L117">        builder.environment().putAll(env);</span>
+<span class="fc" id="L118">        String name = Path.of(command.getFirst()).getFileName().toString();</span>
+        Process process;
+        try {
+<span class="fc" id="L121">            process = builder.start();</span>
+<span class="nc" id="L122">        } catch (IOException e) {</span>
+<span class="nc" id="L123">            throw new CliExecutionException(&quot;启动 &quot; + name + &quot; 失败&quot;, e);</span>
+<span class="fc" id="L124">        }</span>
+<span class="fc" id="L125">        Running running = new Running(name, process, timeout);</span>
+<span class="fc" id="L126">        running.watchdog = WATCHDOG.schedule(running::timeout, timeout.toMillis(), TimeUnit.MILLISECONDS);</span>
+<span class="fc" id="L127">        running.stderrReader = Thread.ofVirtual().name(&quot;cli-stderr&quot;).start(running::drainStderr);</span>
+<span class="fc" id="L128">        Thread.ofVirtual().name(&quot;cli-stdin&quot;).start(() -&gt; writeStdin(process, stdin));</span>
+<span class="fc" id="L129">        return running;</span>
+    }
+
+    private static void writeStdin(Process process, String stdin) {
+<span class="fc" id="L133">        try (OutputStream out = process.getOutputStream()) {</span>
+<span class="fc" id="L134">            out.write(stdin.getBytes(StandardCharsets.UTF_8));</span>
+<span class="nc" id="L135">        } catch (IOException e) {</span>
+            // 进程提前退出（比如参数错误）时写不进去，结果以退出码为准
+<span class="nc" id="L137">            log.debug(&quot;写入 stdin 失败：{}&quot;, e.getMessage());</span>
+<span class="fc" id="L138">        }</span>
+<span class="fc" id="L139">    }</span>
+
+    /** 可执行文件路径由 ProcessBuilder 处理；其余参数按 Windows C 运行库的规则转义。 */
+    static List&lt;String&gt; quoteForWindows(List&lt;String&gt; command) {
+<span class="nc" id="L143">        List&lt;String&gt; quoted = new ArrayList&lt;&gt;(command.size());</span>
+<span class="nc" id="L144">        quoted.add(command.getFirst());</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">        for (String arg : command.subList(1, command.size())) {</span>
+<span class="nc" id="L146">            quoted.add(CliCommandResolver.quoteWindowsArg(arg));</span>
+<span class="nc" id="L147">        }</span>
+<span class="nc" id="L148">        return quoted;</span>
+    }
+
+    /** 杀掉进程及其全部子孙进程，最多等几秒让它们退出（Windows 上进程没退出前删不掉它的工作目录）。 */
+    static void killTree(Process process) {
+<span class="fc" id="L153">        List&lt;ProcessHandle&gt; descendants = process.descendants().toList();</span>
+<span class="fc" id="L154">        descendants.forEach(ProcessHandle::destroyForcibly);</span>
+<span class="fc" id="L155">        process.destroyForcibly();</span>
+        try {
+<span class="fc" id="L157">            process.waitFor(5, TimeUnit.SECONDS);</span>
+<span class="fc bfc" id="L158" title="All 2 branches covered.">            for (ProcessHandle handle : descendants) {</span>
+<span class="fc" id="L159">                handle.onExit().get(2, TimeUnit.SECONDS);</span>
+<span class="fc" id="L160">            }</span>
+<span class="nc" id="L161">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L162">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L163">        } catch (Exception e) {</span>
+<span class="nc" id="L164">            log.debug(&quot;等待进程退出失败：{}&quot;, e.toString());</span>
+<span class="pc" id="L165">        }</span>
+<span class="fc" id="L166">    }</span>
+
+    private static final class Running {
+
+        private final String name;
+        private final Process process;
+        private final Duration timeout;
+<span class="fc" id="L173">        private final AtomicBoolean timedOut = new AtomicBoolean();</span>
+<span class="fc" id="L174">        private final AtomicBoolean stopped = new AtomicBoolean();</span>
+<span class="fc" id="L175">        private final Deque&lt;String&gt; stderrTail = new ArrayDeque&lt;&gt;();</span>
+        private volatile ScheduledFuture&lt;?&gt; watchdog;
+        private volatile Thread stderrReader;
+
+<span class="fc" id="L179">        Running(String name, Process process, Duration timeout) {</span>
+<span class="fc" id="L180">            this.name = name;</span>
+<span class="fc" id="L181">            this.process = process;</span>
+<span class="fc" id="L182">            this.timeout = timeout;</span>
+<span class="fc" id="L183">        }</span>
+
+        void timeout() {
+<span class="pc bpc" id="L186" title="1 of 2 branches missed.">            if (process.isAlive()) {</span>
+<span class="fc" id="L187">                timedOut.set(true);</span>
+<span class="fc" id="L188">                log.warn(&quot;{} 超过 {} 没有结束，杀掉进程树（pid {}）&quot;, name, timeout, process.pid());</span>
+<span class="fc" id="L189">                killTree(process);</span>
+            }
+<span class="fc" id="L191">        }</span>
+
+        CliTimeoutException timeoutError() {
+<span class="fc" id="L194">            return new CliTimeoutException(name + &quot; 超过 &quot; + timeout + &quot; 没有结束&quot;);</span>
+        }
+
+        void checkTimedOut() {
+<span class="fc bfc" id="L198" title="All 2 branches covered.">            if (timedOut.get()) {</span>
+<span class="fc" id="L199">                throw timeoutError();</span>
+            }
+<span class="fc" id="L201">        }</span>
+
+        void checkExit(int exitCode) {
+<span class="fc" id="L204">            checkTimedOut();</span>
+<span class="fc bfc" id="L205" title="All 2 branches covered.">            if (exitCode != 0) {</span>
+<span class="fc" id="L206">                throw new CliExecutionException(name + &quot; 退出码 &quot; + exitCode + &quot;，stderr 末尾：&quot; + stderrTail());</span>
+            }
+<span class="fc" id="L208">        }</span>
+
+        void drainStderr() {
+<span class="fc" id="L211">            try (BufferedReader reader =</span>
+<span class="fc" id="L212">                    new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {</span>
+                String line;
+<span class="fc bfc" id="L214" title="All 2 branches covered.">                while ((line = reader.readLine()) != null) {</span>
+<span class="fc" id="L215">                    synchronized (stderrTail) {</span>
+<span class="fc" id="L216">                        stderrTail.addLast(line);</span>
+<span class="pc bpc" id="L217" title="1 of 2 branches missed.">                        if (stderrTail.size() &gt; STDERR_TAIL_LINES) {</span>
+<span class="nc" id="L218">                            stderrTail.removeFirst();</span>
+                        }
+<span class="fc" id="L220">                    }</span>
+                }
+<span class="nc" id="L222">            } catch (IOException e) {</span>
+<span class="nc" id="L223">                log.debug(&quot;读取 stderr 结束：{}&quot;, e.getMessage());</span>
+<span class="fc" id="L224">            }</span>
+<span class="fc" id="L225">        }</span>
+
+        String stderrTail() {
+            // 进程已经退出，stderr 可能还没读完：最多等 1 秒让读线程把管道读空
+<span class="fc" id="L229">            Thread reader = stderrReader;</span>
+<span class="pc bpc" id="L230" title="1 of 2 branches missed.">            if (reader != null) {</span>
+                try {
+<span class="fc" id="L232">                    reader.join(Duration.ofSeconds(1));</span>
+<span class="nc" id="L233">                } catch (InterruptedException e) {</span>
+<span class="nc" id="L234">                    Thread.currentThread().interrupt();</span>
+<span class="fc" id="L235">                }</span>
+            }
+<span class="fc" id="L237">            synchronized (stderrTail) {</span>
+<span class="pc bpc" id="L238" title="1 of 2 branches missed.">                return stderrTail.isEmpty() ? &quot;（空）&quot; : String.join(&quot;\n&quot;, stderrTail);</span>
+            }
+        }
+
+        void stop() {
+<span class="pc bpc" id="L243" title="1 of 2 branches missed.">            if (!stopped.compareAndSet(false, true)) {</span>
+<span class="nc" id="L244">                return;</span>
+            }
+<span class="fc" id="L246">            ScheduledFuture&lt;?&gt; current = watchdog;</span>
+<span class="pc bpc" id="L247" title="1 of 2 branches missed.">            if (current != null) {</span>
+<span class="fc" id="L248">                current.cancel(false);</span>
+            }
+<span class="pc bpc" id="L250" title="1 of 4 branches missed.">            if (process.isAlive() || process.descendants().findAny().isPresent()) {</span>
+<span class="fc" id="L251">                killTree(process);</span>
+            }
+<span class="fc" id="L253">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
