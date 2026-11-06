@@ -1,14 +1,13 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="智能客服（Claude CLI）" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
     <option name="ACTIVE_PROFILES" value="claude-cli,local" />
-    <!-- 用本机已登录的 Claude Code 当模型（见 README「用命令行工具当模型」）；claude 不在 PATH 里时填 CLAUDE_CLI_COMMAND 为完整路径 -->
     <envs>
       <env name="CLAUDE_CLI_MODEL" value="haiku" />
     </envs>
-    <option name="SPRING_BOOT_MAIN_CLASS" value="io.github.clarence404.assistant.AssistantApplication" />
     <module name="mall-assistant" />
+    <option name="SPRING_BOOT_MAIN_CLASS" value="io.github.clarence404.assistant.AssistantApplication" />
     <option name="VM_PARAMETERS" value="-Dfile.encoding=UTF-8" />
-    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="WORKING_DIRECTORY" value="file://$PROJECT_DIR$" />
     <method v="2">
       <option name="Make" enabled="true" />
     </method>

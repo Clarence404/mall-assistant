@@ -1,14 +1,13 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="智能客服（Codex CLI）" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
     <option name="ACTIVE_PROFILES" value="codex-cli,local" />
-    <!-- 用本机已登录的 Codex CLI 当模型（见 README「用命令行工具当模型」）；CODEX_CLI_MODEL 留空用 codex 的默认模型 -->
     <envs>
       <env name="CODEX_CLI_MODEL" value="" />
     </envs>
-    <option name="SPRING_BOOT_MAIN_CLASS" value="io.github.clarence404.assistant.AssistantApplication" />
     <module name="mall-assistant" />
+    <option name="SPRING_BOOT_MAIN_CLASS" value="io.github.clarence404.assistant.AssistantApplication" />
     <option name="VM_PARAMETERS" value="-Dfile.encoding=UTF-8" />
-    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="WORKING_DIRECTORY" value="file://$PROJECT_DIR$" />
     <method v="2">
       <option name="Make" enabled="true" />
     </method>
