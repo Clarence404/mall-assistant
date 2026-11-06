@@ -10,7 +10,22 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
-/** 和模型对话：先识别意图，超出范围的直接拒答；其余一问一答（阻塞）或逐段输出（流式）。调用失败统一转成 {@link ModelCallException}。 */
+/**
+ * 和模型对话：先识别意图，超出范围的直接拒答；其余一问一答（阻塞）或逐段输出（流式）。调用失败统一转成 {@link ModelCallException}。
+ *
+ * &lt;p&gt;所在层：业务层（第 1 章引入 {@link #reply} / {@link #stream}，第 2 章加上 {@link #chat} / {@link #answerStream}
+ * 的意图识别与拒答）。上游是 {@link ChatController}；下游是 {@link IntentService}（识别意图）、{@link AssistantPrompts}
+ * （系统提示词与拒答话术）和 {@link ChatClient}（真正调模型）。
+ *
+ * &lt;p&gt;一次「回答」发给模型的内容由两条消息组成：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;系统消息（system）：给模型定人设和规则（你是谁、只答什么、不许编造什么），用户看不到，每次请求都带上
+ *   &lt;li&gt;用户消息（user）：用户的原话
+ * &lt;/ul&gt;
+ *
+ * 模型会把系统消息当作优先级更高的指令。把规则放进系统消息而不是拼在用户消息前面，用户就更难用「忽略上面的规则」之类的话改掉人设。
+ */
 @Service
 public class ChatService {
 
@@ -20,56 +35,98 @@ public class ChatService {
     private final IntentService intentService;
 
     public ChatService(
-<span class="fc" id="L23">            ChatClient chatClient, ChatProperties properties, AssistantPrompts prompts, IntentService intentService) {</span>
-<span class="fc" id="L24">        this.chatClient = chatClient;</span>
-<span class="fc" id="L25">        this.properties = properties;</span>
-<span class="fc" id="L26">        this.prompts = prompts;</span>
-<span class="fc" id="L27">        this.intentService = intentService;</span>
-<span class="fc" id="L28">    }</span>
+<span class="fc" id="L38">            ChatClient chatClient, ChatProperties properties, AssistantPrompts prompts, IntentService intentService) {</span>
+<span class="fc" id="L39">        this.chatClient = chatClient;</span>
+<span class="fc" id="L40">        this.properties = properties;</span>
+<span class="fc" id="L41">        this.prompts = prompts;</span>
+<span class="fc" id="L42">        this.intentService = intentService;</span>
+<span class="fc" id="L43">    }</span>
 
-    /** 阻塞接口的完整流程：识别意图 → 超出范围就回拒答话术（不调回答模型）→ 否则让模型回答。 */
+    /**
+     * 阻塞接口的完整流程：识别意图 → 超出范围就回拒答话术（不调回答模型）→ 否则让模型回答。
+     *
+     * &lt;p&gt;拒答「短路」的好处：写代码、做作业这类请求，与其让模型生成一段再由提示词约束它拒绝，不如识别出来直接回固定话术——
+     * 少一次模型调用（省时间也省 token），而且拒答措辞稳定，不会被用户绕过去。
+     *
+     * @param message 用户原文
+     * @return 回答（或拒答话术）与意图
+     * @throws ModelCallException 意图识别或回答时模型调用失败（连不上、超时）
+     */
     public ChatReply chat(String message) {
-<span class="fc" id="L32">        IntentResult intent = intentService.classify(message);</span>
-<span class="fc bfc" id="L33" title="All 2 branches covered.">        if (shouldRefuse(intent)) {</span>
-<span class="fc" id="L34">            return new ChatReply(prompts.refusal(), intent);</span>
+<span class="fc" id="L56">        IntentResult intent = intentService.classify(message);</span>
+<span class="fc bfc" id="L57" title="All 2 branches covered.">        if (shouldRefuse(intent)) {</span>
+<span class="fc" id="L58">            return new ChatReply(prompts.refusal(), intent);</span>
         }
-<span class="fc" id="L36">        return new ChatReply(reply(message), intent);</span>
+<span class="fc" id="L60">        return new ChatReply(reply(message), intent);</span>
     }
 
-    /** 流式接口的回答部分：意图已经识别好，超出范围就只推一段拒答话术，否则流式调用模型。 */
+    /**
+     * 流式接口的回答部分：意图已经识别好，超出范围就只推一段拒答话术，否则流式调用模型。
+     *
+     * @param message 用户原文
+     * @param intent 已识别的意图（由 {@link ChatController#stream} 先调 IntentService 得到，并已作为 intent 事件推给前端）
+     * @return 回答的文本片段序列；拒答时只有一个元素。出错时序列以 {@link ModelCallException} 结束
+     */
     public Flux&lt;String&gt; answerStream(String message, IntentResult intent) {
-<span class="fc bfc" id="L41" title="All 2 branches covered.">        if (shouldRefuse(intent)) {</span>
-<span class="fc" id="L42">            return Flux.just(prompts.refusal());</span>
+<span class="fc bfc" id="L71" title="All 2 branches covered.">        if (shouldRefuse(intent)) {</span>
+<span class="fc" id="L72">            return Flux.just(prompts.refusal());</span>
         }
-<span class="fc" id="L44">        return stream(message);</span>
+<span class="fc" id="L74">        return stream(message);</span>
     }
 
-    /** 只有把握够大的 OUT_OF_SCOPE 才拒答。 */
+    /**
+     * 只有把握够大的 OUT_OF_SCOPE 才拒答。
+     *
+     * &lt;p&gt;模型的分类会错（小模型尤其如此），错拒一个正常问题比多答一个无关问题更伤体验，所以加了置信度门槛
+     * （{@code assistant.chat.refuse-min-confidence}）；低于门槛的照常回答，系统提示词里的规则还会再兜一层。
+     */
     boolean shouldRefuse(IntentResult intent) {
-<span class="fc bfc" id="L49" title="All 4 branches covered.">        return intent.intent() == Intent.OUT_OF_SCOPE &amp;&amp; intent.confidence() &gt;= properties.refuseMinConfidence();</span>
+<span class="fc bfc" id="L84" title="All 4 branches covered.">        return intent.intent() == Intent.OUT_OF_SCOPE &amp;&amp; intent.confidence() &gt;= properties.refuseMinConfidence();</span>
     }
 
-    /** 阻塞调用：等模型生成完整回答再返回。超时由 HTTP 客户端的 read-timeout 控制（见 application.yml）。 */
+    /**
+     * 阻塞调用：等模型生成完整回答再返回。超时由 HTTP 客户端的 read-timeout 控制（见 application.yml）。
+     *
+     * &lt;p&gt;{@code chatClient.prompt()...call()} 这一串就是在拼一个 Prompt（系统消息 + 用户消息）发给 ChatModel；
+     * {@code .system(prompts::applySystem)} 每次请求都重新渲染系统提示词模板（「今天」等变量才是最新的）；
+     * {@code .content()} 取回答的纯文本。
+     *
+     * @param message 用户原文，原样作为用户消息
+     * @return 模型的完整回答；模型返回空内容时为空字符串
+     * @throws ModelCallException 调用失败，已归类为超时或不可用
+     */
     public String reply(String message) {
         try {
-<span class="fc" id="L55">            String content = chatClient</span>
-<span class="fc" id="L56">                    .prompt()</span>
-<span class="fc" id="L57">                    .system(prompts::applySystem)</span>
-<span class="fc" id="L58">                    .user(message)</span>
-<span class="fc" id="L59">                    .call()</span>
-<span class="fc" id="L60">                    .content();</span>
-<span class="fc" id="L61">            return Objects.requireNonNullElse(content, &quot;&quot;);</span>
-<span class="fc" id="L62">        } catch (RuntimeException e) {</span>
-<span class="fc" id="L63">            throw ModelCallException.from(e);</span>
+<span class="fc" id="L100">            String content = chatClient</span>
+<span class="fc" id="L101">                    .prompt()</span>
+<span class="fc" id="L102">                    .system(prompts::applySystem)</span>
+<span class="fc" id="L103">                    .user(message)</span>
+<span class="fc" id="L104">                    .call()</span>
+<span class="fc" id="L105">                    .content();</span>
+<span class="fc" id="L106">            return Objects.requireNonNullElse(content, &quot;&quot;);</span>
+<span class="fc" id="L107">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L108">            throw ModelCallException.from(e);</span>
         }
     }
 
-    /** 流式调用：模型每生成一段就推一段。首段和相邻两段之间超过 streamTimeout 没动静，按超时结束。 */
+    /**
+     * 流式调用：模型每生成一段就推一段。首段和相邻两段之间超过 streamTimeout 没动静，按超时结束。
+     *
+     * &lt;p&gt;为什么流式不用 HTTP 的 read-timeout 管整体时长：一段长回答可能要生成几十秒，但只要模型还在源源不断地吐字，就说明它是活的。
+     * Reactor 的 {@code timeout(Duration)} 正好是这个语义——从订阅开始、以及每收到一个元素后重新计时，间隔超过时长才发出
+     * {@code TimeoutException}，相当于「空闲超时」而不是「总时长超时」。总时长另由 {@code spring.mvc.async.request-timeout} 兜底。
+     *
+     * &lt;p&gt;{@code onErrorMap} 只是把错误「换个类型」继续往下传（这里统一换成 {@link ModelCallException}），序列仍以错误结束；
+     * 真正把错误变成 error 事件、让序列正常结束的是 Controller 里的 {@code onErrorResume}。
+     *
+     * @param message 用户原文
+     * @return 回答的文本片段序列，订阅后才开始调用模型
+     */
     public Flux&lt;String&gt; stream(String message) {
-<span class="fc" id="L69">        return chatClient.prompt().system(prompts::applySystem).user(message).stream()</span>
-<span class="fc" id="L70">                .content()</span>
-<span class="fc" id="L71">                .timeout(properties.streamTimeout())</span>
-<span class="fc" id="L72">                .onErrorMap(ModelCallException::from);</span>
+<span class="fc" id="L126">        return chatClient.prompt().system(prompts::applySystem).user(message).stream()</span>
+<span class="fc" id="L127">                .content()</span>
+<span class="fc" id="L128">                .timeout(properties.streamTimeout())</span>
+<span class="fc" id="L129">                .onErrorMap(ModelCallException::from);</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

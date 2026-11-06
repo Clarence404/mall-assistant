@@ -7,11 +7,15 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 /**
  * 对话相关配置，前缀 {@code assistant.chat}。
  *
+ * &lt;p&gt;所在层：业务层的配置（第 1 章引入 streamTimeout，第 2 章加 refuseMinConfidence）。由 {@code AssistantApplication} 上的
+ * {@code @ConfigurationPropertiesScan} 绑定，注入 {@link ChatService}。{@code @DefaultValue} 是 yml 里没写时的默认值；
+ * 也可以用环境变量覆盖，如 {@code ASSISTANT_CHAT_STREAM_TIMEOUT=60s}（Spring Boot 的宽松绑定）。
+ *
  * @param streamTimeout 流式输出时，首个片段以及相邻两个片段之间最多等多久；超过就按超时结束
  * @param refuseMinConfidence 意图为 OUT_OF_SCOPE 且把握不低于这个值时才直接拒答；低于它照常交给模型回答，宁可多答一句，不错拒正常问题
  */
 @ConfigurationProperties(&quot;assistant.chat&quot;)
-<span class="fc" id="L14">public record ChatProperties(</span>
+<span class="fc" id="L18">public record ChatProperties(</span>
         @DefaultValue(&quot;30s&quot;) Duration streamTimeout,
         @DefaultValue(&quot;0.6&quot;) double refuseMinConfidence) {}
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

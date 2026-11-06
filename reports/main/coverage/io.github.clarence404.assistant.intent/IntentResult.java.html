@@ -8,12 +8,20 @@ import java.util.regex.Pattern;
  *
  * &lt;p&gt;字段上的描述会写进 JSON Schema，等于给模型的字段说明。
  *
+ * &lt;p&gt;所在层：业务层的领域模型（第 2 章引入）。{@link IntentService} 用它生成 Schema、接收模型输出；{@code ChatService}
+ * 据它决定是否拒答；{@code ChatReply} 和流式的 intent 事件把它原样返回给前端。
+ *
+ * &lt;p&gt;「结构化输出」是什么：默认情况下模型输出的是一段自由文本，程序很难可靠地从里面取字段。结构化输出就是要求模型按约定的 JSON
+ * 结构输出，Spring AI 的 {@code entity(IntentResult.class)} 会根据这个 record 自动生成 JSON Schema（字段名、类型、枚举取值、
+ * 描述），交给模型，再把模型返回的 JSON 用 Jackson 转回 record。注意 Schema 只约束「形状」，不保证「内容」对，所以还要
+ * {@link #sanitized()} 再校验一遍。
+ *
  * @param intent 意图
  * @param confidence 模型自评的把握，0～1；小模型的这个值不太可信，只作参考
  * @param orderNo 订单号，没有或格式不对时为 null
  * @param skuId 商品编号，没有或格式不对时为 null
  */
-<span class="fc" id="L16">public record IntentResult(</span>
+<span class="fc" id="L24">public record IntentResult(</span>
         @JsonPropertyDescription(&quot;用户消息的意图&quot;) Intent intent,
         @JsonPropertyDescription(&quot;对分类有多大把握，0 到 1 之间的小数&quot;) double confidence,
         @JsonPropertyDescription(&quot;消息里的订单号（一串数字），没有则为 null&quot;) String orderNo,
@@ -22,32 +30,49 @@ import java.util.regex.Pattern;
         String skuId) {
 
     /** mall-evolution 的订单号：19 位雪花 ID，或 19 位 + 4 位用户基因共 23 位。 */
-<span class="fc" id="L25">    static final Pattern ORDER_NO = Pattern.compile(&quot;\\d{19}|\\d{23}&quot;);</span>
+<span class="fc" id="L33">    static final Pattern ORDER_NO = Pattern.compile(&quot;\\d{19}|\\d{23}&quot;);</span>
 
     /** mall-evolution 的 SKU 是 long 型 ID。 */
-<span class="fc" id="L28">    static final Pattern SKU_ID = Pattern.compile(&quot;\\d{1,19}&quot;);</span>
+<span class="fc" id="L36">    static final Pattern SKU_ID = Pattern.compile(&quot;\\d{1,19}&quot;);</span>
 
-    /** 兜底结果：模型输出解析不了时返回它，不把解析异常抛给用户。 */
+    /**
+     * 兜底结果：模型输出解析不了时返回它，不把解析异常抛给用户。
+     *
+     * &lt;p&gt;意图识别只是回答前的「辅助判断」，识别不出来不该让整个对话失败：UNKNOWN 不会触发拒答，照常交给模型回答。
+     *
+     * @return intent 为 UNKNOWN、confidence 为 0、其余为 null 的结果
+     */
     public static IntentResult unknown() {
-<span class="fc" id="L32">        return new IntentResult(Intent.UNKNOWN, 0.0, null, null);</span>
+<span class="fc" id="L46">        return new IntentResult(Intent.UNKNOWN, 0.0, null, null);</span>
     }
 
     /**
      * 模型输出「结构对了」不等于「内容对了」：intent 为空记为 UNKNOWN，confidence 夹到 [0, 1]（NaN 记为 0），orderNo / skuId
      * 去掉首尾空白后格式不对就置为 null，不把模型编的订单号往下游传。
+     *
+     * &lt;p&gt;为什么要校验：模型会「幻觉」——一本正经地编出不存在的内容。用户没提订单号，模型也可能凑一串数字填进 orderNo；让它给个
+     * 0～1 的把握，它也可能给出 1.5。第 3 章会拿 orderNo 去调真实的订单接口，所以在这里就把格式不对的值挡掉。
+     * 这里只校验格式，不校验订单是否真实存在。
+     *
+     * @return 新的、校验过的结果；原对象不变
      */
     public IntentResult sanitized() {
-<span class="fc bfc" id="L40" title="All 2 branches covered.">        Intent safeIntent = intent == null ? Intent.UNKNOWN : intent;</span>
-<span class="fc bfc" id="L41" title="All 2 branches covered.">        double safeConfidence = Double.isNaN(confidence) ? 0.0 : Math.clamp(confidence, 0.0, 1.0);</span>
-<span class="fc" id="L42">        return new IntentResult(safeIntent, safeConfidence, valid(orderNo, ORDER_NO), valid(skuId, SKU_ID));</span>
+<span class="fc bfc" id="L60" title="All 2 branches covered.">        Intent safeIntent = intent == null ? Intent.UNKNOWN : intent;</span>
+<span class="fc bfc" id="L61" title="All 2 branches covered.">        double safeConfidence = Double.isNaN(confidence) ? 0.0 : Math.clamp(confidence, 0.0, 1.0);</span>
+<span class="fc" id="L62">        return new IntentResult(safeIntent, safeConfidence, valid(orderNo, ORDER_NO), valid(skuId, SKU_ID));</span>
     }
 
+    /**
+     * 格式校验：去掉首尾空白后整串匹配才保留。
+     *
+     * @return 去掉空白后的值；null 或格式不对时为 null
+     */
     private static String valid(String value, Pattern pattern) {
-<span class="fc bfc" id="L46" title="All 2 branches covered.">        if (value == null) {</span>
-<span class="fc" id="L47">            return null;</span>
+<span class="fc bfc" id="L71" title="All 2 branches covered.">        if (value == null) {</span>
+<span class="fc" id="L72">            return null;</span>
         }
-<span class="fc" id="L49">        String stripped = value.strip();</span>
-<span class="fc bfc" id="L50" title="All 2 branches covered.">        return pattern.matcher(stripped).matches() ? stripped : null;</span>
+<span class="fc" id="L74">        String stripped = value.strip();</span>
+<span class="fc bfc" id="L75" title="All 2 branches covered.">        return pattern.matcher(stripped).matches() ? stripped : null;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

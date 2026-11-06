@@ -6,19 +6,30 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * 单独的意图识别接口 {@code POST /api/intent}，方便调试提示词、对比模型（不必走完整的对话流程）。
+ *
+ * &lt;p&gt;所在层：接口层（第 2 章引入）。上游是 HTTP 客户端；下游是 {@link IntentService}。请求体与对话接口共用 {@link ChatRequest}。
+ */
 @RestController
 public class IntentController {
 
     private final IntentService intentService;
 
-<span class="fc" id="L14">    public IntentController(IntentService intentService) {</span>
-<span class="fc" id="L15">        this.intentService = intentService;</span>
-<span class="fc" id="L16">    }</span>
+<span class="fc" id="L19">    public IntentController(IntentService intentService) {</span>
+<span class="fc" id="L20">        this.intentService = intentService;</span>
+<span class="fc" id="L21">    }</span>
 
-    /** 只做意图识别：{&quot;message&quot;: &quot;...&quot;} → IntentResult；模型调不通时由 ApiExceptionHandler 转成 503。 */
+    /**
+     * 只做意图识别：{&quot;message&quot;: &quot;...&quot;} → IntentResult；模型调不通时由 ApiExceptionHandler 转成 503。
+     *
+     * @param request 请求体，校验规则同对话接口
+     * @return 校验过的意图识别结果；模型输出解析不了时是 UNKNOWN 兜底结果，而不是报错
+     * @throws io.github.clarence404.assistant.error.ModelCallException 模型连不上或超时
+     */
     @PostMapping(&quot;/api/intent&quot;)
     public IntentResult classify(@Valid @RequestBody ChatRequest request) {
-<span class="fc" id="L21">        return intentService.classify(request.message());</span>
+<span class="fc" id="L32">        return intentService.classify(request.message());</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

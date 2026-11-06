@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CliRequest.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.cli</a> &gt; <span class="el_source">CliRequest.java</span></div><h1>CliRequest.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.cli;
 
 /**
- * 一次命令行调用要发给模型的内容。
+ * 一次命令行调用要发给模型的内容：{@link CliChatModel#toRequest} 从 Spring AI 的 {@code Prompt} 里拆出来，交给 {@link CliDialect}
+ * 拼参数（系统提示词、Schema 写成文件）和 stdin（对话内容）。
+ *
+ * &lt;p&gt;架构层：命令行模型。不属于某一章的练习，是第 2 章之后加的可选扩展（{@code claude-cli} / {@code codex-cli} profile 才启用）。
+ *
+ * &lt;p&gt;系统提示词（system message）是给模型定的「人设与规则」，用户看不到；用户消息（user message）是本轮要回答的内容。
+ * 命令行工具也区分这两者：系统提示词走专门的参数，用户消息走 stdin，所以这里分成两个字段。
  *
  * @param systemPrompt 系统提示词，可能为空串
  * @param conversation 对话内容（一般就是用户消息）
@@ -9,14 +15,16 @@
  * @param model 模型名，null 表示用工具的默认模型
  * @param stream 是否流式输出
  */
-<span class="fc" id="L12">public record CliRequest(String systemPrompt, String conversation, String outputSchema, String model, boolean stream) {</span>
+<span class="fc" id="L18">public record CliRequest(String systemPrompt, String conversation, String outputSchema, String model, boolean stream) {</span>
 
+    /** 是否有非空白的系统提示词：没有就不传系统提示词参数，工具用它自带的。 */
     public boolean hasSystemPrompt() {
-<span class="pc bpc" id="L15" title="1 of 4 branches missed.">        return systemPrompt != null &amp;&amp; !systemPrompt.isBlank();</span>
+<span class="pc bpc" id="L22" title="1 of 4 branches missed.">        return systemPrompt != null &amp;&amp; !systemPrompt.isBlank();</span>
     }
 
+    /** 是否要求结构化输出（意图识别走原生结构化输出时为 true，普通对话为 false）。 */
     public boolean hasOutputSchema() {
-<span class="pc bpc" id="L19" title="1 of 4 branches missed.">        return outputSchema != null &amp;&amp; !outputSchema.isBlank();</span>
+<span class="pc bpc" id="L27" title="1 of 4 branches missed.">        return outputSchema != null &amp;&amp; !outputSchema.isBlank();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

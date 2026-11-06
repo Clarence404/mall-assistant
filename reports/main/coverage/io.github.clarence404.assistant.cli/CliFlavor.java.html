@@ -2,27 +2,36 @@
 
 import java.util.function.Supplier;
 
-/** 支持的命令行工具。 */
-<span class="fc" id="L6">public enum CliFlavor {</span>
+/**
+ * 支持的命令行工具，即配置项 {@code assistant.cli.flavor} 的取值（yml 里写小写 {@code claude} / {@code codex}，Spring 绑定枚举时不区分大小写）。
+ *
+ * &lt;p&gt;架构层：命令行模型。不属于某一章的练习，是第 2 章之后加的可选扩展（{@code claude-cli} / {@code codex-cli} profile 才启用）。
+ *
+ * &lt;p&gt;每个取值绑定两样东西：默认命令名（{@link CliProperties#commandOrDefault()} 没配 command 时用它）和对应的 {@link CliDialect}
+ * （{@link CliChatModel} 构造时取一次）。以后要支持第三种工具，加一个取值 + 一个 {@link CliDialect} 实现即可，其余代码不用动。
+ */
+<span class="fc" id="L13">public enum CliFlavor {</span>
     /** Anthropic Claude Code：{@code claude -p}。 */
-<span class="fc" id="L8">    CLAUDE(&quot;claude&quot;, ClaudeCliDialect::new),</span>
+<span class="fc" id="L15">    CLAUDE(&quot;claude&quot;, ClaudeCliDialect::new),</span>
     /** OpenAI Codex CLI：{@code codex exec}。 */
-<span class="fc" id="L10">    CODEX(&quot;codex&quot;, CodexCliDialect::new);</span>
+<span class="fc" id="L17">    CODEX(&quot;codex&quot;, CodexCliDialect::new);</span>
 
     private final String defaultCommand;
     private final Supplier&lt;CliDialect&gt; dialect;
 
-<span class="fc" id="L15">    CliFlavor(String defaultCommand, Supplier&lt;CliDialect&gt; dialect) {</span>
-<span class="fc" id="L16">        this.defaultCommand = defaultCommand;</span>
-<span class="fc" id="L17">        this.dialect = dialect;</span>
-<span class="fc" id="L18">    }</span>
+<span class="fc" id="L22">    CliFlavor(String defaultCommand, Supplier&lt;CliDialect&gt; dialect) {</span>
+<span class="fc" id="L23">        this.defaultCommand = defaultCommand;</span>
+<span class="fc" id="L24">        this.dialect = dialect;</span>
+<span class="fc" id="L25">    }</span>
 
+    /** 没有配置 {@code assistant.cli.command} 时在 PATH 里查找的命令名。 */
     public String defaultCommand() {
-<span class="nc" id="L21">        return defaultCommand;</span>
+<span class="nc" id="L29">        return defaultCommand;</span>
     }
 
+    /** 新建一个这种工具的方言实例（方言本身无状态，流式解析的状态在每次新建的 {@link CliDialect.StreamParser} 里）。 */
     public CliDialect dialect() {
-<span class="fc" id="L25">        return dialect.get();</span>
+<span class="fc" id="L34">        return dialect.get();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

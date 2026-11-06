@@ -10,6 +10,12 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 /**
  * 命令行模型提供方的配置，前缀 {@code assistant.cli}，由 {@code claude-cli} / {@code codex-cli} profile 设置。
  *
+ * &lt;p&gt;架构层：命令行模型。不属于某一章的练习，是第 2 章之后加的可选扩展（{@code claude-cli} / {@code codex-cli} profile 才启用）。
+ * 下游：{@link CliChatModel}（模型名、超时、是否原生结构化输出等）、{@link CliProcessRunner}（环境变量、超时）。
+ *
+ * &lt;p&gt;record + {@code @ConfigurationProperties}：Spring Boot 按构造参数绑定，{@code @DefaultValue} 给出缺省值；yml 里的
+ * {@code ${CLAUDE_CLI_MODEL:haiku}} 这类占位符让你不改文件、只设环境变量就能覆盖。
+ *
  * @param flavor 用哪个命令行工具：{@code claude}（Claude Code）或 {@code codex}（Codex CLI）；不设置时不启用命令行提供方
  * @param command 可执行文件名或完整路径；为空时用 flavor 的默认名（claude / codex），在 PATH 里查找，Windows 下自动识别 npm 的 .cmd 包装
  * @param commandArgs 紧跟在可执行文件后面的参数（一般为空；测试用它启动假 CLI：{@code -cp &lt;dir&gt; FakeCli}）
@@ -33,27 +39,33 @@ public record CliProperties(
         Map&lt;String, String&gt; env,
         @DefaultValue(&quot;true&quot;) boolean nativeStructuredOutput) {
 
-<span class="fc" id="L36">    public CliProperties {</span>
-<span class="fc bfc" id="L37" title="All 2 branches covered.">        commandArgs = commandArgs == null ? List.of() : List.copyOf(commandArgs);</span>
-<span class="fc bfc" id="L38" title="All 2 branches covered.">        extraArgs = extraArgs == null ? List.of() : List.copyOf(extraArgs);</span>
-<span class="fc bfc" id="L39" title="All 2 branches covered.">        env = env == null ? Map.of() : Map.copyOf(env);</span>
-<span class="fc bfc" id="L40" title="All 2 branches covered.">        if (workDir == null) {</span>
-<span class="fc" id="L41">            workDir = Path.of(System.getProperty(&quot;java.io.tmpdir&quot;));</span>
+    /** 紧凑构造器：把没配置的集合换成空集合、空白模型名当作未设置，后面的代码就不用到处判空。 */
+<span class="fc" id="L43">    public CliProperties {</span>
+<span class="fc bfc" id="L44" title="All 2 branches covered.">        commandArgs = commandArgs == null ? List.of() : List.copyOf(commandArgs);</span>
+<span class="fc bfc" id="L45" title="All 2 branches covered.">        extraArgs = extraArgs == null ? List.of() : List.copyOf(extraArgs);</span>
+<span class="fc bfc" id="L46" title="All 2 branches covered.">        env = env == null ? Map.of() : Map.copyOf(env);</span>
+<span class="fc bfc" id="L47" title="All 2 branches covered.">        if (workDir == null) {</span>
+<span class="fc" id="L48">            workDir = Path.of(System.getProperty(&quot;java.io.tmpdir&quot;));</span>
         }
-<span class="fc bfc" id="L43" title="All 4 branches covered.">        if (model != null &amp;&amp; model.isBlank()) {</span>
-<span class="fc" id="L44">            model = null;</span>
+<span class="fc bfc" id="L50" title="All 4 branches covered.">        if (model != null &amp;&amp; model.isBlank()) {</span>
+<span class="fc" id="L51">            model = null;</span>
         }
-<span class="fc" id="L46">    }</span>
+<span class="fc" id="L53">    }</span>
 
-    /** 实际要执行的命令名：配置了就用配置的，否则用 flavor 的默认名。 */
+    /**
+     * 实际要执行的命令名：配置了就用配置的，否则用 flavor 的默认名。只是名字或路径，还要经 {@link CliCommandResolver} 解析成可执行程序。
+     *
+     * @return 命令名或路径
+     * @throws IllegalStateException command 和 flavor 都没配置
+     */
     public String commandOrDefault() {
-<span class="pc bpc" id="L50" title="2 of 4 branches missed.">        if (command != null &amp;&amp; !command.isBlank()) {</span>
-<span class="fc" id="L51">            return command.strip();</span>
+<span class="pc bpc" id="L62" title="2 of 4 branches missed.">        if (command != null &amp;&amp; !command.isBlank()) {</span>
+<span class="fc" id="L63">            return command.strip();</span>
         }
-<span class="nc bnc" id="L53" title="All 2 branches missed.">        if (flavor == null) {</span>
-<span class="nc" id="L54">            throw new IllegalStateException(&quot;没有配置 assistant.cli.flavor（claude / codex）&quot;);</span>
+<span class="nc bnc" id="L65" title="All 2 branches missed.">        if (flavor == null) {</span>
+<span class="nc" id="L66">            throw new IllegalStateException(&quot;没有配置 assistant.cli.flavor（claude / codex）&quot;);</span>
         }
-<span class="nc" id="L56">        return flavor.defaultCommand();</span>
+<span class="nc" id="L68">        return flavor.defaultCommand();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
