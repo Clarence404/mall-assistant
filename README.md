@@ -118,13 +118,21 @@ cp application-local.example.yml application-local.yml   # 已被 .gitignore 忽
 | codex | `exec --json --sandbox read-only` | 非交互、JSONL 事件；模型生成的命令只能在只读沙箱里跑 |
 | | `--disable shell_tool` / `unified_exec` / `multi_agent` / `apps` / `plugins` 等、`-c web_search="disabled"` | 关掉执行命令、子代理、插件、联网搜索等功能 |
 | | `--ignore-user-config --ignore-rules --ephemeral --skip-git-repo-check` | 不加载 `~/.codex/config.toml`（含 MCP）与规则文件；会话不写盘；不要求在 git 仓库里 |
+| | `-c model_instructions_file="<文件>"` | 客服提示词替换掉 Codex 自带的编码代理指令（`exec` 没有系统提示词参数）；用户消息走 stdin（末尾的 `-`） |
 | 两者 | 工作目录 = 每次新建的空临时目录，用完删除 | 读不到项目文件，也读不到项目里的 CLAUDE.md / AGENTS.md |
 
 codex 没有「关掉全部工具」的单个开关，只读沙箱仍能读本机文件：以 `codex-cli` 启动的服务不要给别人用。
 
 **结构化输出**：意图识别的 JSON Schema 原生交给工具，claude 用 `--json-schema`（结果在 `structured_output` 字段），codex 用 `--output-schema <文件>`；第 2 章的重试与兜底照常生效。设置 `assistant.cli.native-structured-output=false` 可改回把格式说明拼进提示词。
 
-**慢**：每次调用都要启动一个进程（claude 约 3 秒起），一次对话调两次（意图识别 + 回答）。本机实测 `claude-cli` + haiku：意图识别约 3.5 秒，阻塞对话约 7 秒，流式首个事件约 3.8 秒、全部约 7.5 秒。codex 的 `--json` 只在整段消息生成完才输出，流式接口是整段推送。费用记在你自己的账号上。
+**慢、费 token**：每次调用都要启动一个进程，一次对话调两次（意图识别 + 回答），费用记在你自己的账号上。本机实测：
+
+| profile | 意图识别 | 阻塞对话 | 流式（首个事件 / 全部） | 每次调用的输入 token |
+|---------|---------|---------|------------------------|---------------------|
+| `claude-cli`（haiku） | 约 3.5 秒 | 约 7 秒 | 约 3.8 / 7.5 秒，逐段推送 | 约 750～850 |
+| `codex-cli`（默认模型） | 约 6～7 秒 | 约 14 秒 | 约 6.5 / 14 秒，整段推送 | 约 8000（换掉自带指令前约 1.7 万，剩下是 Codex 固定附带的环境与工具说明） |
+
+codex 的 `--json` 只在一条消息完整生成后才输出它，没有逐字增量，流式接口的回答是一个 token 事件整段推送。实测中 codex 偶尔会卡住不返回，到 `assistant.cli.timeout`（120 秒）后被杀掉，接口返回 `MODEL_TIMEOUT`，重试即可；日志里会带上它 stderr 的最后几行。
 
 ## 构建与测试
 

@@ -134,6 +134,15 @@ public final class FakeCli {
         Files.writeString(Path.of(record + ".args"), encoded, StandardCharsets.UTF_8);
         Files.writeString(Path.of(record + ".stdin"), stdin, StandardCharsets.UTF_8);
         copy(valueOf(args, "--system-prompt-file"), record + ".system");
+        for (String arg : args) {
+            if (arg.startsWith("model_instructions_file=\"")) {
+                // codex 的 -c model_instructions_file="<路径>"（TOML 字符串）
+                String path = arg.substring("model_instructions_file=\"".length(), arg.length() - 1)
+                        .replace("\\\"", "\"")
+                        .replace("\\\\", "\\");
+                copy(path, record + ".system");
+            }
+        }
         copy(valueOf(args, "--output-schema"), record + ".schema");
         Path cwd = Path.of("").toAbsolutePath();
         try (Stream<Path> entries = Files.list(cwd)) {

@@ -1,6 +1,7 @@
 package io.github.clarence404.assistant.cli;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import tools.jackson.databind.JsonNode;
@@ -21,8 +22,9 @@ import tools.jackson.databind.JsonNode;
  *
  * <p>即便如此，只读沙箱仍允许读取本机文件，所以 codex-cli profile 只适合本机学习，不要把服务暴露给别人用。
  *
- * <p>{@code codex exec} 没有系统提示词参数：系统提示词拼在 stdin 内容的前面。结构化输出用 {@code --output-schema <文件>}，最终的 agent
- * 消息就是 JSON 文本。{@code --json} 只在一条 agent 消息完整生成后才输出它，所以流式接口是整段推送。
+ * <p>系统提示词写成文件，用 {@code -c model_instructions_file="<文件>"} 替换掉 Codex 自带的编码代理指令（输入 token 从约 1.7 万降到约 7 千，
+ * 剩下的是 Codex 固定附带的环境与工具说明），用户消息走 stdin。结构化输出用 {@code --output-schema <文件>}，最终的 agent 消息就是 JSON
+ * 文本。{@code --json} 只在一条 agent 消息完整生成后才输出它，所以流式接口是整段推送。
  */
 public class CodexCliDialect implements CliDialect {
 
@@ -60,6 +62,10 @@ public class CodexCliDialect implements CliDialect {
             args.addAll(List.of("--disable", feature));
         }
         args.addAll(List.of("-c", "web_search=\"disabled\""));
+        if (request.hasSystemPrompt()) {
+            Path instructions = workspace.write("system-prompt.txt", request.systemPrompt());
+            args.addAll(List.of("-c", "model_instructions_file=" + tomlString(instructions.toString())));
+        }
         if (request.model() != null) {
             args.addAll(List.of("-m", request.model()));
         }
@@ -77,15 +83,12 @@ public class CodexCliDialect implements CliDialect {
 
     @Override
     public String stdin(CliRequest request) {
-        if (!request.hasSystemPrompt()) {
-            return request.conversation();
-        }
-        return """
-                <system>
-                %s
-                </system>
+        return request.conversation();
+    }
 
-                %s""".formatted(request.systemPrompt().strip(), request.conversation());
+    /** {@code -c} 的值按 TOML 解析：路径写成带转义的基本字符串（Windows 路径里的反斜杠要转义）。 */
+    static String tomlString(String value) {
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
     @Override

@@ -1,6 +1,6 @@
 # 可选 profile：用本机已安装并登录的 OpenAI Codex CLI（codex 命令）当对话模型，只用于本机学习，不要用于生产
 # 用法：--spring.profiles.active=codex-cli（IDEA 运行配置「智能客服（Codex CLI）」）；前提是 codex login status 显示已登录
-# 每次调用起一个 codex exec 进程，一次对话要调两次（意图识别 + 回答）；--json 只在整段消息生成完才输出，流式接口是整段推送
+# 每次调用起一个 codex exec 进程（每次约 8000 输入 token、6～7 秒），一次对话要调两次（意图识别 + 回答）；--json 只在整段消息生成完才输出，流式接口是整段推送
 # 安全：只读沙箱、关掉执行命令等功能、不加载 ~/.codex/config.toml、会话不落盘，工作目录是空临时目录（参数写死在 CodexCliDialect）
 # 只读沙箱仍能读本机文件：不要把以这个 profile 启动的服务暴露给别人
 spring:

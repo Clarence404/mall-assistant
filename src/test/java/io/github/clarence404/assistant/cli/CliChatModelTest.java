@@ -106,7 +106,7 @@ class CliChatModelTest {
 
         String reply = model.call(prompt()).getResult().getOutput().getText();
 
-        String expectedStdin = "<system>\n" + SYSTEM + "\n</system>\n\n" + MESSAGE;
+        String expectedStdin = MESSAGE;
         assertThat(reply).isEqualTo("收到：" + expectedStdin);
         assertThat(FakeCliSupport.recorded(record(), ".stdin")).isEqualTo(expectedStdin);
         assertThat(FakeCliSupport.recordedArgs(record()))
@@ -114,6 +114,9 @@ class CliChatModelTest {
                 .containsSubsequence("--sandbox", "read-only")
                 .containsSubsequence("-c", "web_search=\"disabled\"")
                 .endsWith("-");
+        assertThat(FakeCliSupport.recorded(record(), ".system"))
+                .as("系统提示词经 model_instructions_file 传给 codex")
+                .isEqualTo(SYSTEM);
 
         StepVerifier.create(model.stream(prompt())
                         .map(r -> r.getResult().getOutput().getText()))

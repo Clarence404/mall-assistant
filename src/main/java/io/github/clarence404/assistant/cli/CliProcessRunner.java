@@ -185,7 +185,11 @@ public class CliProcessRunner {
         void timeout() {
             if (process.isAlive()) {
                 timedOut.set(true);
-                log.warn("{} 超过 {} 没有结束，杀掉进程树（pid {}）", name, timeout, process.pid());
+                String stderr;
+                synchronized (stderrTail) {
+                    stderr = stderrTail.isEmpty() ? "（空）" : String.join("\n", stderrTail);
+                }
+                log.warn("{} 超过 {} 没有结束，杀掉进程树（pid {}），stderr 末尾：{}", name, timeout, process.pid(), stderr);
                 killTree(process);
             }
         }

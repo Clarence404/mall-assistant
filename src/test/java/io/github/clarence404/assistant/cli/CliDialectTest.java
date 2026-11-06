@@ -95,12 +95,25 @@ class CliDialectTest {
             assertThat(args).endsWith("-");
             Path schemaFile = Path.of(args.get(args.indexOf("--output-schema") + 1));
             assertThat(Files.readString(schemaFile, StandardCharsets.UTF_8)).isEqualTo(SCHEMA);
-
+            assertThat(args)
+                    .contains("model_instructions_file="
+                            + CodexCliDialect.tomlString(workspace
+                                    .root()
+                                    .resolve("system-prompt.txt")
+                                    .toAbsolutePath()
+                                    .toString()));
+            assertThat(Files.readString(workspace.root().resolve("system-prompt.txt"), StandardCharsets.UTF_8))
+                    .as("系统提示词写成文件，替换掉 Codex 自带的指令")
+                    .isEqualTo("你是客服");
             assertThat(dialect.stdin(new CliRequest("你是客服", "订单到哪了", null, null, false)))
-                    .as("codex 没有系统提示词参数，拼在 stdin 前面")
-                    .startsWith("<system>\n你是客服\n</system>")
-                    .endsWith("订单到哪了");
+                    .as("用户消息走 stdin，系统提示词不拼进去")
+                    .isEqualTo("订单到哪了");
         }
+    }
+
+    @Test
+    void tomlStringEscapesWindowsPaths() {
+        assertThat(CodexCliDialect.tomlString("C:\\Temp\\a\"b.txt")).isEqualTo("\"C:\\\\Temp\\\\a\\\"b.txt\"");
     }
 
     @Test
