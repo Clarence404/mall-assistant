@@ -13,4 +13,4 @@ assistant:
     flavor: codex
     command: ${CODEX_CLI_COMMAND:codex}
     model: ${CODEX_CLI_MODEL:}              # -m：留空用 codex 的默认模型
-    timeout: 120s
+    timeout: 60s
