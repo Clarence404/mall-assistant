@@ -63,106 +63,118 @@ public class CliChatModel implements ChatModel {
 <span class="fc" id="L63">                : ChatOptions.builder().model(properties.model()).build();</span>
     }
 
+    /** 工具输出里带模型名就用它；没带时用配置的模型；都没有说明用的是工具自己的默认模型（codex 的 JSON 事件不含模型名）。 */
+    private String modelForLog(CliReply reply, CliRequest request) {
+<span class="fc bfc" id="L68" title="All 2 branches covered.">        if (reply.model() != null) {</span>
+<span class="fc" id="L69">            return reply.model();</span>
+        }
+<span class="pc bpc" id="L71" title="2 of 4 branches missed.">        if (request.model() != null &amp;&amp; !request.model().isBlank()) {</span>
+<span class="fc" id="L72">            return request.model();</span>
+        }
+<span class="nc" id="L74">        return dialect.name() + &quot; 默认模型&quot;;</span>
+    }
+
     @Override
     public ChatResponse call(Prompt prompt) {
-<span class="fc" id="L68">        CliRequest request = toRequest(prompt, false);</span>
-<span class="fc" id="L69">        long start = System.nanoTime();</span>
-<span class="fc" id="L70">        try (CliWorkspace workspace = CliWorkspace.create(properties.workDir())) {</span>
-<span class="fc" id="L71">            List&lt;String&gt; command = command(request, workspace);</span>
-<span class="fc" id="L72">            String stdout = runner.run(command, workspace.cwd(), dialect.stdin(request));</span>
-<span class="fc" id="L73">            CliReply reply = dialect.parseReply(stdout);</span>
-<span class="fc" id="L74">            log.info(</span>
+<span class="fc" id="L79">        CliRequest request = toRequest(prompt, false);</span>
+<span class="fc" id="L80">        long start = System.nanoTime();</span>
+<span class="fc" id="L81">        try (CliWorkspace workspace = CliWorkspace.create(properties.workDir())) {</span>
+<span class="fc" id="L82">            List&lt;String&gt; command = command(request, workspace);</span>
+<span class="fc" id="L83">            String stdout = runner.run(command, workspace.cwd(), dialect.stdin(request));</span>
+<span class="fc" id="L84">            CliReply reply = dialect.parseReply(stdout);</span>
+<span class="fc" id="L85">            log.info(</span>
                     &quot;{} 调用完成：{} ms，模型 {}，tokens 输入 {} / 输出 {}，费用 {}&quot;,
-<span class="fc" id="L76">                    dialect.name(),</span>
-<span class="fc" id="L77">                    (System.nanoTime() - start) / 1_000_000,</span>
-<span class="fc bfc" id="L78" title="All 2 branches covered.">                    reply.model() != null ? reply.model() : request.model(),</span>
-<span class="fc" id="L79">                    reply.inputTokens(),</span>
-<span class="fc" id="L80">                    reply.outputTokens(),</span>
-<span class="fc bfc" id="L81" title="All 2 branches covered.">                    reply.costUsd() != null ? &quot;$&quot; + reply.costUsd() : &quot;未知&quot;);</span>
-<span class="fc" id="L82">            return response(reply);</span>
-<span class="fc" id="L83">        } catch (CliExecutionException e) {</span>
-<span class="fc" id="L84">            log.warn(&quot;{} 调用失败：{}&quot;, dialect.name(), e.getMessage());</span>
-<span class="fc" id="L85">            throw e;</span>
+<span class="fc" id="L87">                    dialect.name(),</span>
+<span class="fc" id="L88">                    (System.nanoTime() - start) / 1_000_000,</span>
+<span class="fc" id="L89">                    modelForLog(reply, request),</span>
+<span class="fc" id="L90">                    reply.inputTokens(),</span>
+<span class="fc" id="L91">                    reply.outputTokens(),</span>
+                    // codex 用 ChatGPT 账号登录时按订阅计费，不报告单次费用；claude 会在结果里给出 total_cost_usd
+<span class="fc bfc" id="L93" title="All 2 branches covered.">                    reply.costUsd() != null ? &quot;$&quot; + reply.costUsd() : &quot;工具未报告（订阅计费）&quot;);</span>
+<span class="fc" id="L94">            return response(reply);</span>
+<span class="fc" id="L95">        } catch (CliExecutionException e) {</span>
+<span class="fc" id="L96">            log.warn(&quot;{} 调用失败：{}&quot;, dialect.name(), e.getMessage());</span>
+<span class="fc" id="L97">            throw e;</span>
         }
     }
 
     @Override
     public Flux&lt;ChatResponse&gt; stream(Prompt prompt) {
-<span class="fc" id="L91">        CliRequest request = toRequest(prompt, true);</span>
-<span class="fc" id="L92">        return Flux.using(</span>
-<span class="fc" id="L93">                        () -&gt; CliWorkspace.create(properties.workDir()),</span>
-<span class="fc" id="L94">                        workspace -&gt; Flux.defer(() -&gt; {</span>
-<span class="fc" id="L95">                            CliDialect.StreamParser parser = dialect.streamParser();</span>
-<span class="fc" id="L96">                            List&lt;String&gt; command = command(request, workspace);</span>
-<span class="fc" id="L97">                            return runner.lines(command, workspace.cwd(), dialect.stdin(request))</span>
-<span class="fc" id="L98">                                    .concatMapIterable(parser::onLine)</span>
-<span class="fc" id="L99">                                    .concatWith(Flux.defer(() -&gt; Flux.fromIterable(parser.onEnd())));</span>
+<span class="fc" id="L103">        CliRequest request = toRequest(prompt, true);</span>
+<span class="fc" id="L104">        return Flux.using(</span>
+<span class="fc" id="L105">                        () -&gt; CliWorkspace.create(properties.workDir()),</span>
+<span class="fc" id="L106">                        workspace -&gt; Flux.defer(() -&gt; {</span>
+<span class="fc" id="L107">                            CliDialect.StreamParser parser = dialect.streamParser();</span>
+<span class="fc" id="L108">                            List&lt;String&gt; command = command(request, workspace);</span>
+<span class="fc" id="L109">                            return runner.lines(command, workspace.cwd(), dialect.stdin(request))</span>
+<span class="fc" id="L110">                                    .concatMapIterable(parser::onLine)</span>
+<span class="fc" id="L111">                                    .concatWith(Flux.defer(() -&gt; Flux.fromIterable(parser.onEnd())));</span>
                         }),
                         CliWorkspace::close)
-<span class="pc bpc" id="L102" title="1 of 2 branches missed.">                .filter(text -&gt; !text.isEmpty())</span>
-<span class="fc" id="L103">                .map(text -&gt; new ChatResponse(List.of(new Generation(new AssistantMessage(text)))))</span>
-<span class="fc" id="L104">                .doOnError(CliExecutionException.class, e -&gt; log.warn(&quot;{} 流式调用失败：{}&quot;, dialect.name(), e.getMessage()));</span>
+<span class="pc bpc" id="L114" title="1 of 2 branches missed.">                .filter(text -&gt; !text.isEmpty())</span>
+<span class="fc" id="L115">                .map(text -&gt; new ChatResponse(List.of(new Generation(new AssistantMessage(text)))))</span>
+<span class="fc" id="L116">                .doOnError(CliExecutionException.class, e -&gt; log.warn(&quot;{} 流式调用失败：{}&quot;, dialect.name(), e.getMessage()));</span>
     }
 
     private List&lt;String&gt; command(CliRequest request, CliWorkspace workspace) {
-<span class="fc" id="L108">        List&lt;String&gt; command = new ArrayList&lt;&gt;(resolvedCommand());</span>
-<span class="fc" id="L109">        command.addAll(properties.commandArgs());</span>
+<span class="fc" id="L120">        List&lt;String&gt; command = new ArrayList&lt;&gt;(resolvedCommand());</span>
+<span class="fc" id="L121">        command.addAll(properties.commandArgs());</span>
         try {
-<span class="fc" id="L111">            command.addAll(dialect.arguments(request, workspace, properties.extraArgs()));</span>
-<span class="nc" id="L112">        } catch (IOException e) {</span>
-<span class="nc" id="L113">            throw new CliExecutionException(&quot;准备 &quot; + dialect.name() + &quot; 的输入文件失败&quot;, e);</span>
-<span class="fc" id="L114">        }</span>
-<span class="fc" id="L115">        return command;</span>
+<span class="fc" id="L123">            command.addAll(dialect.arguments(request, workspace, properties.extraArgs()));</span>
+<span class="nc" id="L124">        } catch (IOException e) {</span>
+<span class="nc" id="L125">            throw new CliExecutionException(&quot;准备 &quot; + dialect.name() + &quot; 的输入文件失败&quot;, e);</span>
+<span class="fc" id="L126">        }</span>
+<span class="fc" id="L127">        return command;</span>
     }
 
     /** 第一次调用时才解析命令：没装 CLI 的机器（如 CI）照样能启动应用、跑测试。 */
     private List&lt;String&gt; resolvedCommand() {
-<span class="fc" id="L120">        List&lt;String&gt; current = resolvedCommand;</span>
-<span class="fc bfc" id="L121" title="All 2 branches covered.">        if (current == null) {</span>
-<span class="fc" id="L122">            current = CliCommandResolver.resolve(properties.commandOrDefault());</span>
-<span class="fc" id="L123">            log.info(&quot;{} 命令：{}&quot;, dialect.name(), current);</span>
-<span class="fc" id="L124">            resolvedCommand = current;</span>
+<span class="fc" id="L132">        List&lt;String&gt; current = resolvedCommand;</span>
+<span class="fc bfc" id="L133" title="All 2 branches covered.">        if (current == null) {</span>
+<span class="fc" id="L134">            current = CliCommandResolver.resolve(properties.commandOrDefault());</span>
+<span class="fc" id="L135">            log.info(&quot;{} 命令：{}&quot;, dialect.name(), current);</span>
+<span class="fc" id="L136">            resolvedCommand = current;</span>
         }
-<span class="fc" id="L126">        return current;</span>
+<span class="fc" id="L138">        return current;</span>
     }
 
     CliRequest toRequest(Prompt prompt, boolean stream) {
-<span class="fc" id="L130">        String system = prompt.getInstructions().stream()</span>
-<span class="fc bfc" id="L131" title="All 2 branches covered.">                .filter(m -&gt; m.getMessageType() == MessageType.SYSTEM)</span>
-<span class="fc" id="L132">                .map(Message::getText)</span>
-<span class="fc" id="L133">                .filter(Objects::nonNull)</span>
-<span class="fc" id="L134">                .collect(Collectors.joining(&quot;\n\n&quot;));</span>
-<span class="fc" id="L135">        List&lt;Message&gt; conversation = prompt.getInstructions().stream()</span>
-<span class="fc bfc" id="L136" title="All 2 branches covered.">                .filter(m -&gt; m.getMessageType() != MessageType.SYSTEM)</span>
-<span class="fc" id="L137">                .toList();</span>
+<span class="fc" id="L142">        String system = prompt.getInstructions().stream()</span>
+<span class="fc bfc" id="L143" title="All 2 branches covered.">                .filter(m -&gt; m.getMessageType() == MessageType.SYSTEM)</span>
+<span class="fc" id="L144">                .map(Message::getText)</span>
+<span class="fc" id="L145">                .filter(Objects::nonNull)</span>
+<span class="fc" id="L146">                .collect(Collectors.joining(&quot;\n\n&quot;));</span>
+<span class="fc" id="L147">        List&lt;Message&gt; conversation = prompt.getInstructions().stream()</span>
+<span class="fc bfc" id="L148" title="All 2 branches covered.">                .filter(m -&gt; m.getMessageType() != MessageType.SYSTEM)</span>
+<span class="fc" id="L149">                .toList();</span>
         String schema =
-<span class="fc bfc" id="L139" title="All 2 branches covered.">                prompt.getOptions() instanceof StructuredOutputChatOptions options ? options.getOutputSchema() : null;</span>
-<span class="pc bpc" id="L140" title="1 of 4 branches missed.">        String model = prompt.getOptions() != null &amp;&amp; prompt.getOptions().getModel() != null</span>
-<span class="fc" id="L141">                ? prompt.getOptions().getModel()</span>
-<span class="fc" id="L142">                : properties.model();</span>
-<span class="fc" id="L143">        return new CliRequest(system, render(conversation), schema, model, stream);</span>
+<span class="fc bfc" id="L151" title="All 2 branches covered.">                prompt.getOptions() instanceof StructuredOutputChatOptions options ? options.getOutputSchema() : null;</span>
+<span class="pc bpc" id="L152" title="1 of 4 branches missed.">        String model = prompt.getOptions() != null &amp;&amp; prompt.getOptions().getModel() != null</span>
+<span class="fc" id="L153">                ? prompt.getOptions().getModel()</span>
+<span class="fc" id="L154">                : properties.model();</span>
+<span class="fc" id="L155">        return new CliRequest(system, render(conversation), schema, model, stream);</span>
     }
 
     /** 只有一条用户消息时原样发送；多轮对话（第 6 章起）按「用户：/ 助手：」拼成一段文本。 */
     static String render(List&lt;Message&gt; conversation) {
-<span class="pc bpc" id="L148" title="2 of 4 branches missed.">        if (conversation.size() == 1 &amp;&amp; conversation.getFirst().getMessageType() == MessageType.USER) {</span>
-<span class="fc" id="L149">            return Objects.requireNonNullElse(conversation.getFirst().getText(), &quot;&quot;);</span>
+<span class="pc bpc" id="L160" title="2 of 4 branches missed.">        if (conversation.size() == 1 &amp;&amp; conversation.getFirst().getMessageType() == MessageType.USER) {</span>
+<span class="fc" id="L161">            return Objects.requireNonNullElse(conversation.getFirst().getText(), &quot;&quot;);</span>
         }
-<span class="nc" id="L151">        return conversation.stream()</span>
-<span class="nc bnc" id="L152" title="All 2 branches missed.">                .map(m -&gt; (m.getMessageType() == MessageType.ASSISTANT ? &quot;助手：&quot; : &quot;用户：&quot;)</span>
-<span class="nc" id="L153">                        + Objects.requireNonNullElse(m.getText(), &quot;&quot;))</span>
-<span class="nc" id="L154">                .collect(Collectors.joining(&quot;\n\n&quot;));</span>
+<span class="nc" id="L163">        return conversation.stream()</span>
+<span class="nc bnc" id="L164" title="All 2 branches missed.">                .map(m -&gt; (m.getMessageType() == MessageType.ASSISTANT ? &quot;助手：&quot; : &quot;用户：&quot;)</span>
+<span class="nc" id="L165">                        + Objects.requireNonNullElse(m.getText(), &quot;&quot;))</span>
+<span class="nc" id="L166">                .collect(Collectors.joining(&quot;\n\n&quot;));</span>
     }
 
     private static ChatResponse response(CliReply reply) {
-<span class="fc" id="L158">        ChatResponseMetadata.Builder metadata = ChatResponseMetadata.builder();</span>
-<span class="fc bfc" id="L159" title="All 2 branches covered.">        if (reply.model() != null) {</span>
-<span class="fc" id="L160">            metadata.model(reply.model());</span>
+<span class="fc" id="L170">        ChatResponseMetadata.Builder metadata = ChatResponseMetadata.builder();</span>
+<span class="fc bfc" id="L171" title="All 2 branches covered.">        if (reply.model() != null) {</span>
+<span class="fc" id="L172">            metadata.model(reply.model());</span>
         }
-<span class="pc bpc" id="L162" title="3 of 4 branches missed.">        if (reply.inputTokens() != null || reply.outputTokens() != null) {</span>
-<span class="fc" id="L163">            metadata.usage(new DefaultUsage(reply.inputTokens(), reply.outputTokens()));</span>
+<span class="pc bpc" id="L174" title="3 of 4 branches missed.">        if (reply.inputTokens() != null || reply.outputTokens() != null) {</span>
+<span class="fc" id="L175">            metadata.usage(new DefaultUsage(reply.inputTokens(), reply.outputTokens()));</span>
         }
-<span class="fc" id="L165">        return new ChatResponse(List.of(new Generation(new AssistantMessage(reply.text()))), metadata.build());</span>
+<span class="fc" id="L177">        return new ChatResponse(List.of(new Generation(new AssistantMessage(reply.text()))), metadata.build());</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

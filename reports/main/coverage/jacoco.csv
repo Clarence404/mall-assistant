@@ -19,7 +19,7 @@ mall-assistant,io.github.clarence404.assistant.cli,CliProcessRunner.Running,20,2
 mall-assistant,io.github.clarence404.assistant.cli,CodexCliDialect.CodexEvents,22,112,8,12,4,26,7,7,0,3
 mall-assistant,io.github.clarence404.assistant.cli,CliReply,9,18,0,0,1,1,1,1,1,1
 mall-assistant,io.github.clarence404.assistant.cli,CliProcessRunner,113,262,7,9,27,60,6,15,1,12
-mall-assistant,io.github.clarence404.assistant.cli,CliChatModel,37,426,9,23,6,77,8,29,1,20
+mall-assistant,io.github.clarence404.assistant.cli,CliChatModel,42,438,11,25,7,81,10,30,1,21
 mall-assistant,io.github.clarence404.assistant.cli,CodexCliDialect,7,207,3,9,1,38,3,11,0,8
 mall-assistant,io.github.clarence404.assistant.cli,CliRequest,0,40,2,6,0,3,2,5,0,3
 mall-assistant,io.github.clarence404.assistant.cli,CliExecutionException,5,4,0,0,2,2,1,1,1,1
