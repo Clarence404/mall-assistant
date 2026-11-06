@@ -8,7 +8,16 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 
-/** 第 2 章：系统提示词模板——按版本选文件、渲染变量，以及拒答话术。 */
+/**
+ * 第 2 章：系统提示词模板——按版本选文件、渲染变量，以及拒答话术。
+ *
+ * <p>验证：{@code assistant.prompt.version} 决定用 {@code prompts/system-<版本>.st}，版本不存在时启动即失败（而不是运行时才发现）；
+ * 模板变量（商城名、客服名、服务范围、今天的日期）都有值且渲染后不留 {@code {占位符}}；v2 比 v1 多了更严格的规则与示例；
+ * 拒答话术带上商城名与服务范围。
+ *
+ * <p>手法：用 {@link TestPrompts} 固定时钟，「今天」永远是 2026-11-05，断言才稳定；渲染结果通过 ChatClient 发给 {@link FakeChatModel}，
+ * 从它记下的 Prompt 里取系统消息，验证的是真正发给模型的文本。
+ */
 class AssistantPromptsTest {
 
     @Test

@@ -3,6 +3,8 @@
 # 每次调用起一个 codex exec 进程（每次约 8000 输入 token、6～7 秒），一次对话要调两次（意图识别 + 回答）；--json 只在整段消息生成完才输出，流式接口是整段推送
 # 安全：只读沙箱、关掉执行命令等功能、不加载 ~/.codex/config.toml、会话不落盘，工作目录是空临时目录（参数写死在 CodexCliDialect）
 # 只读沙箱仍能读本机文件：不要把以这个 profile 启动的服务暴露给别人
+# 这个 profile 本身不改业务代码：CliModelConfig 看到 assistant.cli.flavor 就注册 CliChatModel，ChatClient 照常使用它
+# 下面的单值配置都能用环境变量覆盖（Spring 宽松绑定：点和横线换成下划线、全大写），如 ASSISTANT_CLI_TIMEOUT=180s
 spring:
   ai:
     model:
@@ -10,7 +12,8 @@ spring:
 
 assistant:
   cli:
-    flavor: codex
-    command: ${CODEX_CLI_COMMAND:codex}
+    flavor: codex            # 用哪种命令行工具（决定参数与输出格式，见 CliFlavor / CodexCliDialect）
+    command: ${CODEX_CLI_COMMAND:codex}     # 在 PATH 里找；找不到时填完整路径，Windows 下可以直接填 codex.cmd 的路径
     model: ${CODEX_CLI_MODEL:}              # -m：留空用 codex 的默认模型
-    timeout: 60s
+    timeout: 60s             # 正常调用 6～14 秒；codex 偶尔卡住不返回，60 秒后杀掉进程树、返回 MODEL_TIMEOUT，重试即可
+    # native-structured-output: true   # 默认 true：意图识别的 JSON Schema 写成文件用 --output-schema 交给 codex；false 时改为把格式说明拼进提示词

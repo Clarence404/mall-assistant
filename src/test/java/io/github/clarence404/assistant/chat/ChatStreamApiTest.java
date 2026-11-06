@@ -15,7 +15,16 @@ import org.springframework.web.client.ResourceAccessException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-/** 第 1 章：流式接口 POST /api/chat/stream（SSE）。第 2 章起最前面多一个 intent 事件，这里只看它后面的事件序列。 */
+/**
+ * 第 1 章：流式接口 POST /api/chat/stream（SSE）。第 2 章起最前面多一个 intent 事件，这里只看它后面的事件序列。
+ *
+ * <p>验证：响应类型是 {@code text/event-stream}；模型的每个片段变成一个 token 事件，最后一个 done 事件；模型中途出错时，
+ * 以一个 error 事件（带错误码）收尾、不再发 done。为什么错误要做成事件：流式响应一开始就已经回了 200 和响应头，之后无法再改成 503，
+ * 只能在流里告诉前端「出错了」。
+ *
+ * <p>手法：MockMvc 处理返回 Flux 的接口时走 Servlet 异步请求，先断言 {@code asyncStarted()}，再用 {@code getAsyncResult} 等 Flux 结束，
+ * 最后把整个响应体按 SSE 格式自己解析成事件列表来断言。解析工具 {@link #parse} / {@link #afterIntent} 也给其他测试类复用。
+ */
 class ChatStreamApiTest extends FakeModelWebTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
@@ -61,6 +70,7 @@ class ChatStreamApiTest extends FakeModelWebTest {
         return events.subList(1, events.size());
     }
 
+    /** 发一个流式请求并等它结束，返回完整的响应。 */
     private MvcResult stream(String message) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/chat/stream")
                         .contentType(MediaType.APPLICATION_JSON)

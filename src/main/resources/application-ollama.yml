@@ -2,10 +2,10 @@
 spring:
   ai:
     model:
-      chat: ollama
+      chat: ollama           # 选用 Ollama 的 ChatModel 自动配置（OllamaChatModel），ChatClient 背后就是它
     ollama:
-      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}   # Ollama 服务地址；连远程机器设环境变量或写进 application-local.yml
       chat:
-        model: ${OLLAMA_CHAT_MODEL:qwen2.5:0.5b}
-        temperature: 0.3
-        keep-alive: 10m
+        model: ${OLLAMA_CHAT_MODEL:qwen2.5:0.5b}   # 0.5b 约 400 MB、CPU 也能跑，够走通流程；想要更准换 qwen2.5:1.5b（先 ollama pull）
+        temperature: 0.3     # 回答的默认温度：低一点，客服措辞稳定、少发挥；意图识别在代码里单独设为 0（见 IntentService）
+        keep-alive: 10m      # 请求结束后模型在内存里保留多久；保留期内再次提问不用重新加载模型，首个字出来得更快

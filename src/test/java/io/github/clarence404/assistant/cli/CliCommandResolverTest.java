@@ -8,7 +8,14 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/** 解析命令：PATH 查找、Windows 下拆开 npm 的 .cmd 包装，以及 Windows 参数转义。和当前操作系统无关，Windows 规则用参数指定。 */
+/**
+ * 解析命令：PATH 查找、Windows 下拆开 npm 的 .cmd 包装，以及 Windows 参数转义。和当前操作系统无关，Windows 规则用参数指定。第 2 章引入。
+ *
+ * <p>背景：npm 在 Windows 上安装命令行工具时生成的是 {@code claude.cmd} 这样的批处理包装，执行它必须经过 cmd.exe，而 cmd.exe
+ * 会再解释一遍参数里的引号、换行和 {@code %}，系统提示词和 JSON Schema 很容易被拆坏。所以解析器从 .cmd 里读出真正的脚本路径，
+ * 改为直接执行 {@code node.exe <脚本>}。手法：在 {@code @TempDir} 里造出假的 PATH 目录和文件，把「是否 Windows」、PATH、PATHEXT 当参数传入，
+ * Linux 的 CI 上也能测 Windows 的规则。
+ */
 class CliCommandResolverTest {
 
     /** npm 为 bin 生成的 claude.cmd（节选）。 */
@@ -55,6 +62,7 @@ class CliCommandResolverTest {
                 .containsExactly(dir.resolve("claude.exe").toString());
     }
 
+    /** 不是 npm 生成的 .cmd 读不出脚本路径，又不能经 cmd.exe 执行：直接报错并提示原因。 */
     @Test
     void nonNpmBatchFileIsRejected() throws Exception {
         Files.writeString(dir.resolve("claude.cmd"), "@echo off\r\nsomething.exe %*\r\n");
@@ -78,6 +86,7 @@ class CliCommandResolverTest {
         assertThat(CliCommandResolver.resolve(exe.toString(), true, "", null)).containsExactly(exe.toString());
     }
 
+    /** Windows 的进程只收到一整串命令行，由程序的 C 运行时按规则拆回参数数组：含空格、引号、空串的参数要按这套规则加引号和转义。 */
     @Test
     void windowsArgumentsAreQuotedForTheCRuntime() {
         assertThat(CliCommandResolver.quoteWindowsArg("plain")).isEqualTo("plain");

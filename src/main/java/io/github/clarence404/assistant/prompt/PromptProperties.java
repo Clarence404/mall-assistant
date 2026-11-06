@@ -7,6 +7,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 /**
  * 提示词相关配置，前缀 {@code assistant.prompt}。
  *
+ * <p>所在层：业务层的配置（第 2 章引入）。由 {@code @ConfigurationPropertiesScan} 绑定，注入 {@link AssistantPrompts}。
+ * 默认值与 application.yml 里写的一致；可以用环境变量覆盖，如 {@code ASSISTANT_PROMPT_VERSION=v1}（Spring Boot 的宽松绑定）。
+ *
  * @param version 系统提示词版本，对应 {@code prompts/system-<version>.st}，如 v1、v2；改提示词时新增一个版本，旧版本留着对比与回滚
  * @param shopName 商城名，渲染进系统提示词与拒答话术
  * @param assistantName 客服的名字

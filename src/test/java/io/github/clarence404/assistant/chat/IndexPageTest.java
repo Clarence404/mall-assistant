@@ -8,7 +8,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
-/** 应用能启动、首页能打开（start 标签下也应通过）。 */
+/**
+ * 冒烟测试：应用能启动、首页能打开（start 标签下也应通过）。第 1 章引入。
+ *
+ * <p>只检查静态页面被正确提供、关键文字与接口地址在页面里，不执行页面里的 JavaScript。
+ */
 class IndexPageTest extends FakeModelWebTest {
 
     @Test

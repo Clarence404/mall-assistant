@@ -2,6 +2,8 @@
 # 用法：--spring.profiles.active=claude-cli（IDEA 运行配置「智能客服（Claude CLI）」）；前提是命令行里 claude -p "你好" 能正常回答
 # 每次调用起一个 claude 进程（几秒启动开销），一次对话要调两次（意图识别 + 回答），费用记在你自己的 Claude 账号上
 # 安全：只当纯文本模型用，禁用全部工具、MCP、本地 settings 与会话持久化，工作目录是空临时目录（参数写死在 ClaudeCliDialect）
+# 这个 profile 本身不改业务代码：CliModelConfig 看到 assistant.cli.flavor 就注册 CliChatModel，ChatClient 照常使用它
+# 下面的单值配置都能用环境变量覆盖（Spring 宽松绑定：点和横线换成下划线、全大写），如 ASSISTANT_CLI_TIMEOUT=180s
 spring:
   ai:
     model:
@@ -9,11 +11,13 @@ spring:
 
 assistant:
   cli:
-    flavor: claude
+    flavor: claude           # 用哪种命令行工具（决定参数与输出格式，见 CliFlavor / ClaudeCliDialect）
     command: ${CLAUDE_CLI_COMMAND:claude}   # 在 PATH 里找；找不到时填完整路径，Windows 下可以直接填 claude.cmd 的路径
     model: ${CLAUDE_CLI_MODEL:haiku}        # --model：haiku 最快最省，可改 sonnet 等别名或完整模型名
-    timeout: 120s
-    env:
+    timeout: 120s            # 一次调用（含进程启动）最长多久，超时杀掉整棵进程树、返回 MODEL_TIMEOUT；实测一次 3～8 秒，留足余量
+    # native-structured-output: true   # 默认 true：意图识别的 JSON Schema 用 --json-schema 交给 claude；false 时改为把格式说明拼进提示词
+    # extra-args: []                    # 追加的命令行参数；安全参数写死在代码里，这里只能加、不能去掉
+    env:                     # 追加给 claude 进程的环境变量
       CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1"   # 不读任何 CLAUDE.md（含 ~/.claude/CLAUDE.md），免得个人指令混进客服的提示词
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1"  # 不读写自动记忆
       CLAUDE_CODE_DISABLE_THINKING: "1"     # 客服回答不需要扩展思考，关掉更快

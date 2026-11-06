@@ -14,7 +14,16 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.web.client.ResourceAccessException;
 
-/** 第 1 章：阻塞接口 POST /api/chat 与错误映射（ProblemDetail）。 */
+/**
+ * 第 1 章：阻塞接口 POST /api/chat 与错误映射（ProblemDetail）。
+ *
+ * <p>验证：正常时返回 JSON 的 reply，且系统提示词（客服人设）和用户消息都发给了模型；空消息在参数校验阶段就返回 400，不浪费一次模型调用；
+ * 模型连不上 / 超时时返回 503 + {@code application/problem+json}（RFC 9457 规定的错误响应格式，Spring 里叫 ProblemDetail），
+ * 带业务错误码 {@code code}，且不把异常类名、堆栈、内部地址泄露给前端。
+ *
+ * <p>手法见 {@link FakeModelWebTest}：完整上下文 + MockMvc + 假模型。失败场景用 {@code model.willFail(...)} 抛出和真实 HTTP
+ * 客户端一样的异常：{@link ResourceAccessException} 包着连接被拒或读超时。
+ */
 class ChatApiTest extends FakeModelWebTest {
 
     @Test
@@ -44,6 +53,7 @@ class ChatApiTest extends FakeModelWebTest {
 
     @Test
     void modelUnavailableBecomes503ProblemDetail() throws Exception {
+        // 仿照 Ollama 没启动时 HTTP 客户端抛出的异常：消息里带内部地址，正好用来验证不会泄露给前端
         model.willFail(new ResourceAccessException(
                 "I/O error on POST request for \"http://localhost:11434/api/chat\"",
                 new ConnectException("Connection refused")));

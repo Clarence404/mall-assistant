@@ -14,7 +14,16 @@ import org.springframework.ai.model.tool.StructuredOutputChatOptions;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.web.client.ResourceAccessException;
 
-/** 第 2 章：意图识别的结构化输出、重试与兜底，假模型，不联网。 */
+/**
+ * 第 2 章：意图识别的结构化输出、重试与兜底，假模型，不联网。
+ *
+ * <p>验证：合法 JSON 转成 {@link IntentResult}；JSON Schema 作为模型参数交给厂商（原生结构化输出）、温度为 0；不支持原生的模型改为把格式说明拼进用户消息；
+ * 输出包了 Markdown 代码块也能解析；解析不了重试一次（带更严格的提醒），仍不行兜底为 UNKNOWN；结果经过校验；模型连不上时不重试、直接抛出。
+ * 为什么解析失败重试、连不上不重试：输出格式不对是模型「这次没写好」，再问一次常常就对了；连不上是服务的问题，马上再试多半还是连不上，
+ * 交给上层返回 503（HTTP 层的重试由 Spring AI 的 retry 配置负责）。
+ *
+ * <p>手法：{@link FakeChatModel} 的 {@code willClassify(...)} 按调用顺序返回预设的原始文本，模拟模型第一次、第二次分别输出什么。
+ */
 class IntentServiceTest {
 
     private final FakeChatModel model = new FakeChatModel();
@@ -99,6 +108,7 @@ class IntentServiceTest {
         assertThat(model.prompts()).hasSize(2);
     }
 
+    /** 标签写法不规范、置信度给成 95、订单号只有 4 位：分别被纠正为 ORDER_STATUS、1.0、null。 */
     @Test
     void resultIsSanitized() {
         model.willClassify("{\"intent\":\"order-status\",\"confidence\":95,\"orderNo\":\"2118\",\"skuId\":\"20002\"}");
@@ -108,6 +118,7 @@ class IntentServiceTest {
         assertThat(result).isEqualTo(new IntentResult(Intent.ORDER_STATUS, 1.0, null, "20002"));
     }
 
+    /** JSON 结构合法、只是标签不认识：不算解析失败，不重试，校验时归为 UNKNOWN。 */
     @Test
     void unknownLabelIsUnknownWithoutRetry() {
         model.willClassify("{\"intent\":\"查询物流\",\"confidence\":0.9,\"orderNo\":null,\"skuId\":null}");

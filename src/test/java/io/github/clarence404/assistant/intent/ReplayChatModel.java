@@ -15,7 +15,11 @@ import org.springframework.ai.model.tool.StructuredOutputChatOptions;
 /**
  * 回放录制的模型输出：按 Prompt 指纹查出当时真实模型的原样输出返回，不联网、结果完全确定。
  *
- * <p>查不到说明发给模型的内容和录制时不一样了（改了提示词、用户消息模板或 {@link IntentResult} 的字段），直接报错，提示重新录制。
+ * <p>查不到说明发给模型的消息文本和录制时不一样了（改了意图识别提示词或用户消息模板，见 {@link IntentRecordings} 的指纹说明），
+ * 直接报错，提示重新录制。第 2 章引入。
+ *
+ * <p>和 {@code FakeChatModel} 的区别：FakeChatModel 的输出是测试里手写的，用来制造各种情况；这里的输出是真实模型说过的原话
+ * （包括多余的解释、Markdown 代码块、写错的标签），用来确认代码面对真实输出也能工作，同时保持确定、不联网。
  */
 class ReplayChatModel implements ChatModel {
 
@@ -31,6 +35,7 @@ class ReplayChatModel implements ChatModel {
                         IntentRecordings.Call::promptHash, IntentRecordings.Call::output, (a, b) -> a));
     }
 
+    /** 一共被调用了几次（含重试）。 */
     int calls() {
         return calls.get();
     }
@@ -44,6 +49,7 @@ class ReplayChatModel implements ChatModel {
         return StructuredOutputChatOptions.builder().build();
     }
 
+    /** 按 Prompt 指纹取出录制的原样输出返回；查不到就抛 {@link IllegalStateException}。 */
     @Override
     public ChatResponse call(Prompt prompt) {
         calls.incrementAndGet();

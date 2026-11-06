@@ -19,7 +19,12 @@ import org.springframework.web.client.ResourceAccessException;
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
-/** 第 1 章：ChatClient 与 ChatService 的阻塞、流式调用和错误归类，假模型，不联网。系统提示词的模板渲染见第 2 章的 AssistantPromptsTest。 */
+/**
+ * 第 1 章：ChatClient 与 ChatService 的阻塞、流式调用和错误归类，假模型，不联网。系统提示词的模板渲染见第 2 章的 AssistantPromptsTest。
+ *
+ * <p>手法：纯单元测试，不启动 Spring，手工 new 出 ChatClient（底下是 {@link FakeChatModel}）、IntentService 和 ChatService，比接口测试快得多。
+ * 流式结果用 Reactor 的 {@link StepVerifier} 断言：它订阅 Flux，逐个检查发出的元素，最后检查是正常结束还是以哪种异常结束。
+ */
 class ChatServiceTest {
 
     private final FakeChatModel model = new FakeChatModel();
@@ -29,6 +34,7 @@ class ChatServiceTest {
     void setUp() {
         ChatClient chatClient = new ChatClientConfig().chatClient(ChatClient.builder(model));
         IntentService intentService = new IntentService(chatClient, new ClassPathResource("prompts/intent-v1.st"));
+        // 流式空闲超时只给 300 毫秒，「模型一直不吭声」的测试很快就能结束；0.6 是拒答的置信度门槛，与 application.yml 一致
         service = new ChatService(
                 chatClient, new ChatProperties(Duration.ofMillis(300), 0.6), TestPrompts.prompts("v2"), intentService);
     }
@@ -78,6 +84,7 @@ class ChatServiceTest {
                         ModelCallException.class, e -> assertThat(e.failure()).isEqualTo(ModelFailure.MODEL_TIMEOUT));
     }
 
+    /** {@code Flux.never()} 永远不发元素也不结束：验证 ChatService 的 timeout 能把它截断并归为 MODEL_TIMEOUT，而不是让请求一直挂着。 */
     @Test
     void streamTimesOutWhenModelStaysSilent() {
         model.willStream(Flux.never());
@@ -90,6 +97,7 @@ class ChatServiceTest {
                 .verify(Duration.ofSeconds(5));
     }
 
+    /** 已经发出一段之后模型出错：前面的片段照常收到，随后以 MODEL_UNAVAILABLE 结束。 */
     @Test
     void streamMapsMidwayFailureToModelUnavailable() {
         model.willStream("您好，");

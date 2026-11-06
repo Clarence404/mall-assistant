@@ -28,11 +28,17 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 真起进程：用 {@link FakeCli} 代替 claude / codex，验证参数真的传到了子进程（含 Windows 下的引号与空参数）、stdin 的中文、输出解析、超时杀进程树、
- * 失败分类与结构化输出。
+ * 失败分类与结构化输出。第 2 章引入。
+ *
+ * <p>手法：{@link FakeCliSupport} 把要执行的命令配成 {@code java -cp target/test-classes FakeCli}，CliChatModel 照常拼参数、起进程、
+ * 写 stdin、解析 stdout；FakeCli 把收到的东西写到 {@code @TempDir} 下的记录文件，测试再读回来断言。行为（正常 / 失败 / 乱码 / 卡死）
+ * 由环境变量 {@code FAKE_CLI_MODE} 控制。测试消息故意带换行和双引号，验证它们原样到达子进程。
  */
 class CliChatModelTest {
 
+    /** 正常调用的超时：每次都要起一个 JVM，给宽一些；超时相关的测试另外用 3 秒。 */
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
+
     private static final String SYSTEM = "你是「示例商城」的客服，只用简体中文回答。";
     private static final String MESSAGE = "我的订单 1849203385720832512 到哪了？\n顺便问下 \"L 码\" 有货吗";
 
@@ -47,6 +53,7 @@ class CliChatModelTest {
         return tmp.resolve("record");
     }
 
+    /** 指向 FakeCli 的 CliChatModel，默认超时、原生结构化输出、无额外环境变量。 */
     private CliChatModel model(CliFlavor flavor, String mode) {
         return model(flavor, mode, TIMEOUT, true, Map.of());
     }
@@ -57,6 +64,7 @@ class CliChatModelTest {
                 FakeCliSupport.properties(flavor, workDir(), record(), mode, timeout, nativeStructured, env));
     }
 
+    /** 一条系统消息 + 一条用户消息，和 ChatClient 实际发给模型的形状一样。 */
     private static Prompt prompt() {
         return new Prompt(List.of(new SystemMessage(SYSTEM), new UserMessage(MESSAGE)));
     }
@@ -67,7 +75,7 @@ class CliChatModelTest {
 
         assertThat(response.getResult().getOutput().getText()).isEqualTo("收到：" + MESSAGE);
         assertThat(response.getMetadata().getModel()).isEqualTo("claude-fake-1");
-        assertThat(response.getMetadata().getUsage().getPromptTokens()).isEqualTo(15);
+        assertThat(response.getMetadata().getUsage().getPromptTokens()).isEqualTo(15); // FakeCli 输出 12 + 缓存命中 3
         assertThat(response.getMetadata().getUsage().getCompletionTokens()).isEqualTo(34);
 
         List<String> args = FakeCliSupport.recordedArgs(record());
@@ -100,6 +108,7 @@ class CliChatModelTest {
         assertNoLeftoverWorkspaces();
     }
 
+    /** codex：参数以 {@code exec --json} 开头、以 {@code -}（从 stdin 读消息）结尾；它没有逐字增量，流式时整段作为一个元素发出。 */
     @Test
     void codexCallAndStream() throws Exception {
         CliChatModel model = model(CliFlavor.CODEX, "ok");
@@ -125,6 +134,7 @@ class CliChatModelTest {
         assertNoLeftoverWorkspaces();
     }
 
+    /** 走真正的 IntentService：Schema 作为 {@code --json-schema} 参数传给 claude，用户消息里不再拼格式说明。 */
     @Test
     void structuredOutputGoesToClaudeAsJsonSchema() throws Exception {
         IntentService intents = intentService(model(CliFlavor.CLAUDE, "ok"));
@@ -143,6 +153,7 @@ class CliChatModelTest {
         assertThat(FakeCliSupport.recorded(record(), ".system")).contains("意图识别");
     }
 
+    /** codex 的 Schema 写成文件，用 {@code --output-schema <文件>} 传入。 */
     @Test
     void structuredOutputGoesToCodexAsSchemaFile() throws Exception {
         IntentService intents = intentService(model(CliFlavor.CODEX, "ok"));
@@ -154,6 +165,7 @@ class CliChatModelTest {
                 .contains("ORDER_STATUS");
     }
 
+    /** 关掉原生结构化输出：不传 Schema 参数，由 Spring AI 把格式说明（含「JSON Schema」字样）拼进用户消息，经 stdin 发出。 */
     @Test
     void withoutNativeStructuredOutputFormatInstructionsGoIntoStdin() throws Exception {
         CliChatModel model = model(
@@ -172,6 +184,7 @@ class CliChatModelTest {
                 .contains("JSON Schema");
     }
 
+    /** 模型（FakeCli）始终回一句话而不是 JSON：IntentService 重试一次后兜底为 UNKNOWN，不抛异常。 */
     @Test
     void unparsableIntentIsRetriedThenUnknown() {
         CliChatModel model = model(CliFlavor.CLAUDE, "ok", TIMEOUT, false, Map.of("FAKE_CLI_REPLY", "我觉得是查订单"));
@@ -201,6 +214,7 @@ class CliChatModelTest {
                 .verify(TIMEOUT);
     }
 
+    /** 进程正常退出但输出里报告失败（claude 的 is_error、codex 的 turn.failed）：同样算调用失败。 */
     @Test
     void toolReportedErrorIsModelUnavailable() {
         assertThatThrownBy(() -> model(CliFlavor.CLAUDE, "error-result").call(prompt()))
@@ -210,6 +224,7 @@ class CliChatModelTest {
                 .verify(TIMEOUT);
     }
 
+    /** hang 模式下 FakeCli 自己再起一个子进程后卡住：超时后两个进程都要被杀掉（只杀父进程，子进程会变成孤儿继续占资源）。 */
     @Test
     void timeoutKillsWholeProcessTree() throws Exception {
         CliChatModel model = model(CliFlavor.CLAUDE, "hang", Duration.ofSeconds(3), true, Map.of());
@@ -247,6 +262,7 @@ class CliChatModelTest {
         assertProcessesGone();
     }
 
+    /** 命令找不到（没装 claude）：按模型不可用处理，接口返回 503 而不是 500。 */
     @Test
     void missingCommandIsModelUnavailable() {
         CliProperties properties = new CliProperties(
@@ -259,6 +275,7 @@ class CliChatModelTest {
                                 .isEqualTo(ModelFailure.MODEL_UNAVAILABLE));
     }
 
+    /** 用指定模型构造真实的 IntentService，测结构化输出这条链路。 */
     private IntentService intentService(CliChatModel model) {
         return new IntentService(ChatClient.builder(model).build(), new ClassPathResource("prompts/intent-v1.st"));
     }

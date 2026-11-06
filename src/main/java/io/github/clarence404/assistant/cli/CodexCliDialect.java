@@ -25,6 +25,9 @@ import tools.jackson.databind.JsonNode;
  * <p>系统提示词写成文件，用 {@code -c model_instructions_file="<文件>"} 替换掉 Codex 自带的编码代理指令（输入 token 从约 1.7 万降到约 7 千，
  * 剩下的是 Codex 固定附带的环境与工具说明），用户消息走 stdin。结构化输出用 {@code --output-schema <文件>}，最终的 agent 消息就是 JSON
  * 文本。{@code --json} 只在一条 agent 消息完整生成后才输出它，所以流式接口是整段推送。
+ *
+ * <p>架构层：命令行模型。不属于某一章的练习，是第 2 章之后加的可选扩展（{@code claude-cli} / {@code codex-cli} profile 才启用）。
+ * 上游：{@link CliChatModel}（经 {@link CliFlavor#CODEX} 选中）。
  */
 public class CodexCliDialect implements CliDialect {
 
@@ -46,16 +49,21 @@ public class CodexCliDialect implements CliDialect {
         return "codex";
     }
 
+    /**
+     * 拼 codex 的参数，安全相关的含义见类注释。阻塞与流式用同一套参数，区别只在怎么读输出。
+     */
     @Override
     public List<String> arguments(CliRequest request, CliWorkspace workspace, List<String> extraArgs)
             throws IOException {
         List<String> args = new ArrayList<>();
+        // exec：非交互执行一次；--json：stdout 输出 JSONL 事件（每行一个 JSON），方便程序解析
         args.addAll(List.of("exec", "--json"));
         args.addAll(List.of("--sandbox", "read-only"));
         args.add("--skip-git-repo-check");
         args.add("--ephemeral");
         args.add("--ignore-user-config");
         args.add("--ignore-rules");
+        // 不输出 ANSI 颜色控制字符，免得混进要解析的文本
         args.addAll(List.of("--color", "never"));
         args.addAll(List.of("-C", workspace.cwd().toAbsolutePath().toString()));
         for (String feature : DISABLED_FEATURES) {
@@ -70,6 +78,7 @@ public class CodexCliDialect implements CliDialect {
             args.addAll(List.of("-m", request.model()));
         }
         if (request.hasOutputSchema()) {
+            // 结构化输出：Schema 写成文件交给 codex，最终的 agent 消息就是符合 Schema 的 JSON 文本
             args.addAll(List.of(
                     "--output-schema",
                     workspace
@@ -81,6 +90,7 @@ public class CodexCliDialect implements CliDialect {
         return args;
     }
 
+    /** stdin 只写对话内容；系统提示词已经通过 model_instructions_file 传了。 */
     @Override
     public String stdin(CliRequest request) {
         return request.conversation();
@@ -91,6 +101,12 @@ public class CodexCliDialect implements CliDialect {
         return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
+    /**
+     * 解析完整的 JSONL 输出：取最后一条 agent 消息作为回答（codex 可能先输出几条中间说明），token 用量取自 turn.completed。
+     * codex 的事件里没有模型名和费用，这两项为 null。
+     *
+     * @throws CliExecutionException 没有完成事件也没有消息、没有 agent 消息、或 turn.failed
+     */
     @Override
     public CliReply parseReply(String stdout) {
         CodexEvents events = new CodexEvents();
@@ -104,6 +120,10 @@ public class CodexCliDialect implements CliDialect {
         return new CliReply(events.messages.getLast(), null, events.inputTokens, events.outputTokens, null);
     }
 
+    /**
+     * 流式解析：每行交给 {@link CodexEvents}，这一行新增了几条 agent 消息就发几段文本。因为 codex 只在消息完整生成后才输出，
+     * 每段都是一整条消息，不是逐字增量。
+     */
     @Override
     public StreamParser streamParser() {
         CodexEvents events = new CodexEvents();
@@ -182,6 +202,7 @@ public class CodexCliDialect implements CliDialect {
             }
         }
 
+        /** 结束时检查：既没见到完成事件、也没收到任何消息，说明输出被截断或进程异常退出。 */
         void requireCompleted() {
             if (!completed && messages.isEmpty()) {
                 throw new CliExecutionException("codex 的输出没有 turn.completed 事件就结束了");

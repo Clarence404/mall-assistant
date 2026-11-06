@@ -10,7 +10,13 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/** 两种命令行工具的参数拼装（重点是安全参数）与输出解析，不起进程。 */
+/**
+ * 两种命令行工具的参数拼装（重点是安全参数）与输出解析，不起进程。第 2 章引入。
+ *
+ * <p>安全参数是这类测试的重点：claude / codex 本身是能读写文件、执行命令的编码代理，这里只把它们当纯文本模型用，
+ * 所以要断言「禁用工具、不加载 MCP 与用户配置、不写会话、只读沙箱」等参数一定在，危险参数（跳过权限、放开沙箱、额外目录）一定不在，
+ * 用户消息走 stdin 而不是命令行。解析部分直接喂真实格式的输出字符串，验证 json / stream-json / JSONL 都能正确取出正文、token 用量和错误。
+ */
 class CliDialectTest {
 
     private static final String SCHEMA = """
@@ -22,6 +28,7 @@ class CliDialectTest {
     @TempDir
     Path tmp;
 
+    /** 非流式、无 Schema 的 claude 调用：安全参数齐全，系统提示词写成文件放在工作目录之外，工作目录是空的，额外参数接在最后。 */
     @Test
     void claudeRunsAsPureTextModel() throws Exception {
         try (CliWorkspace workspace = CliWorkspace.create(tmp)) {
@@ -55,6 +62,7 @@ class CliDialectTest {
         }
     }
 
+    /** 流式时用 stream-json 并打开增量输出；模型名和系统提示词为空时不传对应参数；Schema 压成一行作为参数值。 */
     @Test
     void claudeStreamingAndSchemaFlags() throws Exception {
         try (CliWorkspace workspace = CliWorkspace.create(tmp)) {
@@ -111,11 +119,13 @@ class CliDialectTest {
         }
     }
 
+    /** codex 的 {@code -c key=value} 里 value 是 TOML 字符串：Windows 路径里的反斜杠和引号都要转义。 */
     @Test
     void tomlStringEscapesWindowsPaths() {
         assertThat(CodexCliDialect.tomlString("C:\\Temp\\a\"b.txt")).isEqualTo("\"C:\\\\Temp\\\\a\\\"b.txt\"");
     }
 
+    /** 有 structured_output 时以它为准；输入 token = input_tokens + cache_read_input_tokens（命中缓存的部分也算输入）。 */
     @Test
     void claudeReplyPrefersStructuredOutputAndReadsUsage() {
         CliReply reply = new ClaudeCliDialect().parseReply("""
@@ -166,6 +176,7 @@ class CliDialectTest {
         assertThat(parser.onEnd()).isEmpty();
     }
 
+    /** 流结束了却没收到 result 事件：说明进程中途异常退出，不能当成正常回答。 */
     @Test
     void claudeStreamWithoutResultFails() {
         CliDialect.StreamParser parser = new ClaudeCliDialect().streamParser();
@@ -174,6 +185,7 @@ class CliDialectTest {
         assertThatThrownBy(parser::onEnd).isInstanceOf(CliExecutionException.class);
     }
 
+    /** codex 的 JSONL：只取 agent_message 的正文，跳过 reasoning；type 为 error 的重连提示不算失败；token 用量取自 turn.completed。 */
     @Test
     void codexParsesAgentMessagesAndToleratesReconnectNotices() {
         CliReply reply = new CodexCliDialect().parseReply("""

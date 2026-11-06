@@ -7,12 +7,14 @@
 spring:
   ai:
     model:
-      chat: openai
+      chat: openai           # 选用 OpenAI 的 ChatModel 自动配置（OpenAiChatModel）；业务代码不用改，只换了 ChatClient 背后的模型
     openai:
       base-url: ${OPENAI_BASE_URL}     # 含 /v1，例如 https://api.deepseek.com/v1、http://localhost:11434/v1
       api-key: ${OPENAI_API_KEY}
-      timeout: 60s
-      max-retries: 1
+      # Spring AI 2.0 的 openai 走 OpenAI 官方 Java SDK，不用 application.yml 里的 spring.http.clients 与 spring.ai.retry，
+      # 超时和重试在这里单独设
+      timeout: 60s           # 单次请求超时，与 application.yml 的 read-timeout 保持一致
+      max-retries: 1         # SDK 默认重试 3 次；和 spring.ai.retry 一样，客服场景快速失败
       chat:
         model: ${OPENAI_MODEL}
-        temperature: 0.3
+        temperature: 0.3     # 同 ollama：回答的默认温度，意图识别在代码里单独设为 0

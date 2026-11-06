@@ -1,12 +1,15 @@
 # 公共配置；模型厂商按 profile 切换：默认 ollama（本机 Ollama），可选 openai（任意 OpenAI 兼容接口）
+# 另有 claude-cli / codex-cli 两个可选 profile（用本机命令行工具当模型），见 application-claude-cli.yml / application-codex-cli.yml
+# 任何一项都可以用环境变量覆盖（Spring Boot 宽松绑定：全大写，点和连字符换成下划线），
+# 如 ASSISTANT_PROMPT_VERSION=v1、SPRING_AI_RETRY_MAX_ATTEMPTS=0、SPRING_PROFILES_ACTIVE=openai
 spring:
   application:
     name: mall-assistant
   profiles:
-    default: ollama
+    default: ollama          # 没指定 spring.profiles.active 时启用的 profile；指定了（如 openai,local）就不再用它
   threads:
     virtual:
-      enabled: true
+      enabled: true          # 请求跑在虚拟线程上：调模型动辄等几秒到几十秒，线程大部分时间在干等，虚拟线程让「等」几乎不占资源
   mvc:
     problemdetails:
       enabled: true          # 参数校验失败等 MVC 自带异常也返回 ProblemDetail
@@ -14,29 +17,35 @@ spring:
       request-timeout: 3m    # 流式接口整体最长时长，兜底
   http:
     clients:                 # 作用于自动配置的 RestClient（阻塞调用）与 WebClient（流式调用）
-      connect-timeout: 3s
+      connect-timeout: 3s    # 建立连接最多等多久：模型服务没启动时快速失败（MODEL_UNAVAILABLE），不让用户干等
       read-timeout: 60s      # 阻塞调用要等整段回答生成完，给足时间；流式调用是两段之间的间隔
+      # 注意：openai profile 走 OpenAI 官方 Java SDK，不用这里的设置，超时与重试见 application-openai.yml
   ai:
     model:                   # 本章只用对话模型，其余能力关掉，免得 openai Starter 要求配置 api-key
-      embedding: none
+      embedding: none        # 向量化模型：第 4 章知识入库时才会用到
       image: none
       audio:
         speech: none
         transcription: none
       moderation: none
+      # chat（用哪家的对话模型）不在这里写，由各 profile 的 yml 指定：ollama / openai / none（命令行模型）
     retry:                   # 默认会重试 10 次、指数退避，模型挂了要等好几分钟才报错；客服场景快速失败
+      # Spring AI 2.0 把这个值当作「失败后再重试几次」（交给 RetryPolicy.maxRetries），1 = 最多共调 2 次；改成 0 就完全不重试。
+      # 只对 Ollama 的阻塞调用生效（流式调用不经过它），重试连接失败（ResourceAccessException）和厂商返回的临时性错误
+      # （TransientAiException，如 HTTP 5xx）；4xx（参数错、模型不存在）默认不重试
       max-attempts: 1
       backoff:
-        initial-interval: 500ms
-        max-interval: 2s
+        initial-interval: 500ms   # 第一次重试前等多久（默认 2 秒）
+        max-interval: 2s          # 指数退避的等待上限（默认 3 分钟）
 
+# 本项目自己的配置，分别绑定到 ChatProperties（assistant.chat）与 PromptProperties（assistant.prompt）
 assistant:
   chat:
     stream-timeout: 30s      # 流式：首段和相邻两段之间最多等多久
     refuse-min-confidence: 0.6   # 意图为 OUT_OF_SCOPE 且把握不低于它才直接拒答（不调回答模型）
   prompt:
     version: v2              # 系统提示词版本：prompts/system-v2.st；改回 v1 可对比效果
-    shop-name: 示例商城
+    shop-name: 示例商城      # 以下三项是模板变量 {shopName} / {assistantName} / {supportScope}，同时用于系统提示词与拒答话术
     assistant-name: 小示
     support-scope: 商品、下单、支付、物流、退换货与售后、账户与积分
     zone: Asia/Shanghai      # 渲染「今天」用的时区
@@ -44,5 +53,5 @@ assistant:
 server:
   port: ${SERVER_PORT:8088}    # 与 mall-evolution（8080 / 8082 / 8083 / 9000）错开，两个项目可以同时运行
   error:
-    include-stacktrace: never
+    include-stacktrace: never  # Spring Boot 默认错误页 / 错误 JSON 里不带堆栈和异常信息，避免把内部细节漏给用户
     include-message: never

@@ -34,6 +34,10 @@ import org.springframework.test.context.DynamicPropertySource;
  * </pre>
  *
  * 模型服务的地址只从环境变量读，不写进录制文件。录完用 {@code git diff src/test/resources/recordings} 看看模型的输出变了什么。
+ *
+ * <p>做法：用 {@link RecordingChatModel} 包住 Spring 装配好的真实 Ollama 模型，走真正的 {@link IntentService}（含重试），
+ * 每次模型调用都记下 Prompt 指纹和原样输出。{@code @EnabledIfEnvironmentVariable} 让它在没设置环境变量时被跳过而不是失败。
+ * 类名以 IT 结尾，由 failsafe 在 verify 阶段执行。第 2 章引入。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @EnabledIfEnvironmentVariable(named = "RECORD_OLLAMA_URL", matches = "https?://.+")
@@ -45,6 +49,7 @@ class IntentRecordingIT {
     @Autowired
     ChatModel ollama;
 
+    /** 不管当前 profile，强制用 RECORD_OLLAMA_URL 指向的 Ollama 和 RECORD_OLLAMA_MODEL 指定的模型。 */
     @DynamicPropertySource
     static void ollamaProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.ai.model.chat", () -> "ollama");
@@ -52,6 +57,7 @@ class IntentRecordingIT {
         registry.add("spring.ai.ollama.chat.model", () -> MODEL);
     }
 
+    /** 逐条跑 intent-cases.json，记下每条消息的全部模型调用和最终解析结果，写成一份录制文件。 */
     @Test
     void record() throws Exception {
         RecordingChatModel recorder = new RecordingChatModel(ollama);
@@ -83,6 +89,7 @@ class IntentRecordingIT {
             this.delegate = delegate;
         }
 
+        /** 转发给真实模型，并记下这次调用的 Prompt 指纹与模型输出文本。 */
         @Override
         public ChatResponse call(Prompt prompt) {
             ChatResponse response = delegate.call(prompt);

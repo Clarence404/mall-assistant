@@ -25,8 +25,12 @@ import tools.jackson.databind.json.JsonMapper;
  *       {@link IntentResult}
  * </ul>
  *
- * <p>Prompt 指纹是「系统消息 + 用户消息」的 SHA-256：提示词、用户消息模板、输出格式（{@link IntentResult} 的字段）任何一处变了，指纹就对不上，
- * 回放会直接报「没有录制」，提醒你重新录制，而不是拿旧输出假装通过。
+ * <p>Prompt 指纹是「系统消息 + 用户消息」文本的 SHA-256（取前 8 字节）：意图识别提示词 {@code intent-v1.st}、用户消息模板
+ * （含重试时追加的提醒）、用户消息本身任何一处变了，指纹就对不上，回放会直接报「没有录制」，提醒你重新录制，而不是拿旧输出假装通过。
+ * 道理是：录下来的输出只对「当时发出去的那段提示词」有效，提示词改了，真实模型的回答可能完全不同，旧录制不能再代表它。
+ *
+ * <p>指纹只看消息文本，不含温度等模型参数；原生结构化输出时 JSON Schema 走模型参数、不在消息里，所以只改 {@link IntentResult}
+ * 的字段不会让指纹失效，要自己记得重新录制（不支持原生的模型会把格式说明拼进用户消息，那时 Schema 也在指纹里）。第 2 章引入。
  */
 final class IntentRecordings {
 
@@ -50,6 +54,7 @@ final class IntentRecordings {
     /** 一个模型的整份录制。不记录模型服务的地址。 */
     record Recording(String model, String recordedAt, List<RecordedCase> cases) {}
 
+    /** 读 {@code intent-cases.json}：要录制的消息清单。 */
     static List<Case> cases() {
         return List.of(read(CASES, Case[].class));
     }

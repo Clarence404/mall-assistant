@@ -33,9 +33,16 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 集成测试：Testcontainers 起一个真实的 Ollama，拉取小模型后走一遍阻塞与流式接口（第 1 章）和意图识别（第 2 章）。
+ * 集成测试：Testcontainers 起一个真实的 Ollama，拉取小模型后走一遍阻塞与流式接口（第 1 章）和意图识别（第 2 章）。第 1 章引入。
  *
- * <p>没有 Docker 时自动跳过。模型文件放在宿主机目录（默认 ~/.cache/mall-assistant/ollama，可用环境变量
+ * <p>Testcontainers 在测试开始前用 Docker 起一个容器（这里是官方 ollama 镜像），测试结束自动销毁；{@code @DynamicPropertySource}
+ * 把容器的实际地址填进 {@code spring.ai.ollama.base-url}。这是自动化测试里唯一真的调用模型的一处，用来确认配置、协议和真实输出都对得上。
+ *
+ * <p>断言故意放得很宽：大模型的输出不确定，同一句话每次回答都可能不同，所以只断言「接口成功、回答里有中文、意图是合法枚举值、置信度在 0 到 1
+ * 之间、流里有 intent / token / done 且没有 error」，不断言具体说了什么；唯一断言具体意图的是最明显的「查订单」。温度设成 0（每次都挑最可能的词，
+ * 输出更稳定），{@code num-predict=128} 限制每次最多生成 128 个 token（token 是模型处理文本的最小单位，一个汉字大约一到两个 token），让测试跑得快。
+ *
+ * <p>{@code disabledWithoutDocker = true}：没有 Docker 时自动跳过。模型文件放在宿主机目录（默认 ~/.cache/mall-assistant/ollama，可用环境变量
  * OLLAMA_MODELS_CACHE 指定）并挂进容器的 /root/.ollama，第二次起不再下载；CI 用 actions/cache 缓存这个目录。
  */
 @SpringBootTest(properties = {"spring.ai.ollama.chat.num-predict=128", "spring.ai.ollama.chat.temperature=0"})
@@ -47,8 +54,10 @@ class OllamaChatIT {
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     static final String IMAGE = "ollama/ollama:0.40.14";
+    /** 默认用最小的 qwen2.5:0.5b，可用环境变量 OLLAMA_IT_MODEL 换。 */
     static final String MODEL = System.getenv().getOrDefault("OLLAMA_IT_MODEL", "qwen2.5:0.5b");
 
+    /** static 的 {@code @Container}：整个测试类共用一个容器，所有测试方法跑完才停。 */
     @Container
     static final OllamaContainer OLLAMA =
             new OllamaContainer(IMAGE).withFileSystemBind(modelCacheDir(), "/root/.ollama", BindMode.READ_WRITE);
@@ -56,6 +65,7 @@ class OllamaChatIT {
     @Autowired
     MockMvc mockMvc;
 
+    /** 在容器里执行 {@code ollama pull}：缓存目录里已有模型时很快返回，没有才下载。 */
     @BeforeAll
     static void pullModel() throws Exception {
         ExecResult pull = OLLAMA.execInContainer("ollama", "pull", MODEL);
@@ -63,6 +73,7 @@ class OllamaChatIT {
         assertThat(pull.getExitCode()).as(pull.getStderr()).isZero();
     }
 
+    /** 容器起来后才知道映射出来的端口，所以地址要在上下文启动前动态注册；同时显式选用 ollama 和要测的模型。 */
     @DynamicPropertySource
     static void ollamaProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.ai.model.chat", () -> "ollama");
@@ -83,7 +94,7 @@ class OllamaChatIT {
         JsonNode json = JSON.readTree(body);
         String reply = json.get("reply").asString();
         log.info("模型回答：{}，意图：{}", reply, json.get("intent"));
-        assertThat(reply).isNotBlank().containsPattern("\\p{IsHan}");
+        assertThat(reply).isNotBlank().containsPattern("\\p{IsHan}"); // 至少有一个汉字：系统提示词要求用中文回答
         assertValidIntent(json.get("intent"));
     }
 
@@ -96,6 +107,7 @@ class OllamaChatIT {
         assertThat(intent.get("intent").asString()).isEqualTo("ORDER_STATUS");
     }
 
+    /** 打招呼、乱码、超出范围的请求：分成什么不重要，重要的是都能得到合法的意图结果，而不是报错。 */
     @Test
     void anyMessageYieldsValidIntentInsteadOfError() throws Exception {
         for (String message : List.of("你好", "asdf qwer zxcv", "帮我写一段 Python 冒泡排序")) {
@@ -115,6 +127,7 @@ class OllamaChatIT {
         return JSON.readTree(body);
     }
 
+    /** 宽松断言：意图是合法的枚举值、置信度在 0 到 1 之间，不管分得对不对。 */
     private static void assertValidIntent(JsonNode intent) {
         assertThat(intent).isNotNull();
         assertThat(Arrays.stream(Intent.values()).map(Intent::name))
@@ -139,6 +152,7 @@ class OllamaChatIT {
         assertThat(body).containsPattern("\\p{IsHan}");
     }
 
+    /** 宿主机上的模型缓存目录：环境变量 OLLAMA_MODELS_CACHE，默认 ~/.cache/mall-assistant/ollama，不存在就创建。 */
     private static String modelCacheDir() {
         String configured = System.getenv("OLLAMA_MODELS_CACHE");
         Path dir = configured != null && !configured.isBlank()

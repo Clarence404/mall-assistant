@@ -134,6 +134,20 @@ codex 没有「关掉全部工具」的单个开关，只读沙箱仍能读本�
 
 codex 的 `--json` 只在一条消息完整生成后才输出它，没有逐字增量，流式接口的回答是一个 token 事件整段推送。实测中 codex 偶尔会卡住不返回，到 `assistant.cli.timeout`（codex 默认 60 秒，正常调用 6～14 秒就结束）后被杀掉，接口返回 `MODEL_TIMEOUT`，重试即可；日志里会带上它 stderr 的最后几行。
 
+## 读代码的顺序
+
+所有类都带了面向新手的中文注释（职责、上下游、哪一章引入，以及 AI 相关代码「为什么这么写」）。建议按一次请求的走向读：
+
+1. `AssistantApplication`：启动入口，profile 决定接哪个模型（`application-*.yml`）
+2. `chat/ChatController`：`/api/chat` 阻塞接口与 `/api/chat/stream` SSE 流式接口，流式出错时怎么变成 `error` 事件
+3. `chat/ChatService`：一次对话的主流程：先识别意图，超出范围直接拒答，否则带系统提示词调模型；流式的超时与错误映射
+4. `intent/IntentService`（连同 `IntentResult`、`Intent`）：结构化输出成 Java 对象、解析失败重试一次、校验模型输出、失败兜底
+5. `prompt/AssistantPrompts`（连同 `PromptProperties`、`src/main/resources/prompts/`）：提示词模板、变量渲染与版本切换
+6. `chat/ChatClientConfig`：`ChatClient` 怎么由 Spring AI 自动配置的 `ChatModel` 构建出来
+7. `error/`：模型调用失败分成「不可用」和「超时」两类，统一成 `ProblemDetail` 响应
+8. `cli/`（选读）：用本机 Claude Code / Codex 命令行当模型：安全参数、stdin 传参、输出解析、超时杀进程树
+9. `src/test/java`：从 `FakeChatModel` 和 `ChatServiceTest` 读起，再看 `FakeModelWebTest` 系列接口测试、`IntentReplayTest` 录制回放、`FakeCli` 与 `OllamaChatIT`
+
 ## 构建与测试
 
 ```bash

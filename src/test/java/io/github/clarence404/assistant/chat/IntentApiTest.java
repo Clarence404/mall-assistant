@@ -15,7 +15,16 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.web.client.ResourceAccessException;
 
-/** 第 2 章：POST /api/intent，以及对话接口先识别意图、超出范围直接拒答。 */
+/**
+ * 第 2 章：POST /api/intent，以及对话接口先识别意图、超出范围直接拒答。
+ *
+ * <p>验证：意图接口返回结构化结果；模型输出解析不了时重试一次后兜底成 UNKNOWN（照样 200，而不是报错）；模型连不上时 503；
+ * 对话接口先调一次意图识别、再调一次回答；把握够大的 OUT_OF_SCOPE 直接回拒答话术，省掉回答模型那次调用；把握不够的照常回答；
+ * 流式接口第一个事件是 intent。
+ *
+ * <p>手法：{@link FakeChatModel} 按「请求里有没有输出 Schema」区分两类调用，分别预设，并用 {@code classificationPrompts()} /
+ * {@code answerPrompts()} 数各调了几次，以此断言「有没有调回答模型」。
+ */
 class IntentApiTest extends FakeModelWebTest {
 
     private static final String ORDER_STATUS =
@@ -45,7 +54,7 @@ class IntentApiTest extends FakeModelWebTest {
                 .andExpect(jsonPath("$.intent").value("UNKNOWN"))
                 .andExpect(jsonPath("$.confidence").value(0.0));
 
-        assertThat(model.classificationPrompts()).hasSize(2);
+        assertThat(model.classificationPrompts()).hasSize(2); // 第一次解析失败，带上更严格的提醒重试一次
     }
 
     @Test
@@ -85,6 +94,7 @@ class IntentApiTest extends FakeModelWebTest {
         assertThat(model.answerPrompts()).isEmpty();
     }
 
+    /** OUT_OF_SCOPE 但置信度 0.3 低于拒答门槛（默认 0.6）：宁可多答一句，也不错拒正常问题。 */
     @Test
     void lowConfidenceOutOfScopeIsStillAnswered() throws Exception {
         model.willClassify("{\"intent\":\"OUT_OF_SCOPE\",\"confidence\":0.3,\"orderNo\":null,\"skuId\":null}");
@@ -120,6 +130,7 @@ class IntentApiTest extends FakeModelWebTest {
         assertThat(model.answerPrompts()).isEmpty();
     }
 
+    /** 意图识别这一步就失败了：连 intent 事件都没有，流里只有一个 error 事件。 */
     @Test
     void streamTurnsClassificationFailureIntoErrorEvent() throws Exception {
         model.willFailClassification(
@@ -147,6 +158,7 @@ class IntentApiTest extends FakeModelWebTest {
         return result;
     }
 
+    /** 手拼请求体：这里的测试消息不含引号和反斜杠，不需要转义。 */
     private static String json(String message) {
         return "{\"message\":\"" + message + "\"}";
     }

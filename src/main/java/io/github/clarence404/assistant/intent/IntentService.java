@@ -19,16 +19,35 @@ import tools.jackson.core.JacksonException;
  *
  * <p>模型输出解析不了时重试一次（加一句更严格的提醒），还不行就返回 {@link IntentResult#unknown()}，不把解析异常抛给用户；
  * 模型本身调不通（连不上、超时）则抛 {@link ModelCallException}，和对话接口一样返回 503。
+ *
+ * <p>为什么两种失败区别对待：解析失败是「模型这次没按格式说」，模型的输出带随机性，换个说法再问一次很可能就对了，重试一次划算；
+ * 连接失败、超时是「模型服务本身有问题」，马上再调大概率还是失败，只会让用户多等一倍时间。HTTP 层面的重试已经交给底层客户端
+ * （ollama 下是 {@code spring.ai.retry.*}，openai 下是 {@code spring.ai.openai.max-retries}，见各 yml），这里不再叠加一层。重试只做一次：每次都是一次完整的模型调用，
+ * 次数越多越慢、越费 token。
+ *
+ * <p>所在层：业务层（第 2 章引入）。上游是 {@code ChatService}（每次对话先调它）和 {@link IntentController}；下游是共享的
+ * {@link ChatClient} 和提示词文件 {@code prompts/intent-v1.st}。
  */
 @Service
 public class IntentService {
 
     private static final Logger log = LoggerFactory.getLogger(IntentService.class);
 
-    /** 分类要稳定、可复现，温度调到 0；回答用配置文件里的温度。 */
+    /**
+     * 分类要稳定、可复现，温度调到 0；回答用配置文件里的温度。
+     *
+     * <p>温度（temperature）控制模型选词的随机程度：模型每一步都在给所有候选 token 打分，温度越高越可能选中分数不是最高的那个，
+     * 输出更多样；温度为 0 时基本总选分数最高的，同样的输入几乎总得到同样的输出。分类、抽取这种「只有一个正确答案」的任务要的是
+     * 稳定，所以用 0；客服回答希望措辞自然一点，用配置文件里的 0.3。录制回放测试也依赖这一点（同一模型连续录几次结果一致）。
+     */
     static final double TEMPERATURE = 0.0;
 
-    /** 用户消息模板：用标签把用户原文圈起来，模型更不容易把里面的话当成给它的指令。 */
+    /**
+     * 用户消息模板：用标签把用户原文圈起来，模型更不容易把里面的话当成给它的指令。
+     *
+     * <p>{@code {message}} 是模板变量，由 Spring AI 的模板引擎（StringTemplate）在发请求前替换成用户原文。用户原文里即使有
+     * 「忽略上面的规则」这样的话，在标签里也更像是「待分类的数据」，这是防提示词注入的常用写法（只能降低风险，不能杜绝）。
+     */
     static final String USER_TEMPLATE = """
             请识别下面这条用户消息的意图：
             <message>
@@ -41,12 +60,25 @@ public class IntentService {
     private final ChatClient chatClient;
     private final Resource intentPrompt;
 
+    /**
+     * 创建意图识别服务。
+     *
+     * @param chatClient 共享的 ChatClient（见 {@code ChatClientConfig}）
+     * @param intentPrompt 意图识别的系统提示词：取值说明 + few-shot 示例（给模型看几个「输入 → 输出」的例子，比纯文字说明更管用）；
+     *     测试里可以换成别的文件
+     */
     public IntentService(ChatClient chatClient, @Value("classpath:prompts/intent-v1.st") Resource intentPrompt) {
         this.chatClient = chatClient;
         this.intentPrompt = intentPrompt;
     }
 
-    /** 识别一条用户消息的意图，结果已经过 {@link IntentResult#sanitized()} 校验。最多调两次模型，解析失败时兜底为 UNKNOWN。 */
+    /**
+     * 识别一条用户消息的意图，结果已经过 {@link IntentResult#sanitized()} 校验。最多调两次模型，解析失败时兜底为 UNKNOWN。
+     *
+     * @param message 用户原文
+     * @return 校验过的意图，从不返回 null
+     * @throws ModelCallException 模型调用本身失败（连不上、超时），不重试、不兜底
+     */
     public IntentResult classify(String message) {
         IntentResult result = callModel(message, false);
         if (result == null) {
@@ -64,6 +96,14 @@ public class IntentService {
 
     /**
      * 调一次模型并把输出转成 {@link IntentResult}。
+     *
+     * <p>这一串调用拼出的 Prompt：系统消息 = intent-v1.st 的内容；用户消息 = {@link #USER_TEMPLATE} 填入原文；选项 = 温度 0。
+     * {@code entity(IntentResult.class, ...)} 做两件事：发请求前根据 record 生成 JSON Schema，收到回答后用 Jackson 转成对象
+     * （能容忍模型在 JSON 外面包一层 Markdown 代码块）。{@code useProviderStructuredOutput()} 表示优先把 Schema 作为请求参数交给厂商
+     * 原生的结构化输出（Ollama 的 {@code format}），模型在生成每个 token 时就被限制在 Schema 允许的范围内；不支持原生方式的模型，
+     * Spring AI 会把格式说明拼进用户消息，只能靠模型「自觉」遵守。
+     *
+     * @param message 用户原文
      *
      * @param strict 是否在用户消息后追加 {@link #STRICT_REMINDER}
      * @return 解析结果；输出不是合法 JSON、或为空时返回 null

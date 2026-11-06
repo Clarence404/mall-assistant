@@ -17,7 +17,10 @@ import org.springframework.test.context.ActiveProfiles;
 
 /**
  * 按 profile 切换模型厂商：默认 ollama，--spring.profiles.active=openai 换成 OpenAI 兼容接口，claude-cli / codex-cli 换成本机的命令行工具。
- * 只启动上下文，不发请求（命令行工具在第一次调用时才查找，没装也能启动）。
+ * 只启动上下文，不发请求（命令行工具在第一次调用时才查找，没装也能启动）。第 1 章引入（ollama / openai），第 2 章加上两个命令行 profile。
+ *
+ * <p>手法：每个 {@code @Nested} 内部类带自己的 {@code @SpringBootTest} / {@code @ActiveProfiles}，各起一个上下文，断言容器里的
+ * {@link ChatModel} 是哪个实现类。{@code webEnvironment = NONE} 不起 Web 层，只验证装配，更快。
  */
 class ProviderSwitchTest {
 
@@ -38,6 +41,7 @@ class ProviderSwitchTest {
     @SpringBootTest(
             webEnvironment = SpringBootTest.WebEnvironment.NONE,
             properties = {
+                // application-openai.yml 引用这三个占位符，没有值就启动不了；这里只看装配、不发请求，给假值即可
                 "OPENAI_BASE_URL=http://localhost:1/v1",
                 "OPENAI_API_KEY=test-placeholder",
                 "OPENAI_MODEL=test-model"
@@ -68,6 +72,7 @@ class ProviderSwitchTest {
         @Autowired
         CliProperties properties;
 
+        /** 容器里只有 CliChatModel（profile 里 spring.ai.model.chat=none 关掉了 Ollama），并带上了不读 CLAUDE.md 的环境变量。 */
         @Test
         void usesClaudeCodeAsTheOnlyChatModel() {
             assertThat(chatModel).isInstanceOf(CliChatModel.class);

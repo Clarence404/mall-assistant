@@ -120,6 +120,9 @@
 </div>
 
 <script>
+// 聊天页：原生 JS，无构建步骤。两种模式（右上角切换）：
+//   阻塞 —— POST /api/chat，等完整回答一次显示；流式 —— POST /api/chat/stream，按 SSE 事件逐段追加到气泡里
+// 底部「调试面板」显示接口、状态、首段 / 总耗时、片段数、错误码，以及识别出的意图（第 2 章）
 (() => {
   const $ = (id) => document.getElementById(id);
   const messages = $('messages');
@@ -128,6 +131,7 @@
   const send = $('send');
   const streamMode = $('streamMode');
 
+  // 追加一个消息气泡（kind：user / bot / error，可带 pending 显示闪烁光标），返回元素以便流式时继续往里写字
   function addMessage(kind, text) {
     $('hint')?.remove();
     const el = document.createElement('div');
@@ -138,6 +142,7 @@
     return el;
   }
 
+  // 更新调试面板：传入 { 字段名: 显示值 }，只改传了的字段
   function debug(values) {
     const map = {
       endpoint: 'dbgEndpoint', status: 'dbgStatus', first: 'dbgFirst', total: 'dbgTotal', chunks: 'dbgChunks', error: 'dbgError',
@@ -172,6 +177,7 @@
     }
   }
 
+  // 阻塞模式：一次请求拿到 { reply, intent }；非 2xx 时抛出 { code, message }，由 submit() 统一显示
   async function askBlocking(text, bubble, t0) {
     debug({ endpoint: 'POST /api/chat' });
     const res = await fetch('/api/chat', {
@@ -187,6 +193,10 @@
   }
 
   // POST + fetch 读 text/event-stream：EventSource 只支持 GET，消息放请求体更合适
+  // 做法：res.body 是字节流（ReadableStream），经 TextDecoderStream 解码成文本后逐块 read()；
+  // 一块不一定正好是一条完整事件，所以先攒进 buffer，遇到空行（连续两个换行）再切出一条解析
+  // 结束判定：收到 done 正常结束；收到 error 抛出错误（服务端已经回了 200，错误只能作为事件到达）；
+  // 连接关了却两者都没收到，说明中途断开，报 STREAM_INTERRUPTED
   async function askStreaming(text, bubble, t0) {
     debug({ endpoint: 'POST /api/chat/stream' });
     const res = await fetch('/api/chat/stream', {
@@ -201,6 +211,7 @@
     let chunks = 0;
     let finished = false;
 
+    // 按事件名分发，事件定义见后端的 StreamEvents；data 都是 JSON
     const handle = (event, data) => {
       if (event === 'intent') {
         showIntent(JSON.parse(data));
@@ -241,6 +252,7 @@
     if (!finished) throw { code: 'STREAM_INTERRUPTED', message: '连接意外中断，请重试。' };
   }
 
+  // 发送一条消息：显示用户气泡与空的回答气泡，按模式调用接口；任何错误（ProblemDetail、error 事件、网络异常）都在这里统一展示
   async function submit() {
     const text = input.value.trim();
     if (!text) return;
@@ -266,6 +278,7 @@
     }
   }
 
+  // 输入框随内容自动增高，最多 160px
   function autosize() {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 160) + 'px';
