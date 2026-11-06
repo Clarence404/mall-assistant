@@ -4,10 +4,12 @@ import io.github.clarence404.assistant.mall.MallApiClient;
 import io.github.clarence404.assistant.mall.MallModels;
 import io.github.clarence404.assistant.mall.MallResult;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -20,7 +22,8 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 /**
- * 智能客服能调用的两个工具：查订单 {@link #queryOrderStatus}、查商品 {@link #queryProduct}。
+ * 智能客服能调用的三个工具：查一笔订单 {@link #queryOrderStatus}、列出我最近的订单 {@link #listMyOrders}（第 3 章补充）、
+ * 查商品 {@link #queryProduct}。
  *
  * &lt;p&gt;所在层：工具（第 3 章引入）。上游是 Spring AI 的工具调用循环（模型决定调用时）和 {@code ChatService} 的「按意图直接查询」；
  * 下游是 {@link MallApiClient}。
@@ -59,17 +62,23 @@ public class MallTools {
     public static final String ANONYMOUS = &quot;anonymous&quot;;
 
     /** 订单号：19 位雪花 ID，或 19 位 + 4 位用户基因共 23 位（与 IntentResult 的校验一致）。 */
-<span class="fc" id="L62">    static final Pattern ORDER_NO = Pattern.compile(&quot;\\d{19}|\\d{23}&quot;);</span>
+<span class="fc" id="L65">    static final Pattern ORDER_NO = Pattern.compile(&quot;\\d{19}|\\d{23}&quot;);</span>
 
     /** 商品编号：long 型 ID。 */
-<span class="fc" id="L65">    static final Pattern SKU_ID = Pattern.compile(&quot;\\d{1,19}&quot;);</span>
+<span class="fc" id="L68">    static final Pattern SKU_ID = Pattern.compile(&quot;\\d{1,19}&quot;);</span>
 
     static final String NOT_LOGGED_IN = &quot;还没有登录，查不了订单：请先在页面右上角登录商城账号&quot;;
     static final String LOGIN_EXPIRED = &quot;登录已过期或无效，请重新登录后再查&quot;;
     static final String MALL_UNAVAILABLE = &quot;商城服务暂时不可用，请稍后再试&quot;;
 
-<span class="fc" id="L71">    private static final Logger log = LoggerFactory.getLogger(MallTools.class);</span>
-<span class="fc" id="L72">    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern(&quot;yyyy-MM-dd HH:mm&quot;);</span>
+    /** {@link #listMyOrders} 默认列几笔：够用户认出「是哪一笔」，又不至于让结果太长（结果越长，占的 token 越多，小模型越容易漏看）。 */
+    public static final int DEFAULT_LIST_SIZE = 5;
+
+    /** {@link #listMyOrders} 最多列几笔：size 是模型填的，可能填 100，在工具里收紧，不靠参数说明约束模型。 */
+    static final int MAX_LIST_SIZE = 10;
+
+<span class="fc" id="L80">    private static final Logger log = LoggerFactory.getLogger(MallTools.class);</span>
+<span class="fc" id="L81">    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern(&quot;yyyy-MM-dd HH:mm&quot;);</span>
 
     private final MallApiClient mallApi;
     private final List&lt;ToolCallback&gt; callbacks;
@@ -79,23 +88,23 @@ public class MallTools {
      *
      * @param mallApi 商城客户端
      */
-<span class="fc" id="L82">    public MallTools(MallApiClient mallApi) {</span>
-<span class="fc" id="L83">        this.mallApi = mallApi;</span>
+<span class="fc" id="L91">    public MallTools(MallApiClient mallApi) {</span>
+<span class="fc" id="L92">        this.mallApi = mallApi;</span>
         // ToolCallback = 工具定义（名字、说明、参数 Schema）+ 执行入口（JSON 参数 → 调方法 → 返回值转 JSON）。
         // 按名字排序：ToolCallbacks.from 靠反射找方法，JVM 不保证方法的先后顺序，每次启动工具清单的顺序都可能不同；
         // 顺序变了，发给模型的提示词就变了，小模型的决定可能跟着变，录制回放的指纹也对不上
-<span class="fc" id="L87">        this.callbacks = Arrays.stream(ToolCallbacks.from(this))</span>
-<span class="fc" id="L88">                .sorted(Comparator.comparing(c -&gt; c.getToolDefinition().name()))</span>
-<span class="fc" id="L89">                .toList();</span>
-<span class="fc" id="L90">    }</span>
+<span class="fc" id="L96">        this.callbacks = Arrays.stream(ToolCallbacks.from(this))</span>
+<span class="fc" id="L97">                .sorted(Comparator.comparing(c -&gt; c.getToolDefinition().name()))</span>
+<span class="fc" id="L98">                .toList();</span>
+<span class="fc" id="L99">    }</span>
 
     /**
      * 全部工具：注册给模型（原生工具调用）时用。
      *
-     * @return 两个工具的 ToolCallback，不可修改
+     * @return 全部工具的 ToolCallback（按名字排序），不可修改
      */
     public List&lt;ToolCallback&gt; callbacks() {
-<span class="fc" id="L98">        return callbacks;</span>
+<span class="fc" id="L107">        return callbacks;</span>
     }
 
     /**
@@ -106,10 +115,10 @@ public class MallTools {
      * @throws IllegalArgumentException 没有这个工具
      */
     public ToolCallback callback(String name) {
-<span class="fc" id="L109">        return callbacks.stream()</span>
-<span class="fc" id="L110">                .filter(c -&gt; c.getToolDefinition().name().equals(name))</span>
-<span class="fc" id="L111">                .findFirst()</span>
-<span class="pc" id="L112">                .orElseThrow(() -&gt; new IllegalArgumentException(&quot;没有名为 &quot; + name + &quot; 的工具&quot;));</span>
+<span class="fc" id="L118">        return callbacks.stream()</span>
+<span class="fc" id="L119">                .filter(c -&gt; c.getToolDefinition().name().equals(name))</span>
+<span class="fc" id="L120">                .findFirst()</span>
+<span class="pc" id="L121">                .orElseThrow(() -&gt; new IllegalArgumentException(&quot;没有名为 &quot; + name + &quot; 的工具&quot;));</span>
     }
 
     /**
@@ -119,7 +128,7 @@ public class MallTools {
      * @return 交给 {@code ChatClient...toolContext(...)} 或 {@code new ToolContext(...)} 的 Map，从不为空
      */
     public static Map&lt;String, Object&gt; context(String mallToken) {
-<span class="fc bfc" id="L122" title="All 2 branches covered.">        return mallToken == null ? Map.of(ANONYMOUS, true) : Map.of(MALL_TOKEN, mallToken);</span>
+<span class="fc bfc" id="L131" title="All 2 branches covered.">        return mallToken == null ? Map.of(ANONYMOUS, true) : Map.of(MALL_TOKEN, mallToken);</span>
     }
 
     /**
@@ -136,32 +145,99 @@ public class MallTools {
             name = &quot;queryOrderStatus&quot;,
             description = &quot;查询当前登录用户自己的一笔订单：订单状态、实付金额、商品、下单时间。&quot;
                     + &quot;用户问订单状态、发货了没有、到哪了、什么时候到时使用。&quot;
-                    + &quot;必须有用户给出的订单号才能调用；用户没给订单号时不要调用，先请用户提供订单号。&quot;
+                    + &quot;必须有用户给出的订单号才能调用；用户没给订单号时不要调用它，改用 listMyOrders。&quot;
                     + &quot;只能查到当前登录账号自己的订单，查不到物流轨迹。&quot;)
     public OrderLookup queryOrderStatus(
             @ToolParam(description = &quot;订单号：19 位或 23 位数字，从用户消息里原样照抄，不要编造、不要补位&quot;) String orderNo, ToolContext toolContext) {
-<span class="fc bfc" id="L143" title="All 2 branches covered.">        String no = orderNo == null ? null : orderNo.strip();</span>
-<span class="fc bfc" id="L144" title="All 4 branches covered.">        if (no == null || !ORDER_NO.matcher(no).matches()) {</span>
-<span class="fc" id="L145">            return OrderLookup.notFound(orderNo, &quot;订单号格式不对：应为 19 位或 23 位数字，请核对订单号&quot;);</span>
+<span class="fc bfc" id="L152" title="All 2 branches covered.">        String no = orderNo == null ? null : orderNo.strip();</span>
+<span class="fc bfc" id="L153" title="All 4 branches covered.">        if (no == null || !ORDER_NO.matcher(no).matches()) {</span>
+<span class="fc" id="L154">            return OrderLookup.notFound(orderNo, &quot;订单号格式不对：应为 19 位或 23 位数字，请核对订单号&quot;);</span>
         }
-<span class="fc" id="L147">        String token = token(toolContext);</span>
-<span class="fc bfc" id="L148" title="All 2 branches covered.">        if (token == null) {</span>
-<span class="fc" id="L149">            return OrderLookup.notFound(no, NOT_LOGGED_IN);</span>
+<span class="fc" id="L156">        String token = token(toolContext);</span>
+<span class="fc bfc" id="L157" title="All 2 branches covered.">        if (token == null) {</span>
+<span class="fc" id="L158">            return OrderLookup.notFound(no, NOT_LOGGED_IN);</span>
         }
-<span class="fc" id="L151">        MallResult&lt;MallModels.Order&gt; result = mallApi.getOrder(token, no);</span>
-<span class="fc bfc" id="L152" title="All 2 branches covered.">        if (result.isOk()) {</span>
-<span class="fc" id="L153">            MallModels.Order order = result.body();</span>
-<span class="fc" id="L154">            return new OrderLookup(</span>
+<span class="fc" id="L160">        MallResult&lt;MallModels.Order&gt; result = mallApi.getOrder(token, no);</span>
+<span class="fc bfc" id="L161" title="All 2 branches covered.">        if (result.isOk()) {</span>
+<span class="fc" id="L162">            MallModels.Order order = result.body();</span>
+<span class="fc" id="L163">            return new OrderLookup(</span>
                     true,
                     null,
-<span class="fc" id="L157">                    order.orderNo(),</span>
-<span class="fc" id="L158">                    OrderStatusText.describe(order.status()),</span>
-<span class="fc" id="L159">                    order.payAmount(),</span>
-<span class="fc" id="L160">                    summarize(order.items()),</span>
-<span class="pc bpc" id="L161" title="1 of 2 branches missed.">                    order.createdAt() == null ? null : order.createdAt().format(TIME),</span>
+<span class="fc" id="L166">                    order.orderNo(),</span>
+<span class="fc" id="L167">                    OrderStatusText.describe(order.status()),</span>
+<span class="fc" id="L168">                    order.payAmount(),</span>
+<span class="fc" id="L169">                    summarize(order.items()),</span>
+<span class="pc bpc" id="L170" title="1 of 2 branches missed.">                    order.createdAt() == null ? null : order.createdAt().format(TIME),</span>
                     OrderLookup.NO_LOGISTICS);
         }
-<span class="fc" id="L164">        return OrderLookup.notFound(no, orderFailureReason(no, result));</span>
+<span class="fc" id="L173">        return OrderLookup.notFound(no, orderFailureReason(no, result));</span>
+    }
+
+    /**
+     * 列出当前登录用户最近的几笔订单。第 3 章补充。
+     *
+     * &lt;p&gt;为什么需要它：用户很少记得订单号，更常见的问法是「我有哪些订单」「我昨天买的东西到哪了」。只有 {@link #queryOrderStatus}
+     * 时，模型只能反问「请提供订单号」；有了这个工具，先把最近的订单列给用户，让用户挑一笔。
+     *
+     * &lt;p&gt;步骤：从 ToolContext 取令牌（没有就「请先登录」，不发请求）→ 把模型填的 size 收紧到 1～{@value #MAX_LIST_SIZE}
+     * （没填按 {@value #DEFAULT_LIST_SIZE}）→ 调商城的「我的订单」列表 → 逐笔补查商品摘要 → 翻成 {@link OrderListLookup}。
+     *
+     * &lt;p&gt;&lt;b&gt;为什么要逐笔补查&lt;/b&gt;：商城的列表接口只有订单号、状态、金额、时间，没有商品；而用户认订单靠的是「买的什么」
+     * （「红心柚那单」），只给一串 23 位数字很难挑。所以对列出的每笔订单再查一次详情（典型的 N+1 请求，最多 1 + 10 次，
+     * 本机每次几毫秒到几十毫秒）。补查是「尽力而为」：某一笔补查失败，这笔就不带商品摘要，并且不再补查后面的
+     * （商城多半出了问题，别让用户多等）；订单本身照常列出。更好的做法是让商城的列表接口直接返回商品摘要，那是商城那边的改动。
+     *
+     * @param size 最多列几笔，模型填的，可能为 null 或越界
+     * @param toolContext Spring AI 执行工具时传入，里面是 {@link #MALL_TOKEN} 或 {@link #ANONYMOUS}；代码直接调用时也可能传 null
+     * @return 查询结果，从不抛异常
+     */
+    @Tool(
+            name = &quot;listMyOrders&quot;,
+            description = &quot;列出当前登录用户最近的订单：订单号、状态、实付金额、商品、下单时间。&quot;
+                    + &quot;用户问订单但没给订单号时使用，如「我有哪些订单」「我昨天买的东西到哪了」。&quot;
+                    + &quot;只能列出当前登录账号自己的订单，查不到物流轨迹。&quot;)
+    public OrderListLookup listMyOrders(
+            @ToolParam(description = &quot;最多列出几笔，1 到 10，默认 5&quot;, required = false) Integer size, ToolContext toolContext) {
+<span class="fc" id="L201">        String token = token(toolContext);</span>
+<span class="fc bfc" id="L202" title="All 2 branches covered.">        if (token == null) {</span>
+<span class="fc" id="L203">            return OrderListLookup.notFound(NOT_LOGGED_IN);</span>
+        }
+<span class="fc bfc" id="L205" title="All 2 branches covered.">        int limit = size == null ? DEFAULT_LIST_SIZE : Math.clamp(size, 1, MAX_LIST_SIZE);</span>
+<span class="fc" id="L206">        MallResult&lt;MallModels.OrderPage&gt; result = mallApi.listOrders(token, limit);</span>
+<span class="fc bfc" id="L207" title="All 2 branches covered.">        if (!result.isOk()) {</span>
+<span class="fc" id="L208">            return OrderListLookup.notFound(</span>
+<span class="fc bfc" id="L209" title="All 2 branches covered.">                    switch (result.failure()) {</span>
+<span class="fc" id="L210">                        case UNAUTHORIZED -&gt; LOGIN_EXPIRED;</span>
+                        case NOT_FOUND, REJECTED, UNAVAILABLE -&gt; {
+<span class="fc" id="L212">                            log.warn(&quot;列订单失败：{}，code={}&quot;, result.failure(), result.code());</span>
+<span class="fc" id="L213">                            yield MALL_UNAVAILABLE;</span>
+                        }
+                    });
+        }
+<span class="fc" id="L217">        List&lt;MallModels.OrderListItem&gt; items =</span>
+<span class="fc" id="L218">                Objects.requireNonNullElse(result.body().items(), List.of());</span>
+<span class="fc" id="L219">        List&lt;OrderListLookup.Brief&gt; orders = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L220">        boolean enrich = true;</span>
+        // 商城自己也会限制条数，这里再截一次：万一商城多给了，也不把超出的塞给模型
+<span class="fc bfc" id="L222" title="All 2 branches covered.">        for (MallModels.OrderListItem item : items.subList(0, Math.min(items.size(), limit))) {</span>
+<span class="fc" id="L223">            String summary = null;</span>
+<span class="fc bfc" id="L224" title="All 2 branches covered.">            if (enrich) {</span>
+<span class="fc" id="L225">                MallResult&lt;MallModels.Order&gt; detail = mallApi.getOrder(token, item.orderNo());</span>
+<span class="fc bfc" id="L226" title="All 2 branches covered.">                if (detail.isOk()) {</span>
+<span class="fc" id="L227">                    summary = summarize(detail.body().items());</span>
+                } else {
+<span class="fc" id="L229">                    enrich = false;</span>
+<span class="fc" id="L230">                    log.info(&quot;补查订单商品失败，后面的订单不再补查：{}，code={}&quot;, detail.failure(), detail.code());</span>
+                }
+            }
+<span class="fc" id="L233">            orders.add(new OrderListLookup.Brief(</span>
+<span class="fc" id="L234">                    item.orderNo(),</span>
+<span class="fc" id="L235">                    OrderStatusText.describe(item.status()),</span>
+<span class="fc" id="L236">                    item.payAmount(),</span>
+                    summary,
+<span class="pc bpc" id="L238" title="1 of 2 branches missed.">                    item.createdAt() == null ? null : item.createdAt().format(TIME)));</span>
+<span class="fc" id="L239">        }</span>
+<span class="pc bpc" id="L240" title="1 of 4 branches missed.">        return OrderListLookup.of(List.copyOf(orders), result.body().hasMore() || items.size() &gt; limit);</span>
     }
 
     /**
@@ -175,59 +251,59 @@ public class MallTools {
             description =
                     &quot;按商品编号（SKU，一串数字，如 20001）查询商品的名称、价格、是否在售、是否有货。&quot; + &quot;用户问某个商品多少钱、有没有货、还卖不卖时使用。用户没给商品编号时不要调用，请用户提供商品编号。&quot;)
     public ProductLookup queryProduct(@ToolParam(description = &quot;商品编号 SKU：一串数字，如 20001，从用户消息里原样照抄&quot;) String skuId) {
-<span class="pc bpc" id="L178" title="1 of 2 branches missed.">        String id = skuId == null ? null : skuId.strip();</span>
-<span class="pc bpc" id="L179" title="1 of 4 branches missed.">        if (id == null || !SKU_ID.matcher(id).matches()) {</span>
-<span class="fc" id="L180">            return ProductLookup.notFound(skuId, &quot;商品编号格式不对：应为一串数字，如 20001&quot;);</span>
+<span class="pc bpc" id="L254" title="1 of 2 branches missed.">        String id = skuId == null ? null : skuId.strip();</span>
+<span class="pc bpc" id="L255" title="1 of 4 branches missed.">        if (id == null || !SKU_ID.matcher(id).matches()) {</span>
+<span class="fc" id="L256">            return ProductLookup.notFound(skuId, &quot;商品编号格式不对：应为一串数字，如 20001&quot;);</span>
         }
-<span class="fc" id="L182">        MallResult&lt;MallModels.ProductPage&gt; result = mallApi.getProduct(id);</span>
-<span class="fc bfc" id="L183" title="All 2 branches covered.">        if (result.isOk()) {</span>
-<span class="fc" id="L184">            MallModels.Product product = result.body().product();</span>
-<span class="fc" id="L185">            return new ProductLookup(</span>
+<span class="fc" id="L258">        MallResult&lt;MallModels.ProductPage&gt; result = mallApi.getProduct(id);</span>
+<span class="fc bfc" id="L259" title="All 2 branches covered.">        if (result.isOk()) {</span>
+<span class="fc" id="L260">            MallModels.Product product = result.body().product();</span>
+<span class="fc" id="L261">            return new ProductLookup(</span>
                     true,
                     null,
-<span class="fc" id="L188">                    product.skuId(),</span>
-<span class="fc" id="L189">                    product.name(),</span>
-<span class="fc" id="L190">                    product.price(),</span>
-<span class="fc" id="L191">                    product.onShelf(),</span>
-<span class="fc" id="L192">                    result.body().inStock());</span>
+<span class="fc" id="L264">                    product.skuId(),</span>
+<span class="fc" id="L265">                    product.name(),</span>
+<span class="fc" id="L266">                    product.price(),</span>
+<span class="fc" id="L267">                    product.onShelf(),</span>
+<span class="fc" id="L268">                    result.body().inStock());</span>
         }
-<span class="pc bpc" id="L194" title="1 of 3 branches missed.">        return switch (result.failure()) {</span>
-<span class="fc" id="L195">            case NOT_FOUND -&gt; ProductLookup.notFound(id, &quot;没有编号为 &quot; + id + &quot; 的商品&quot;);</span>
-<span class="nc" id="L196">            case REJECTED -&gt; ProductLookup.notFound(id, &quot;商品编号不合法&quot;);</span>
+<span class="pc bpc" id="L270" title="1 of 3 branches missed.">        return switch (result.failure()) {</span>
+<span class="fc" id="L271">            case NOT_FOUND -&gt; ProductLookup.notFound(id, &quot;没有编号为 &quot; + id + &quot; 的商品&quot;);</span>
+<span class="nc" id="L272">            case REJECTED -&gt; ProductLookup.notFound(id, &quot;商品编号不合法&quot;);</span>
             default -&gt; {
-<span class="fc" id="L198">                log.warn(&quot;查商品失败：skuId={}，{}，code={}&quot;, id, result.failure(), result.code());</span>
-<span class="fc" id="L199">                yield ProductLookup.notFound(id, MALL_UNAVAILABLE);</span>
+<span class="fc" id="L274">                log.warn(&quot;查商品失败：skuId={}，{}，code={}&quot;, id, result.failure(), result.code());</span>
+<span class="fc" id="L275">                yield ProductLookup.notFound(id, MALL_UNAVAILABLE);</span>
             }
         };
     }
 
     /** 查订单失败 → 能直接说给用户听的原因。 */
     private static String orderFailureReason(String orderNo, MallResult&lt;?&gt; result) {
-<span class="pc bpc" id="L206" title="1 of 4 branches missed.">        return switch (result.failure()) {</span>
-<span class="fc" id="L207">            case NOT_FOUND -&gt; &quot;没有找到订单 &quot; + orderNo + &quot;：订单号不存在，或者不是当前登录账号的订单（只能查自己的订单）&quot;;</span>
-<span class="fc" id="L208">            case UNAUTHORIZED -&gt; LOGIN_EXPIRED;</span>
-<span class="nc" id="L209">            case REJECTED -&gt; &quot;订单号不合法，请核对订单号&quot;;</span>
+<span class="pc bpc" id="L282" title="1 of 4 branches missed.">        return switch (result.failure()) {</span>
+<span class="fc" id="L283">            case NOT_FOUND -&gt; &quot;没有找到订单 &quot; + orderNo + &quot;：订单号不存在，或者不是当前登录账号的订单（只能查自己的订单）&quot;;</span>
+<span class="fc" id="L284">            case UNAUTHORIZED -&gt; LOGIN_EXPIRED;</span>
+<span class="nc" id="L285">            case REJECTED -&gt; &quot;订单号不合法，请核对订单号&quot;;</span>
             case UNAVAILABLE -&gt; {
-<span class="fc" id="L211">                log.warn(&quot;查订单失败：商城不可用，code={}&quot;, result.code());</span>
-<span class="fc" id="L212">                yield MALL_UNAVAILABLE;</span>
+<span class="fc" id="L287">                log.warn(&quot;查订单失败：商城不可用，code={}&quot;, result.code());</span>
+<span class="fc" id="L288">                yield MALL_UNAVAILABLE;</span>
             }
         };
     }
 
     /** 从 ToolContext 取令牌；没有 ToolContext、或里面没有令牌时返回 null。 */
     static String token(ToolContext toolContext) {
-<span class="pc bpc" id="L219" title="1 of 4 branches missed.">        if (toolContext == null || toolContext.getContext() == null) {</span>
-<span class="fc" id="L220">            return null;</span>
+<span class="pc bpc" id="L295" title="1 of 4 branches missed.">        if (toolContext == null || toolContext.getContext() == null) {</span>
+<span class="fc" id="L296">            return null;</span>
         }
-<span class="pc bpc" id="L222" title="1 of 4 branches missed.">        return toolContext.getContext().get(MALL_TOKEN) instanceof String token &amp;&amp; !token.isBlank() ? token : null;</span>
+<span class="pc bpc" id="L298" title="1 of 4 branches missed.">        return toolContext.getContext().get(MALL_TOKEN) instanceof String token &amp;&amp; !token.isBlank() ? token : null;</span>
     }
 
     /** 商品摘要：「商品名 ×数量」，多件用顿号连接。 */
     static String summarize(List&lt;MallModels.OrderItem&gt; items) {
-<span class="pc bpc" id="L227" title="2 of 4 branches missed.">        if (items == null || items.isEmpty()) {</span>
-<span class="nc" id="L228">            return null;</span>
+<span class="pc bpc" id="L303" title="2 of 4 branches missed.">        if (items == null || items.isEmpty()) {</span>
+<span class="nc" id="L304">            return null;</span>
         }
-<span class="fc" id="L230">        return items.stream().map(i -&gt; i.productName() + &quot; ×&quot; + i.quantity()).collect(Collectors.joining(&quot;、&quot;));</span>
+<span class="fc" id="L306">        return items.stream().map(i -&gt; i.productName() + &quot; ×&quot; + i.quantity()).collect(Collectors.joining(&quot;、&quot;));</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

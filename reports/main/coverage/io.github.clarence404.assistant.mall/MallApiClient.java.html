@@ -12,7 +12,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 /**
- * 调商城（mall-evolution）网关的 HTTP 客户端：登录、查自己的订单、查商品。每个方法都返回 {@link MallResult}，不抛异常。
+ * 调商城（mall-evolution）网关的 HTTP 客户端：登录、查自己的订单、列出自己最近的订单、查商品。每个方法都返回 {@link MallResult}，不抛异常。
  *
  * &lt;p&gt;所在层：外部系统接入（第 3 章引入）。上游是 {@code tool.MallTools}（模型调用的工具）和 {@link MallLoginController}
  * （页面登录）；下游是商城网关 {@code assistant.mall.base-url}（默认 {@code http://localhost:9000}）。
@@ -82,13 +82,30 @@ public class MallApiClient {
     }
 
     /**
+     * 列出当前登录用户最近的订单：{@code GET /api/orders?size=N}，带 {@code Authorization: Bearer &lt;令牌&gt;}。第 3 章补充。
+     *
+     * &lt;p&gt;只取第一页（最近的 N 笔），不传游标、不按状态过滤。和 {@link #getOrder} 一样，用户是谁由商城从令牌里解析，
+     * 接口不接受「用户 ID」参数，所以这里也列不出别人的订单。
+     *
+     * @param accessToken 用户的访问令牌
+     * @param size 每页条数，调用方已限制在合理范围（商城自己也会再收紧到 1～50）
+     * @return 成功时是一页订单（可能为空列表）；令牌无效或过期是 {@link MallFailure#UNAUTHORIZED}
+     */
+    public MallResult&lt;MallModels.OrderPage&gt; listOrders(String accessToken, int size) {
+<span class="fc" id="L95">        return exchange(</span>
+                &quot;列订单&quot;,
+<span class="fc" id="L97">                rest.get().uri(&quot;/api/orders?size={size}&quot;, size).headers(h -&gt; h.setBearerAuth(accessToken)),</span>
+                MallModels.OrderPage.class);
+    }
+
+    /**
      * 查商品详情与是否有货：{@code GET /api/products/{skuId}}，匿名可查。
      *
      * @param skuId 商品编号，已校验过是数字
      * @return 成功时是商品与库存展示；不存在是 {@link MallFailure#NOT_FOUND}
      */
     public MallResult&lt;MallModels.ProductPage&gt; getProduct(String skuId) {
-<span class="fc" id="L91">        return exchange(&quot;查商品&quot;, rest.get().uri(&quot;/api/products/{skuId}&quot;, skuId), MallModels.ProductPage.class);</span>
+<span class="fc" id="L108">        return exchange(&quot;查商品&quot;, rest.get().uri(&quot;/api/products/{skuId}&quot;, skuId), MallModels.ProductPage.class);</span>
     }
 
     /**
@@ -104,47 +121,47 @@ public class MallApiClient {
      * @return 成功或失败的结果，从不返回 null
      */
     &lt;T&gt; MallResult&lt;T&gt; exchange(String action, RestClient.RequestHeadersSpec&lt;?&gt; request, Class&lt;T&gt; type) {
-<span class="fc" id="L107">        long start = System.nanoTime();</span>
+<span class="fc" id="L124">        long start = System.nanoTime();</span>
         try {
             // exchange 拿到原始响应自己处理：默认的 retrieve() 遇到 4xx / 5xx 会直接抛异常，这里要按状态码分类，不想靠异常走流程
-<span class="fc" id="L110">            MallResult&lt;T&gt; result = request.exchange((req, res) -&gt; {</span>
-<span class="fc" id="L111">                HttpStatusCode status = res.getStatusCode();</span>
-<span class="fc bfc" id="L112" title="All 2 branches covered.">                if (status.is2xxSuccessful()) {</span>
-<span class="fc" id="L113">                    T body = res.bodyTo(type);</span>
-<span class="pc bpc" id="L114" title="1 of 2 branches missed.">                    return body != null</span>
-<span class="fc" id="L115">                            ? MallResult.ok(body)</span>
-<span class="nc" id="L116">                            : MallResult.failed(MallFailure.UNAVAILABLE, null, &quot;响应体为空&quot;);</span>
+<span class="fc" id="L127">            MallResult&lt;T&gt; result = request.exchange((req, res) -&gt; {</span>
+<span class="fc" id="L128">                HttpStatusCode status = res.getStatusCode();</span>
+<span class="fc bfc" id="L129" title="All 2 branches covered.">                if (status.is2xxSuccessful()) {</span>
+<span class="fc" id="L130">                    T body = res.bodyTo(type);</span>
+<span class="pc bpc" id="L131" title="1 of 2 branches missed.">                    return body != null</span>
+<span class="fc" id="L132">                            ? MallResult.ok(body)</span>
+<span class="nc" id="L133">                            : MallResult.failed(MallFailure.UNAVAILABLE, null, &quot;响应体为空&quot;);</span>
                 }
-<span class="fc" id="L118">                MallModels.Problem problem = readProblem(res);</span>
-<span class="fc" id="L119">                return MallResult.failed(classify(status), problem.code(), problem.detail());</span>
+<span class="fc" id="L135">                MallModels.Problem problem = readProblem(res);</span>
+<span class="fc" id="L136">                return MallResult.failed(classify(status), problem.code(), problem.detail());</span>
             });
-<span class="fc" id="L121">            long ms = (System.nanoTime() - start) / 1_000_000;</span>
-<span class="fc bfc" id="L122" title="All 2 branches covered.">            if (result.isOk()) {</span>
-<span class="fc" id="L123">                log.debug(&quot;商城接口{}成功：{} ms&quot;, action, ms);</span>
+<span class="fc" id="L138">            long ms = (System.nanoTime() - start) / 1_000_000;</span>
+<span class="fc bfc" id="L139" title="All 2 branches covered.">            if (result.isOk()) {</span>
+<span class="fc" id="L140">                log.debug(&quot;商城接口{}成功：{} ms&quot;, action, ms);</span>
             } else {
-<span class="fc" id="L125">                log.info(&quot;商城接口{}失败：{}，code={}，{} ms&quot;, action, result.failure(), result.code(), ms);</span>
+<span class="fc" id="L142">                log.info(&quot;商城接口{}失败：{}，code={}，{} ms&quot;, action, result.failure(), result.code(), ms);</span>
             }
-<span class="fc" id="L127">            return result;</span>
-<span class="fc" id="L128">        } catch (RestClientException | HttpMessageConversionException e) {</span>
+<span class="fc" id="L144">            return result;</span>
+<span class="fc" id="L145">        } catch (RestClientException | HttpMessageConversionException e) {</span>
             // RestClientException 含 ResourceAccessException（连接被拒、超时）；HttpMessageConversionException 是响应体解析不了
-<span class="fc" id="L130">            log.warn(&quot;商城接口{}调用失败：{}&quot;, action, e.getMessage());</span>
-<span class="fc" id="L131">            return MallResult.failed(MallFailure.UNAVAILABLE, null, e.getMessage());</span>
+<span class="fc" id="L147">            log.warn(&quot;商城接口{}调用失败：{}&quot;, action, e.getMessage());</span>
+<span class="fc" id="L148">            return MallResult.failed(MallFailure.UNAVAILABLE, null, e.getMessage());</span>
         }
     }
 
     /** 状态码归类，见 {@link #exchange} 的说明。 */
     static MallFailure classify(HttpStatusCode status) {
-<span class="fc" id="L137">        int code = status.value();</span>
-<span class="pc bpc" id="L138" title="1 of 4 branches missed.">        if (code == 401 || code == 403) {</span>
-<span class="fc" id="L139">            return MallFailure.UNAUTHORIZED;</span>
+<span class="fc" id="L154">        int code = status.value();</span>
+<span class="pc bpc" id="L155" title="1 of 4 branches missed.">        if (code == 401 || code == 403) {</span>
+<span class="fc" id="L156">            return MallFailure.UNAUTHORIZED;</span>
         }
-<span class="fc bfc" id="L141" title="All 2 branches covered.">        if (code == 404) {</span>
-<span class="fc" id="L142">            return MallFailure.NOT_FOUND;</span>
+<span class="fc bfc" id="L158" title="All 2 branches covered.">        if (code == 404) {</span>
+<span class="fc" id="L159">            return MallFailure.NOT_FOUND;</span>
         }
-<span class="pc bpc" id="L144" title="1 of 4 branches missed.">        if (code == 429 || status.is5xxServerError()) {</span>
-<span class="fc" id="L145">            return MallFailure.UNAVAILABLE;</span>
+<span class="pc bpc" id="L161" title="1 of 4 branches missed.">        if (code == 429 || status.is5xxServerError()) {</span>
+<span class="fc" id="L162">            return MallFailure.UNAVAILABLE;</span>
         }
-<span class="fc" id="L147">        return MallFailure.REJECTED;</span>
+<span class="fc" id="L164">        return MallFailure.REJECTED;</span>
     }
 
     /**
@@ -152,10 +169,10 @@ public class MallApiClient {
      */
     private static MallModels.Problem readProblem(RestClient.RequestHeadersSpec.ConvertibleClientHttpResponse res) {
         try {
-<span class="fc" id="L155">            MallModels.Problem problem = res.bodyTo(MallModels.Problem.class);</span>
-<span class="fc bfc" id="L156" title="All 2 branches covered.">            return problem != null ? problem : new MallModels.Problem(null, null);</span>
-<span class="nc" id="L157">        } catch (RestClientException | HttpMessageConversionException e) {</span>
-<span class="nc" id="L158">            return new MallModels.Problem(null, null);</span>
+<span class="fc" id="L172">            MallModels.Problem problem = res.bodyTo(MallModels.Problem.class);</span>
+<span class="fc bfc" id="L173" title="All 2 branches covered.">            return problem != null ? problem : new MallModels.Problem(null, null);</span>
+<span class="nc" id="L174">        } catch (RestClientException | HttpMessageConversionException e) {</span>
+<span class="nc" id="L175">            return new MallModels.Problem(null, null);</span>
         }
     }
 }
