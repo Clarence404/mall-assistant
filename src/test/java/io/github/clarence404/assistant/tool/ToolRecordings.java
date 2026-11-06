@@ -196,12 +196,12 @@ final class ToolRecordings {
         }
     }
 
-    /** 参数是否与标注一致：按 JSON 比较（键的顺序、空白不影响），值统一按字符串比（模型可能把 20001 写成数字）。 */
+    /**
+     * 参数是否与标注一致：按 JSON 比较（键的顺序、空白不影响），值统一按字符串比（模型可能把 20001 写成数字）。
+     * 只比标注里写了的键：可选参数（如 listMyOrders 的 size）模型填不填都算对（第 3 章补充）。
+     */
     static boolean sameArguments(String argumentsJson, Map<String, String> expected) {
         JsonNode actual = JSON.readTree(argumentsJson);
-        if (actual.size() != expected.size()) {
-            return false;
-        }
         return expected.entrySet().stream()
                 .allMatch(e -> actual.has(e.getKey())
                         && e.getValue().equals(actual.get(e.getKey()).asString()));

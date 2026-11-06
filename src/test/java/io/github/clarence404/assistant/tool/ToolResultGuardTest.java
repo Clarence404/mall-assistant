@@ -6,7 +6,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
- * 第 3 章：回答的事后检查 {@link ToolResultGuard}：工具说没查到订单，回答却说出了订单状态，就换成工具给的原因；回答是一段没被识别的调用意图 JSON，换成请用户重说。
+ * 第 3 章：回答的事后检查 {@link ToolResultGuard}：查订单的工具（查一笔、列出最近的）都说没查到，回答却说出了订单状态，就换成工具给的原因；回答是一段没被识别的调用意图 JSON，换成请用户重说。
  *
  * <p>手法：直接构造工具调用记录（结果是工具会返回的 JSON），不需要模型。只在最有把握的情况下改写，其余原样放过。
  */
@@ -47,6 +47,28 @@ class ToolResultGuardTest {
         String reply = "您还没有登录，请先登录后再查订单。";
 
         assertThat(ToolResultGuard.check(reply, List.of(NOT_LOGGED_IN))).isEqualTo(reply);
+    }
+
+    /** 第 3 章补充：列订单也算查订单的工具。没登录时列表没查成，回答却列出了「待发货」的订单，同样改写。 */
+    @Test
+    void inventedStatusAfterFailedOrderListIsReplaced() {
+        ToolInvocation listNotLoggedIn = new ToolInvocation(
+                "listMyOrders",
+                ToolInvocation.Source.DIRECT,
+                "{\"size\":5}",
+                "{\"found\":false,\"reason\":\"还没有登录，查不了订单：请先在页面右上角登录商城账号\"}",
+                1);
+        ToolInvocation listFound = new ToolInvocation(
+                "listMyOrders",
+                ToolInvocation.Source.DIRECT,
+                "{\"size\":5}",
+                "{\"found\":true,\"orders\":[{\"status\":\"待发货（已付款，商家还没发货）\"}]}",
+                9);
+
+        assertThat(ToolResultGuard.check("您有一笔待发货的订单。", List.of(listNotLoggedIn)))
+                .startsWith("抱歉，")
+                .contains("请先在页面右上角登录");
+        assertThat(ToolResultGuard.check("您有一笔待发货的订单。", List.of(listFound))).isEqualTo("您有一笔待发货的订单。");
     }
 
     @Test

@@ -12,7 +12,8 @@ import tools.jackson.databind.json.JsonMapper;
  * 回答的事后检查（很粗的一道防幻觉），只处理两种最有把握的情况：
  *
  * <ul>
- *   <li>查订单的工具说「没查到」，回答里却出现了「已发货」「待发货」这类状态词：模型无视了工具结果、编了一个状态，换成工具给出的原因
+ *   <li>查订单的工具（{@code queryOrderStatus}、第 3 章补充的 {@code listMyOrders}）都说「没查到」，回答里却出现了「已发货」「待发货」
+ *       这类状态词：模型无视了工具结果、编了一个状态，换成工具给出的原因
  *   <li>回答本身就是一段 {@code {"name": "...", "arguments": {...}}}：小模型想调工具，却没按约定的格式输出，Ollama 没认出这是调用意图，
  *       把它当普通文字返回了（本章录制时 qwen2.5:1.5b 就出现过）。这段 JSON 不能给用户看，换成一句请用户重新说的话
  * </ul>
@@ -27,6 +28,9 @@ public final class ToolResultGuard {
 
     private static final Logger log = LoggerFactory.getLogger(ToolResultGuard.class);
     private static final JsonMapper JSON = JsonMapper.builder().build();
+    /** 查订单的工具：它们的结果都有 found / reason 字段，状态词只能来自它们。 */
+    private static final List<String> ORDER_TOOLS = List.of("queryOrderStatus", "listMyOrders");
+
     private static final Pattern LEAKED_TOOL_CALL =
             Pattern.compile("^\\s*\\{\\s*\"name\"\\s*:.*\"arguments\".*}\\s*$", Pattern.DOTALL);
 
@@ -48,9 +52,8 @@ public final class ToolResultGuard {
             log.warn("模型把调用意图当成文字输出了，没有执行任何工具：{}", reply);
             return LEAKED_TOOL_CALL_REPLY;
         }
-        List<ToolInvocation> orderLookups = invocations.stream()
-                .filter(i -> "queryOrderStatus".equals(i.name()))
-                .toList();
+        List<ToolInvocation> orderLookups =
+                invocations.stream().filter(i -> ORDER_TOOLS.contains(i.name())).toList();
         if (orderLookups.isEmpty() || orderLookups.stream().anyMatch(i -> found(i.result()))) {
             return reply;
         }

@@ -55,6 +55,24 @@ class ToolApiTest extends FakeModelWebTest {
         assertThat(body).doesNotContain(StubMallApi.TOKEN);
     }
 
+    /** 第 3 章补充：没给订单号时直接列出最近的订单，记录照样出现在 tools 字段里，页面调试面板不用改就能显示。 */
+    @Test
+    void orderQuestionWithoutOrderNoReturnsListRecord() throws Exception {
+        model.willClassify("{\"intent\":\"ORDER_STATUS\",\"confidence\":0.9,\"orderNo\":null,\"skuId\":null}");
+
+        String body = mockMvc.perform(chat("我有哪些订单").header(HttpHeaders.AUTHORIZATION, "Bearer " + StubMallApi.TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tools.length()").value(1))
+                .andExpect(jsonPath("$.tools[0].name").value("listMyOrders"))
+                .andExpect(jsonPath("$.tools[0].source").value("DIRECT"))
+                .andExpect(jsonPath("$.tools[0].result").value(containsString(StubMallApi.COMPLETED_ORDER_NO)))
+                .andReturn()
+                .getResponse()
+                .getContentAsString(StandardCharsets.UTF_8);
+
+        assertThat(body).doesNotContain(StubMallApi.TOKEN);
+    }
+
     /** 意图识别没抽到 SKU，由模型自己决定调 queryProduct；商品匿名可查。 */
     @Test
     void modelCanCallToolThroughHttpWithoutLogin() throws Exception {

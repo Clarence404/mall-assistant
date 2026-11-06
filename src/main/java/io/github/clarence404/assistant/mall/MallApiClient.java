@@ -12,7 +12,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 /**
- * 调商城（mall-evolution）网关的 HTTP 客户端：登录、查自己的订单、查商品。每个方法都返回 {@link MallResult}，不抛异常。
+ * 调商城（mall-evolution）网关的 HTTP 客户端：登录、查自己的订单、列出自己最近的订单、查商品。每个方法都返回 {@link MallResult}，不抛异常。
  *
  * <p>所在层：外部系统接入（第 3 章引入）。上游是 {@code tool.MallTools}（模型调用的工具）和 {@link MallLoginController}
  * （页面登录）；下游是商城网关 {@code assistant.mall.base-url}（默认 {@code http://localhost:9000}）。
@@ -79,6 +79,23 @@ public class MallApiClient {
                 "查订单",
                 rest.get().uri("/api/orders/{orderNo}", orderNo).headers(h -> h.setBearerAuth(accessToken)),
                 MallModels.Order.class);
+    }
+
+    /**
+     * 列出当前登录用户最近的订单：{@code GET /api/orders?size=N}，带 {@code Authorization: Bearer <令牌>}。第 3 章补充。
+     *
+     * <p>只取第一页（最近的 N 笔），不传游标、不按状态过滤。和 {@link #getOrder} 一样，用户是谁由商城从令牌里解析，
+     * 接口不接受「用户 ID」参数，所以这里也列不出别人的订单。
+     *
+     * @param accessToken 用户的访问令牌
+     * @param size 每页条数，调用方已限制在合理范围（商城自己也会再收紧到 1～50）
+     * @return 成功时是一页订单（可能为空列表）；令牌无效或过期是 {@link MallFailure#UNAUTHORIZED}
+     */
+    public MallResult<MallModels.OrderPage> listOrders(String accessToken, int size) {
+        return exchange(
+                "列订单",
+                rest.get().uri("/api/orders?size={size}", size).headers(h -> h.setBearerAuth(accessToken)),
+                MallModels.OrderPage.class);
     }
 
     /**

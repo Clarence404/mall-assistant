@@ -4,10 +4,12 @@ import io.github.clarence404.assistant.mall.MallApiClient;
 import io.github.clarence404.assistant.mall.MallModels;
 import io.github.clarence404.assistant.mall.MallResult;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -20,7 +22,8 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 /**
- * 智能客服能调用的两个工具：查订单 {@link #queryOrderStatus}、查商品 {@link #queryProduct}。
+ * 智能客服能调用的三个工具：查一笔订单 {@link #queryOrderStatus}、列出我最近的订单 {@link #listMyOrders}（第 3 章补充）、
+ * 查商品 {@link #queryProduct}。
  *
  * <p>所在层：工具（第 3 章引入）。上游是 Spring AI 的工具调用循环（模型决定调用时）和 {@code ChatService} 的「按意图直接查询」；
  * 下游是 {@link MallApiClient}。
@@ -68,6 +71,12 @@ public class MallTools {
     static final String LOGIN_EXPIRED = "登录已过期或无效，请重新登录后再查";
     static final String MALL_UNAVAILABLE = "商城服务暂时不可用，请稍后再试";
 
+    /** {@link #listMyOrders} 默认列几笔：够用户认出「是哪一笔」，又不至于让结果太长（结果越长，占的 token 越多，小模型越容易漏看）。 */
+    public static final int DEFAULT_LIST_SIZE = 5;
+
+    /** {@link #listMyOrders} 最多列几笔：size 是模型填的，可能填 100，在工具里收紧，不靠参数说明约束模型。 */
+    static final int MAX_LIST_SIZE = 10;
+
     private static final Logger log = LoggerFactory.getLogger(MallTools.class);
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
@@ -92,7 +101,7 @@ public class MallTools {
     /**
      * 全部工具：注册给模型（原生工具调用）时用。
      *
-     * @return 两个工具的 ToolCallback，不可修改
+     * @return 全部工具的 ToolCallback（按名字排序），不可修改
      */
     public List<ToolCallback> callbacks() {
         return callbacks;
@@ -136,7 +145,7 @@ public class MallTools {
             name = "queryOrderStatus",
             description = "查询当前登录用户自己的一笔订单：订单状态、实付金额、商品、下单时间。"
                     + "用户问订单状态、发货了没有、到哪了、什么时候到时使用。"
-                    + "必须有用户给出的订单号才能调用；用户没给订单号时不要调用，先请用户提供订单号。"
+                    + "必须有用户给出的订单号才能调用；用户没给订单号时不要调用它，改用 listMyOrders。"
                     + "只能查到当前登录账号自己的订单，查不到物流轨迹。")
     public OrderLookup queryOrderStatus(
             @ToolParam(description = "订单号：19 位或 23 位数字，从用户消息里原样照抄，不要编造、不要补位") String orderNo, ToolContext toolContext) {
@@ -162,6 +171,73 @@ public class MallTools {
                     OrderLookup.NO_LOGISTICS);
         }
         return OrderLookup.notFound(no, orderFailureReason(no, result));
+    }
+
+    /**
+     * 列出当前登录用户最近的几笔订单。第 3 章补充。
+     *
+     * <p>为什么需要它：用户很少记得订单号，更常见的问法是「我有哪些订单」「我昨天买的东西到哪了」。只有 {@link #queryOrderStatus}
+     * 时，模型只能反问「请提供订单号」；有了这个工具，先把最近的订单列给用户，让用户挑一笔。
+     *
+     * <p>步骤：从 ToolContext 取令牌（没有就「请先登录」，不发请求）→ 把模型填的 size 收紧到 1～{@value #MAX_LIST_SIZE}
+     * （没填按 {@value #DEFAULT_LIST_SIZE}）→ 调商城的「我的订单」列表 → 逐笔补查商品摘要 → 翻成 {@link OrderListLookup}。
+     *
+     * <p><b>为什么要逐笔补查</b>：商城的列表接口只有订单号、状态、金额、时间，没有商品；而用户认订单靠的是「买的什么」
+     * （「红心柚那单」），只给一串 23 位数字很难挑。所以对列出的每笔订单再查一次详情（典型的 N+1 请求，最多 1 + 10 次，
+     * 本机每次几毫秒到几十毫秒）。补查是「尽力而为」：某一笔补查失败，这笔就不带商品摘要，并且不再补查后面的
+     * （商城多半出了问题，别让用户多等）；订单本身照常列出。更好的做法是让商城的列表接口直接返回商品摘要，那是商城那边的改动。
+     *
+     * @param size 最多列几笔，模型填的，可能为 null 或越界
+     * @param toolContext Spring AI 执行工具时传入，里面是 {@link #MALL_TOKEN} 或 {@link #ANONYMOUS}；代码直接调用时也可能传 null
+     * @return 查询结果，从不抛异常
+     */
+    @Tool(
+            name = "listMyOrders",
+            description = "列出当前登录用户最近的订单：订单号、状态、实付金额、商品、下单时间。"
+                    + "用户问订单但没给订单号时使用，如「我有哪些订单」「我昨天买的东西到哪了」。"
+                    + "只能列出当前登录账号自己的订单，查不到物流轨迹。")
+    public OrderListLookup listMyOrders(
+            @ToolParam(description = "最多列出几笔，1 到 10，默认 5", required = false) Integer size, ToolContext toolContext) {
+        String token = token(toolContext);
+        if (token == null) {
+            return OrderListLookup.notFound(NOT_LOGGED_IN);
+        }
+        int limit = size == null ? DEFAULT_LIST_SIZE : Math.clamp(size, 1, MAX_LIST_SIZE);
+        MallResult<MallModels.OrderPage> result = mallApi.listOrders(token, limit);
+        if (!result.isOk()) {
+            return OrderListLookup.notFound(
+                    switch (result.failure()) {
+                        case UNAUTHORIZED -> LOGIN_EXPIRED;
+                        case NOT_FOUND, REJECTED, UNAVAILABLE -> {
+                            log.warn("列订单失败：{}，code={}", result.failure(), result.code());
+                            yield MALL_UNAVAILABLE;
+                        }
+                    });
+        }
+        List<MallModels.OrderListItem> items =
+                Objects.requireNonNullElse(result.body().items(), List.of());
+        List<OrderListLookup.Brief> orders = new ArrayList<>();
+        boolean enrich = true;
+        // 商城自己也会限制条数，这里再截一次：万一商城多给了，也不把超出的塞给模型
+        for (MallModels.OrderListItem item : items.subList(0, Math.min(items.size(), limit))) {
+            String summary = null;
+            if (enrich) {
+                MallResult<MallModels.Order> detail = mallApi.getOrder(token, item.orderNo());
+                if (detail.isOk()) {
+                    summary = summarize(detail.body().items());
+                } else {
+                    enrich = false;
+                    log.info("补查订单商品失败，后面的订单不再补查：{}，code={}", detail.failure(), detail.code());
+                }
+            }
+            orders.add(new OrderListLookup.Brief(
+                    item.orderNo(),
+                    OrderStatusText.describe(item.status()),
+                    item.payAmount(),
+                    summary,
+                    item.createdAt() == null ? null : item.createdAt().format(TIME)));
+        }
+        return OrderListLookup.of(List.copyOf(orders), result.body().hasMore() || items.size() > limit);
     }
 
     /**

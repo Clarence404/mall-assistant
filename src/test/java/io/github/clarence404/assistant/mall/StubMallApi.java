@@ -22,8 +22,12 @@ import java.util.concurrent.Executors;
  * <ul>
  *   <li>{@code POST /api/auth/login}：演示账号 {@code 13800000000 / mall123} 返回 {@link #TOKEN}，否则 401 + ProblemDetail
  *       {@code USER_LOGIN_FAILED}
- *   <li>{@code GET /api/orders/{orderNo}}：没带令牌或令牌不对 → 401、没有响应体（和网关一样）；{@link #ORDER_NO} → 待发货的订单；
- *       {@link #OTHER_USERS_ORDER_NO}（别人的订单）和其他单号 → 404 + {@code ORDER_NOT_FOUND}
+ *   <li>{@code GET /api/orders/{orderNo}}：没带令牌或令牌不对 → 401、没有响应体（和网关一样）；{@link #ORDER_NO} → 待发货的订单，
+ *       {@link #COMPLETED_ORDER_NO} → 已完成的订单（两件商品）；{@link #OTHER_USERS_ORDER_NO}（别人的订单）和其他单号 → 404 +
+ *       {@code ORDER_NOT_FOUND}
+ *   <li>{@code GET /api/orders?size=N}（第 3 章补充，「我的订单」列表，游标分页的第一页）：演示账号有两笔订单，按下单时间从新到旧
+ *       （{@link #ORDER_NO}、{@link #COMPLETED_ORDER_NO}），取前 N 笔，还有剩下的就 {@code hasMore=true}；{@link #NEW_USER_TOKEN}
+ *       （没下过单的新用户）→ 空列表；令牌不对 → 401、没有响应体
  *   <li>{@code GET /api/products/{skuId}}：20001 在售有货，20004 已下架无货，其他数字 → 404 {@code PRODUCT_NOT_FOUND}，非数字 → 400
  * </ul>
  *
@@ -38,6 +42,12 @@ public final class StubMallApi implements AutoCloseable {
     /** 演示账号自己的订单（23 位：19 位雪花 ID + 4 位用户基因），状态待发货。 */
     public static final String ORDER_NO = "21182516707889029120785";
 
+    /** 演示账号的另一笔订单（更早下的），状态已完成，两件商品。第 3 章补充，用于「我的订单」列表。 */
+    public static final String COMPLETED_ORDER_NO = "21180000000000000010785";
+
+    /** 一个还没下过单的新用户的令牌：订单列表为空。第 3 章补充。 */
+    public static final String NEW_USER_TOKEN = "stub-mall-token-10002-new-user";
+
     /** 别的用户的订单：商城对别人的订单也返回 404，和不存在一样。 */
     public static final String OTHER_USERS_ORDER_NO = "21182516707889029129999";
 
@@ -49,13 +59,34 @@ public final class StubMallApi implements AutoCloseable {
             "unitPrice":"39.90","quantity":1,"itemAmount":"39.90"}],\
             "createdAt":"2026-11-05T15:58:48.258","paidAt":"2026-11-05T15:59:02.001"}""";
 
+    static final String COMPLETED_ORDER_JSON = """
+            {"orderNo":"21180000000000000010785","status":"COMPLETED","totalAmount":"59.80",\
+            "freightAmount":"0.00","discountAmount":"0.00","payAmount":"59.80",\
+            "items":[{"skuId":"20002","productName":"青柚 · 白心柚 1 只装","unitPrice":"19.90","quantity":1,"itemAmount":"19.90"},\
+            {"skuId":"20003","productName":"青柚 · 柚子茶 500g","unitPrice":"39.90","quantity":1,"itemAmount":"39.90"}],\
+            "createdAt":"2026-11-01T10:00:00","paidAt":"2026-11-01T10:01:00"}""";
+
+    /** 「我的订单」列表项（商城的 OrderListItemView），从新到旧。 */
+    private static final List<String> ORDER_LIST_ITEMS = List.of("""
+            {"orderNo":"21182516707889029120785","status":"PENDING_SHIPMENT","payAmount":"39.90",\
+            "createdAt":"2026-11-05T15:58:48.258"}""", """
+            {"orderNo":"21180000000000000010785","status":"COMPLETED","payAmount":"59.80",\
+            "createdAt":"2026-11-01T10:00:00"}""");
+
     private final HttpServer server;
     private final List<Request> requests = new CopyOnWriteArrayList<>();
     private volatile int failStatus;
     private volatile Duration delay = Duration.ZERO;
 
-    /** 一个收到的请求。 */
-    public record Request(String method, String path, String authorization) {}
+    /**
+     * 一个收到的请求。
+     *
+     * @param method 方法
+     * @param path 路径，不含查询串
+     * @param query 查询串，如 {@code size=5}；没有时为 null（第 3 章补充，用来断言 size 传了多少）
+     * @param authorization Authorization 请求头；没带时为 null
+     */
+    public record Request(String method, String path, String query, String authorization) {}
 
     private StubMallApi(HttpServer server) {
         this.server = server;
@@ -119,7 +150,7 @@ public final class StubMallApi implements AutoCloseable {
         try (InputStream in = exchange.getRequestBody()) {
             body = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
-        requests.add(new Request(method, path, authorization));
+        requests.add(new Request(method, path, exchange.getRequestURI().getQuery(), authorization));
         try {
             Thread.sleep(delay);
         } catch (InterruptedException e) {
@@ -132,6 +163,8 @@ public final class StubMallApi implements AutoCloseable {
         }
         if ("POST".equals(method) && "/api/auth/login".equals(path)) {
             login(exchange, body);
+        } else if ("GET".equals(method) && "/api/orders".equals(path)) {
+            listOrders(exchange, exchange.getRequestURI().getQuery(), authorization);
         } else if ("GET".equals(method) && path.startsWith("/api/orders/")) {
             order(exchange, path.substring("/api/orders/".length()), authorization);
         } else if ("GET".equals(method) && path.startsWith("/api/products/")) {
@@ -153,18 +186,49 @@ public final class StubMallApi implements AutoCloseable {
     }
 
     private static void order(HttpExchange exchange, String orderNo, String authorization) throws IOException {
-        if (!("Bearer " + TOKEN).equals(authorization)) {
-            // 网关（Spring Security 资源服务器）的 401：只有 WWW-Authenticate 头，没有响应体
-            exchange.getResponseHeaders().add("WWW-Authenticate", "Bearer");
-            exchange.sendResponseHeaders(401, -1);
-            exchange.close();
+        if (!("Bearer " + TOKEN).equals(authorization) && !("Bearer " + NEW_USER_TOKEN).equals(authorization)) {
+            unauthorized(exchange);
             return;
         }
-        if (ORDER_NO.equals(orderNo)) {
+        boolean demoUser = ("Bearer " + TOKEN).equals(authorization);
+        if (demoUser && ORDER_NO.equals(orderNo)) {
             json(exchange, 200, ORDER_JSON);
+        } else if (demoUser && COMPLETED_ORDER_NO.equals(orderNo)) {
+            json(exchange, 200, COMPLETED_ORDER_JSON);
         } else {
             problem(exchange, 404, "ORDER_NOT_FOUND", "订单 " + orderNo + " 不存在");
         }
+    }
+
+    /** 「我的订单」第一页：size 缺省 20，和商城一样收紧到 1～50；只认演示账号和新用户的令牌。 */
+    private static void listOrders(HttpExchange exchange, String query, String authorization) throws IOException {
+        List<String> items;
+        if (("Bearer " + TOKEN).equals(authorization)) {
+            items = ORDER_LIST_ITEMS;
+        } else if (("Bearer " + NEW_USER_TOKEN).equals(authorization)) {
+            items = List.of();
+        } else {
+            unauthorized(exchange);
+            return;
+        }
+        int size = 20;
+        if (query != null && query.startsWith("size=")) {
+            size = Math.clamp(Integer.parseInt(query.substring("size=".length())), 1, 50);
+        }
+        List<String> page = items.subList(0, Math.min(size, items.size()));
+        boolean hasMore = items.size() > page.size();
+        json(
+                exchange,
+                200,
+                "{\"items\":[" + String.join(",", page) + "],\"nextCursor\":" + (hasMore ? "\"stub-cursor\"" : "null")
+                        + ",\"hasMore\":" + hasMore + "}");
+    }
+
+    /** 网关（Spring Security 资源服务器）的 401：只有 WWW-Authenticate 头，没有响应体。 */
+    private static void unauthorized(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().add("WWW-Authenticate", "Bearer");
+        exchange.sendResponseHeaders(401, -1);
+        exchange.close();
     }
 
     private static void product(HttpExchange exchange, String skuId) throws IOException {

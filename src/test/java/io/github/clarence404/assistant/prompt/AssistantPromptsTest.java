@@ -101,7 +101,9 @@ class AssistantPromptsTest {
         assertThat(system)
                 .contains("今天是2026年11月5日 星期四")
                 .contains("调用工具查询")
-                .contains("只能来自工具结果或「查询结果」")
+                .contains("只能来自工具结果或系统附上的「查询结果」")
+                .as("查询结果是系统给的材料，不能让模型反过来向用户要（第 3 章补充）")
+                .contains("不要向用户索要")
                 .contains("found 为 false")
                 .contains("绝不编造订单、库存、价格和物流信息")
                 .doesNotContain("{");

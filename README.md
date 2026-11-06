@@ -33,7 +33,7 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 |----|------|------|---------|------|
 | 1 | 接入模型与流式对话 | ChatClient + 系统提示词、按 profile 切换 Ollama / OpenAI 兼容接口、阻塞与 SSE 流式接口、超时与友好报错 | [Spring AI](https://clarence404.github.io/java-doc/ai/2_frameworks/0_spring_ai.html)、[Ollama](https://clarence404.github.io/java-doc/ai/3_integration/0_ollama.html) | [`ch01-start`](https://github.com/Clarence404/mall-assistant/tree/ch01-start) / [`ch01-done`](https://github.com/Clarence404/mall-assistant/tree/ch01-done) |
 | 2 | Prompt 与结构化输出 | 带变量、分版本的提示词模板，意图识别输出 Java 对象（原生结构化输出 + 重试兜底），超出范围直接拒答，录制回放测试 | [Prompt 工程](https://clarence404.github.io/java-doc/ai/1_concepts/1_prompt.html) | [`ch02-start`](https://github.com/Clarence404/mall-assistant/tree/ch02-start) / [`ch02-done`](https://github.com/Clarence404/mall-assistant/tree/ch02-done) |
-| 3 | 工具调用 | `@Tool` 查订单、查商品（调 mall-evolution 网关），原生工具调用 + 按意图直接查询，令牌只走 ToolContext，查不到返回结构化结果、不编造，工具调用记录与录制回放 | [Function Calling](https://clarence404.github.io/java-doc/ai/1_concepts/2_function_calling.html)、[Spring AI](https://clarence404.github.io/java-doc/ai/2_frameworks/0_spring_ai.html) | [`ch03-start`](https://github.com/Clarence404/mall-assistant/tree/ch03-start) / [`ch03-done`](https://github.com/Clarence404/mall-assistant/tree/ch03-done) |
+| 3 | 工具调用 | `@Tool` 查订单、查商品（调 mall-evolution 网关），原生工具调用 + 按意图直接查询，令牌只走 ToolContext，查不到返回结构化结果、不编造，工具调用记录与录制回放；`main` 上补充了列出我的订单（`listMyOrders`，见 [`docs/ch03.md`](docs/ch03.md#补充列出我的订单)） | [Function Calling](https://clarence404.github.io/java-doc/ai/1_concepts/2_function_calling.html)、[Spring AI](https://clarence404.github.io/java-doc/ai/2_frameworks/0_spring_ai.html) | [`ch03-start`](https://github.com/Clarence404/mall-assistant/tree/ch03-start) / [`ch03-done`](https://github.com/Clarence404/mall-assistant/tree/ch03-done) |
 | 4 | 知识入库 | 商城规则文档切块、向量化、存入 pgvector | [Embedding](https://clarence404.github.io/java-doc/ai/4_core_tech/0_embedding.html)、[向量数据库](https://clarence404.github.io/java-doc/ai/4_core_tech/1_vector_db.html) | 计划中 |
 | 5 | RAG | 检索增强回答、引用来源 | [RAG](https://clarence404.github.io/java-doc/ai/4_core_tech/2_rag.html) | 计划中 |
 | 6 | 多轮对话与记忆 | 会话 ID、ChatMemory、上下文裁剪 | [Spring AI](https://clarence404.github.io/java-doc/ai/2_frameworks/0_spring_ai.html) | 计划中 |
@@ -129,7 +129,7 @@ codex 没有「关掉全部工具」的单个开关，只读沙箱仍能读本�
 
 **结构化输出**：意图识别的 JSON Schema 原生交给工具，claude 用 `--json-schema`（结果在 `structured_output` 字段），codex 用 `--output-schema <文件>`；第 2 章的重试与兜底照常生效。设置 `assistant.cli.native-structured-output=false` 可改回把格式说明拼进提示词。
 
-**不支持原生工具调用**（第 3 章）：`CliChatModel` 只把模型当纯文本用，这两个 profile 设了 `assistant.tools.native-calling=false`，查订单、查商品只走「按意图直接查询」（代码查好结果放进提示词）；意图识别没抽到订单号 / SKU 的问题查不到真数据。商城令牌同样只在工具里用，不进 stdin、系统提示词文件和命令行参数（`CliProviderWebTest` 有断言）。
+**不支持原生工具调用**（第 3 章）：`CliChatModel` 只把模型当纯文本用，这两个 profile 设了 `assistant.tools.native-calling=false`，查订单、查商品只走「按意图直接查询」（代码查好结果放进提示词）；意图识别没抽到 SKU 的商品问题查不到真数据（没抽到订单号的订单问题会直接列出最近的订单）。商城令牌同样只在工具里用，不进 stdin、系统提示词文件和命令行参数（`CliProviderWebTest` 有断言）。
 
 **慢、费 token**：每次调用都要启动一个进程，一次对话调两次（意图识别 + 回答），费用记在你自己的账号上。本机实测：
 
@@ -147,7 +147,7 @@ codex 的 `--json` 只在一条消息完整生成后才输出它，没有逐字�
 1. `AssistantApplication`：启动入口，profile 决定接哪个模型（`application-*.yml`）
 2. `chat/ChatController`：`/api/chat` 阻塞接口与 `/api/chat/stream` SSE 流式接口，流式出错时怎么变成 `error` 事件
 3. `chat/ChatService`：一次对话的主流程：先识别意图，超出范围直接拒答；否则按意图直接查询，或把工具注册给模型（`answerRequest`），再带系统提示词调模型；流式里工具记录排在文字前面
-4. `tool/MallTools`（连同 `OrderLookup`、`ProductLookup`、`OrderStatusText`）：`@Tool` 工具是什么、模型怎么决定调用、令牌为什么走 `ToolContext`、为什么查不到也返回结构化结果；再看 `ToolCallRecorder`（记录每次调用）、`ToolResultGuard`（事后检查）、`ToolProperties`（两个开关）
+4. `tool/MallTools`（连同 `OrderLookup`、`OrderListLookup`、`ProductLookup`、`OrderStatusText`）：`@Tool` 工具是什么、模型怎么决定调用、令牌为什么走 `ToolContext`、为什么查不到也返回结构化结果；再看 `ToolCallRecorder`（记录每次调用）、`ToolResultGuard`（事后检查）、`ToolProperties`（两个开关）
 5. `mall/MallApiClient`（连同 `MallResult`、`MallModels`、`MallLoginController`、`MallToken`）：怎么调 mall-evolution 网关、错误怎么归类、为什么看不到别人的订单
 6. `intent/IntentService`（连同 `IntentResult`、`Intent`）：结构化输出成 Java 对象、解析失败重试一次、校验模型输出、失败兜底
 7. `prompt/AssistantPrompts`（连同 `PromptProperties`、`src/main/resources/prompts/`）：提示词模板、变量渲染与版本切换（v3 为什么这么短）
@@ -185,7 +185,7 @@ codex 的 `--json` 只在一条消息完整生成后才输出它，没有逐字�
 mall-assistant/
 ├── src/main/java/io/github/clarence404/assistant/
 │   ├── chat/                 ChatClient 配置、ChatService（意图 → 拒答或回答，回答时用工具）、阻塞与 SSE 接口、事件定义
-│   ├── tool/                 工具：MallTools（@Tool 查订单、查商品）、调用记录、事后检查、开关
+│   ├── tool/                 工具：MallTools（@Tool 查订单、列出我的订单、查商品）、调用记录、事后检查、开关
 │   ├── mall/                 商城 mall-evolution 网关的客户端、登录代理接口、令牌工具
 │   ├── prompt/               提示词模板：按版本选文件、渲染变量、拒答话术
 │   ├── intent/               意图识别：IntentResult、结构化输出与重试兜底、/api/intent

@@ -8,12 +8,12 @@
       "orderNo" : "21182516707889029120785"
     },
     "calls" : [ {
-      "promptHash" : "1257b1d0fd39036f",
-      "text" : "查询结果",
+      "promptHash" : "453389397c387a86",
+      "text" : "我发现 21182516707889029120785 的订单状态为「已发货」，实付金额为 10000。",
       "toolCalls" : [ ]
     } ],
     "invocations" : [ ],
-    "reply" : "查询结果"
+    "reply" : "我发现 21182516707889029120785 的订单状态为「已发货」，实付金额为 10000。"
   }, {
     "message" : "帮我看看订单 21182516707889029129999 发货了没有",
     "expectedTool" : "queryOrderStatus",
@@ -21,23 +21,23 @@
       "orderNo" : "21182516707889029129999"
     },
     "calls" : [ {
-      "promptHash" : "0d3418fc38fad32a",
+      "promptHash" : "24dd0d6f9484e3f2",
       "text" : "",
       "toolCalls" : [ {
-        "id" : "4udUWRFe5qfPU0LtHxcWWFVsW8FT2rqE",
+        "id" : "0BAjO8vUS1Lty4ivGzjfr7kha14zSZBh",
         "name" : "queryOrderStatus",
         "arguments" : "{\"orderNo\":\"21182516707889029129999\"}"
       } ]
     }, {
-      "promptHash" : "d7ee5b33f7dd3252",
-      "text" : "对不起，我找不到订单 21182516707889029129999。请确认订单号是否正确。",
+      "promptHash" : "92517fabb6e2332a",
+      "text" : "对不起，我找不到订单 21182516707889029129999。可能是订单号不存在，或者不是当前登录账号的订单。请检查订单号是否正确。",
       "toolCalls" : [ ]
     } ],
     "invocations" : [ {
       "name" : "queryOrderStatus",
       "arguments" : "{\"orderNo\":\"21182516707889029129999\"}"
     } ],
-    "reply" : "对不起，我找不到订单 21182516707889029129999。请确认订单号是否正确。"
+    "reply" : "对不起，我找不到订单 21182516707889029129999。可能是订单号不存在，或者不是当前登录账号的订单。请检查订单号是否正确。"
   }, {
     "message" : "20001 有货吗",
     "expectedTool" : "queryProduct",
@@ -45,12 +45,12 @@
       "skuId" : "20001"
     },
     "calls" : [ {
-      "promptHash" : "68555756ee5a8074",
-      "text" : "查询结果",
+      "promptHash" : "8798d7addcb4e3b2",
+      "text" : "找到了 false 为 false。",
       "toolCalls" : [ ]
     } ],
     "invocations" : [ ],
-    "reply" : "查询结果"
+    "reply" : "找到了 false 为 false。"
   }, {
     "message" : "SKU 20004 这个商品还卖吗？",
     "expectedTool" : "queryProduct",
@@ -58,23 +58,23 @@
       "skuId" : "20004"
     },
     "calls" : [ {
-      "promptHash" : "0f12f19a662f8c80",
+      "promptHash" : "7c13b6be12b76eb4",
       "text" : "",
       "toolCalls" : [ {
-        "id" : "92UiFg6fj3fbsO6wOj8ZCoZKKTwPS9MQ",
+        "id" : "yFdS134y70oGJ2CHksLGidM3exKFy62b",
         "name" : "queryProduct",
         "arguments" : "{\"skuId\":\"20004\"}"
       } ]
     }, {
-      "promptHash" : "f219041bcec4540e",
-      "text" : "这个商品已下架，库存为0。",
+      "promptHash" : "7c2cd623b6a79697",
+      "text" : "这个商品「青柚 · 已下架演示商品」在售，价格是 9.90元，但尚未在库存中。",
       "toolCalls" : [ ]
     } ],
     "invocations" : [ {
       "name" : "queryProduct",
       "arguments" : "{\"skuId\":\"20004\"}"
     } ],
-    "reply" : "这个商品已下架，库存为0。"
+    "reply" : "这个商品「青柚 · 已下架演示商品」在售，价格是 9.90元，但尚未在库存中。"
   }, {
     "message" : "商品 99999 多少钱",
     "expectedTool" : "queryProduct",
@@ -82,51 +82,73 @@
       "skuId" : "99999"
     },
     "calls" : [ {
-      "promptHash" : "2ed08f4e56557830",
+      "promptHash" : "ce950264a9d0c7ff",
       "text" : "",
       "toolCalls" : [ {
-        "id" : "mBhpQEpzhVDx4U9rZBjJIYqnoZdMEXnS",
+        "id" : "JdkhqVtoXSdcovg9dUDJd0ABm53sezF9",
         "name" : "queryProduct",
         "arguments" : "{\"skuId\":\"99999\"}"
       } ]
     }, {
-      "promptHash" : "8d4afe145a1e3b24",
-      "text" : "对不起，没有编号为 99999 的商品。请提供正确的商品编号。",
+      "promptHash" : "c58f41283fbd2e5f",
+      "text" : "对不起，我没有找到编号为 99999 的商品。请稍后再试。",
       "toolCalls" : [ ]
     } ],
     "invocations" : [ {
       "name" : "queryProduct",
       "arguments" : "{\"skuId\":\"99999\"}"
     } ],
-    "reply" : "对不起，没有编号为 99999 的商品。请提供正确的商品编号。"
+    "reply" : "对不起，我没有找到编号为 99999 的商品。请稍后再试。"
   }, {
     "message" : "我的订单到哪了？",
-    "expectedTool" : null,
-    "expectedArguments" : null,
+    "expectedTool" : "listMyOrders",
+    "expectedArguments" : { },
     "calls" : [ {
-      "promptHash" : "6ad996a291b6c3cb",
-      "text" : "请提供订单号，我将查询订单状态。",
+      "promptHash" : "40666e42cd624e77",
+      "text" : "我有哪些订单？",
       "toolCalls" : [ ]
     } ],
     "invocations" : [ ],
-    "reply" : "请提供订单号，我将查询订单状态。"
+    "reply" : "我有哪些订单？"
+  }, {
+    "message" : "我有哪些订单",
+    "expectedTool" : "listMyOrders",
+    "expectedArguments" : { },
+    "calls" : [ {
+      "promptHash" : "67d6b47d23006cee",
+      "text" : "请提供订单号，我将帮您查询。",
+      "toolCalls" : [ ]
+    } ],
+    "invocations" : [ ],
+    "reply" : "请提供订单号，我将帮您查询。"
+  }, {
+    "message" : "我昨天买的东西到哪了？",
+    "expectedTool" : "listMyOrders",
+    "expectedArguments" : { },
+    "calls" : [ {
+      "promptHash" : "bba53c1baa63f7cc",
+      "text" : "我找到了 false 作为 found 信息。",
+      "toolCalls" : [ ]
+    } ],
+    "invocations" : [ ],
+    "reply" : "我找到了 false 作为 found 信息。"
   }, {
     "message" : "怎么申请退货？",
     "expectedTool" : null,
     "expectedArguments" : null,
     "calls" : [ {
-      "promptHash" : "ffde34789de7424e",
-      "text" : "请问您需要查询哪个订单的退货信息？",
+      "promptHash" : "1cec6cda3079a20f",
+      "text" : "你申请退货需要提供商品编号，然后我才能帮你查询。",
       "toolCalls" : [ ]
     } ],
     "invocations" : [ ],
-    "reply" : "请问您需要查询哪个订单的退货信息？"
+    "reply" : "你申请退货需要提供商品编号，然后我才能帮你查询。"
   }, {
     "message" : "你好",
     "expectedTool" : null,
     "expectedArguments" : null,
     "calls" : [ {
-      "promptHash" : "b8cb8d0d73f4947f",
+      "promptHash" : "9021239d0c8d2a65",
       "text" : "您好！请问您有什么问题需要帮助吗？",
       "toolCalls" : [ ]
     } ],

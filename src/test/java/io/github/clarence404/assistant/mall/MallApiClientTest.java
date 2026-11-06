@@ -14,7 +14,8 @@ import org.junit.jupiter.api.Test;
  * 第 3 章：商城客户端 {@link MallApiClient} 把各种 HTTP 响应归成 {@link MallResult}，不抛异常。
  *
  * <p>验证：成功时解析出订单、商品、令牌，订单请求带上 {@code Authorization: Bearer <令牌>}；404 读出 ProblemDetail 里的业务码；
- * 网关没有响应体的 401 也能归类；5xx、读超时、连接被拒都归为 UNAVAILABLE。
+ * 网关没有响应体的 401 也能归类；5xx、读超时、连接被拒都归为 UNAVAILABLE。第 3 章补充了「我的订单」列表：size 作为查询参数传过去、
+ * 空列表也是成功、令牌不对 401、商城挂了 UNAVAILABLE，和其他接口同一套归类。
  *
  * <p>手法：{@link StubMallApi} 在本机随机端口起一个假网关，客户端真的发 HTTP 请求过去（不是 mock 方法调用），
  * 连超时、连接被拒这类网络层面的失败也能真实地测到。读超时用一个只等 300 毫秒的客户端配合假网关延迟 1 秒来触发。
@@ -91,6 +92,52 @@ class MallApiClientTest {
 
         assertThat(result.failure()).isEqualTo(MallFailure.UNAUTHORIZED);
         assertThat(result.code()).isNull();
+    }
+
+    @Test
+    void orderListIsParsedWithSizeAndBearerToken() {
+        MallResult<MallModels.OrderPage> result = client.listOrders(StubMallApi.TOKEN, 5);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.body().items())
+                .extracting(MallModels.OrderListItem::orderNo)
+                .containsExactly(StubMallApi.ORDER_NO, StubMallApi.COMPLETED_ORDER_NO);
+        assertThat(result.body().items().getFirst().status()).isEqualTo("PENDING_SHIPMENT");
+        assertThat(result.body().items().getFirst().createdAt())
+                .isEqualTo(LocalDateTime.parse("2026-11-05T15:58:48.258"));
+        assertThat(result.body().hasMore()).isFalse();
+        assertThat(mall.requests()).singleElement().satisfies(r -> {
+            assertThat(r.path()).isEqualTo("/api/orders");
+            assertThat(r.query()).isEqualTo("size=5");
+            assertThat(r.authorization()).isEqualTo("Bearer " + StubMallApi.TOKEN);
+        });
+    }
+
+    /** 只取第一页：条数少于订单数时 hasMore=true，游标原样带回来（智能客服用不到，不往下翻）。 */
+    @Test
+    void orderListFirstPageReportsMore() {
+        MallResult<MallModels.OrderPage> result = client.listOrders(StubMallApi.TOKEN, 1);
+
+        assertThat(result.body().items()).hasSize(1);
+        assertThat(result.body().hasMore()).isTrue();
+        assertThat(result.body().nextCursor()).isNotBlank();
+    }
+
+    /** 新用户还没下过单：200 + 空列表，是成功而不是 NOT_FOUND。 */
+    @Test
+    void emptyOrderListIsStillOk() {
+        MallResult<MallModels.OrderPage> result = client.listOrders(StubMallApi.NEW_USER_TOKEN, 5);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.body().items()).isEmpty();
+    }
+
+    @Test
+    void orderListFailuresAreClassifiedLikeOtherCalls() {
+        assertThat(client.listOrders("expired-token", 5).failure()).isEqualTo(MallFailure.UNAUTHORIZED);
+
+        mall.failWith(500);
+        assertThat(client.listOrders(StubMallApi.TOKEN, 5).failure()).isEqualTo(MallFailure.UNAVAILABLE);
     }
 
     @Test

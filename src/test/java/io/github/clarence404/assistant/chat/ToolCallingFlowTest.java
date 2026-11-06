@@ -10,6 +10,7 @@ import io.github.clarence404.assistant.mall.MallApiProperties;
 import io.github.clarence404.assistant.mall.StubMallApi;
 import io.github.clarence404.assistant.prompt.TestPrompts;
 import io.github.clarence404.assistant.tool.MallTools;
+import io.github.clarence404.assistant.tool.OrderListLookup;
 import io.github.clarence404.assistant.tool.ToolInvocation;
 import io.github.clarence404.assistant.tool.ToolProperties;
 import java.time.Duration;
@@ -31,8 +32,9 @@ import reactor.test.StepVerifier;
  *
  * <ul>
  *   <li>原生工具调用：假模型第一轮返回「调用 queryOrderStatus，参数 {orderNo}」，Spring AI 执行工具（真的调了假商城、带着令牌），
- *       把结果作为工具结果消息交回，第二轮假模型才给出回答；工具清单里有两个工具；记录里来源是 MODEL
- *   <li>按意图直接查询：意图是带订单号的 ORDER_STATUS 时，工具只执行一次、来源是 DIRECT，查询结果进了用户消息，回答只调一次模型、不再注册工具
+ *       把结果作为工具结果消息交回，第二轮假模型才给出回答；工具清单里有三个工具；记录里来源是 MODEL
+ *   <li>按意图直接查询：意图是带订单号的 ORDER_STATUS 时，工具只执行一次、来源是 DIRECT，查询结果进了用户消息，回答只调一次模型、不再注册工具；
+ *       没带订单号时（「我有哪些订单」，第 3 章补充）直接执行 listMyOrders，最近的订单作为查询结果交给模型，没登录时是「请先登录」
  *   <li>令牌：只在 ToolContext 里，不在任何发给模型的文字里（消息、工具参数、工具结果、工具定义）
  *   <li>没登录、参数不合法：工具返回结构化的原因，不发商城请求；回答里编出订单状态时被事后检查改写
  *   <li>不支持工具调用的模型（{@code native-calling=false}）：不注册工具，只走直接查询
@@ -47,6 +49,10 @@ class ToolCallingFlowTest {
     private static final String ORDER_ARGS = "{\"orderNo\":\"" + StubMallApi.ORDER_NO + "\"}";
     private static final String ORDER_INTENT = "{\"intent\":\"ORDER_STATUS\",\"confidence\":0.9,\"orderNo\":\""
             + StubMallApi.ORDER_NO + "\",\"skuId\":null}";
+    /** 查订单但没抽到订单号，如「我有哪些订单」「我昨天买的东西到哪了」。 */
+    private static final String ORDER_INTENT_WITHOUT_NO =
+            "{\"intent\":\"ORDER_STATUS\",\"confidence\":0.9,\"orderNo\":null,\"skuId\":null}";
+
     private static final String PRODUCT_INTENT =
             "{\"intent\":\"PRODUCT_INFO\",\"confidence\":0.9,\"orderNo\":null,\"skuId\":\"20001\"}";
 
@@ -103,7 +109,7 @@ class ToolCallingFlowTest {
         List<Prompt> answers = model.answerPrompts();
         assertThat(answers).as("第一轮拿到调用意图，第二轮带着工具结果再问一次").hasSize(2);
         assertThat(FakeChatModel.toolNames(answers.getFirst()))
-                .containsExactlyInAnyOrder("queryOrderStatus", "queryProduct");
+                .containsExactly("listMyOrders", "queryOrderStatus", "queryProduct");
         assertThat(FakeChatModel.toolResponses(answers.getFirst())).isEmpty();
         assertThat(FakeChatModel.toolResponses(answers.getLast()))
                 .singleElement()
@@ -166,6 +172,58 @@ class ToolCallingFlowTest {
                     .contains("待发货")
                     .contains("系统暂不提供物流轨迹");
         });
+    }
+
+    /**
+     * 第 3 章补充：查订单却没给订单号。代码直接执行一次 listMyOrders，最近的订单（含状态、商品）作为查询结果进了用户消息，
+     * 模型据此把订单列出来、问用户要看哪一笔；只调一次回答模型，不注册工具；令牌只用在商城请求里，不在任何发给模型的文字里。
+     */
+    @Test
+    void orderStatusWithoutOrderNoListsMyOrdersDirectly() {
+        model.willClassify(ORDER_INTENT_WITHOUT_NO);
+        model.willReply("您最近有两笔订单，想看哪一笔？");
+
+        ChatReply reply = service(model, true, true).chat("我有哪些订单", StubMallApi.TOKEN);
+
+        assertThat(reply.tools()).singleElement().satisfies(t -> {
+            assertThat(t.name()).isEqualTo("listMyOrders");
+            assertThat(t.source()).isEqualTo(ToolInvocation.Source.DIRECT);
+            assertThat(t.arguments()).isEqualTo("{\"size\":" + MallTools.DEFAULT_LIST_SIZE + "}");
+            assertThat(t.result()).contains("\"found\":true").contains(StubMallApi.COMPLETED_ORDER_NO);
+        });
+        assertThat(mall.requests())
+                .as("1 次列表 + 2 次补查商品，都带着用户的令牌")
+                .hasSize(3)
+                .allSatisfy(r -> assertThat(r.authorization()).isEqualTo("Bearer " + StubMallApi.TOKEN));
+        assertThat(model.answerPrompts()).singleElement().satisfies(p -> {
+            assertThat(FakeChatModel.toolNames(p)).as("已经查过了，不再给模型工具").isEmpty();
+            assertThat(p.getUserMessage().getText())
+                    .startsWith("我有哪些订单")
+                    .contains("<查询结果>")
+                    .contains("用户看不到它")
+                    .contains(StubMallApi.ORDER_NO)
+                    .contains("待发货")
+                    .contains("已完成")
+                    .contains("青柚 · 柚子茶 500g ×1")
+                    .contains(OrderListLookup.LIST_NOTE);
+        });
+        assertThat(model.prompts())
+                .allSatisfy(p -> assertThat(FakeChatModel.allText(p)).doesNotContain(StubMallApi.TOKEN));
+        assertThat(reply.reply()).isEqualTo("您最近有两笔订单，想看哪一笔？");
+    }
+
+    @Test
+    void orderListWithoutLoginSaysPleaseLoginWithoutCallingMall() {
+        model.willClassify(ORDER_INTENT_WITHOUT_NO);
+
+        ChatReply reply = service(model, true, true).chat("我昨天买的东西到哪了", null);
+
+        assertThat(mall.requests()).isEmpty();
+        assertThat(reply.tools()).singleElement().satisfies(t -> {
+            assertThat(t.name()).isEqualTo("listMyOrders");
+            assertThat(t.result()).contains("\"found\":false").contains("请先在页面右上角登录");
+        });
+        assertThat(model.answerPrompts().getFirst().getUserMessage().getText()).contains("请先在页面右上角登录");
     }
 
     @Test
@@ -238,6 +296,18 @@ class ToolCallingFlowTest {
                 .satisfies(p -> assertThat(FakeChatModel.toolNames(p)).isEmpty());
     }
 
+    /** 命令行模型调不了工具：没订单号的订单问题也能经直接查询列出订单（第 3 章补充前，这类问题它只能反问订单号）。 */
+    @Test
+    void modelWithoutToolCallingListsOrdersDirectly() {
+        FakeChatModel cli = FakeChatModel.withoutToolCalling();
+        cli.willClassify(ORDER_INTENT_WITHOUT_NO);
+
+        ChatReply reply = service(cli, false, true).chat("我有哪些订单", StubMallApi.TOKEN);
+
+        assertThat(reply.tools()).extracting(ToolInvocation::name).containsExactly("listMyOrders");
+        assertThat(cli.answerPrompts().getFirst().getUserMessage().getText()).contains(StubMallApi.ORDER_NO);
+    }
+
     @Test
     void directLookupCanBeTurnedOff() {
         model.willClassify(ORDER_INTENT);
@@ -245,7 +315,7 @@ class ToolCallingFlowTest {
         ChatReply reply = service(model, true, false).chat("我的订单 " + StubMallApi.ORDER_NO + " 到哪了", StubMallApi.TOKEN);
 
         assertThat(reply.tools()).isEmpty();
-        assertThat(FakeChatModel.toolNames(model.answerPrompts().getFirst())).hasSize(2);
+        assertThat(FakeChatModel.toolNames(model.answerPrompts().getFirst())).hasSize(3);
         assertThat(model.answerPrompts().getFirst().getUserMessage().getText()).doesNotContain("<查询结果>");
     }
 
@@ -262,6 +332,21 @@ class ToolCallingFlowTest {
                                 AnswerPart.ToolUse.class,
                                 t -> assertThat(t.invocation().name()).isEqualTo("queryOrderStatus")))
                 .expectNext(new AnswerPart.Text("您的订单"), new AnswerPart.Text("待发货。"))
+                .verifyComplete();
+    }
+
+    @Test
+    void streamWithDirectOrderListStartsWithToolUse() {
+        model.willStream("您最近有两笔订单，", "想看哪一笔？");
+
+        StepVerifier.create(service(model, true, true)
+                        .answerStream(
+                                "我有哪些订单", new IntentResult(Intent.ORDER_STATUS, 0.9, null, null), StubMallApi.TOKEN))
+                .assertNext(part -> assertThat(part)
+                        .isInstanceOfSatisfying(
+                                AnswerPart.ToolUse.class,
+                                t -> assertThat(t.invocation().name()).isEqualTo("listMyOrders")))
+                .expectNextCount(2)
                 .verifyComplete();
     }
 

@@ -229,7 +229,7 @@ class OllamaChatIT {
         assertThat(tools).isNotNull();
         assertThat(tools.isArray()).isTrue();
         for (JsonNode tool : tools) {
-            assertThat(tool.get("name").asString()).isIn("queryOrderStatus", "queryProduct");
+            assertThat(tool.get("name").asString()).isIn("listMyOrders", "queryOrderStatus", "queryProduct");
             assertThat(tool.get("source").asString()).isIn("MODEL", "DIRECT");
         }
     }

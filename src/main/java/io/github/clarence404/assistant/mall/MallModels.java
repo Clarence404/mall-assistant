@@ -54,6 +54,30 @@ public final class MallModels {
             LocalDateTime paidAt) {}
 
     /**
+     * {@code GET /api/orders} 的响应：「我的订单」列表的一页（商城的 {@code CursorResult<OrderListItemView>}）。第 3 章补充。
+     *
+     * <p>商城用的是<b>游标分页</b>：不返回总数，{@code nextCursor} 是一串不透明的字符串，要下一页时原样传回。智能客服只取第一页
+     * （最近的几笔），用不到游标，声明出来只是为了和接口的形状对应。
+     *
+     * @param items 本页的订单，按下单时间从新到旧
+     * @param nextCursor 下一页的游标；没有下一页时为 null
+     * @param hasMore 是否还有更早的订单
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record OrderPage(List<OrderListItem> items, String nextCursor, boolean hasMore) {}
+
+    /**
+     * 「我的订单」列表里的一项（商城的 OrderListItemView）。注意列表项<b>没有商品明细</b>，商品要再按订单号查详情。
+     *
+     * @param orderNo 订单号
+     * @param status 状态枚举名，同 {@link Order#status()}
+     * @param payAmount 实付金额
+     * @param createdAt 下单时间
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record OrderListItem(String orderNo, String status, String payAmount, LocalDateTime createdAt) {}
+
+    /**
      * 订单里的一行商品。
      *
      * @param skuId 商品编号
