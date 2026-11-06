@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>OrderStatusText.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.tool</a> &gt; <span class="el_source">OrderStatusText.java</span></div><h1>OrderStatusText.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.tool;
+
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * 商城订单状态 → 给用户看的中文。
+ *
+ * &lt;p&gt;所在层：工具（第 3 章引入）。{@link MallTools#queryOrderStatus} 用它把商城返回的枚举名翻成中文再交给模型。
+ *
+ * &lt;p&gt;为什么不让模型自己翻译：工具结果给得越「直接可用」，模型越少发挥，小模型尤其如此。把 {@code PENDING_SHIPMENT}
+ * 交给 0.5b 的模型，它可能说成「待付款」；直接给「待发货（已付款，商家还没发货）」，它照抄就对了。
+ * 不认识的状态按商城前端的约定显示「处理中」，不报错。
+ */
+<span class="fc" id="L15">public enum OrderStatusText {</span>
+<span class="fc" id="L16">    PENDING_PAYMENT(&quot;待支付&quot;, &quot;还没付款，超时未付会自动取消&quot;),</span>
+<span class="fc" id="L17">    PENDING_SHIPMENT(&quot;待发货&quot;, &quot;已付款，商家还没发货&quot;),</span>
+<span class="fc" id="L18">    SHIPPED(&quot;已发货&quot;, &quot;商家已发货&quot;),</span>
+<span class="fc" id="L19">    COMPLETED(&quot;已完成&quot;, &quot;已确认收货&quot;),</span>
+<span class="fc" id="L20">    CANCELLED(&quot;已取消&quot;, &quot;订单已取消&quot;),</span>
+<span class="fc" id="L21">    CLOSED(&quot;已关闭&quot;, &quot;订单已关闭&quot;);</span>
+
+    private final String text;
+    private final String explanation;
+
+<span class="fc" id="L26">    OrderStatusText(String text, String explanation) {</span>
+<span class="fc" id="L27">        this.text = text;</span>
+<span class="fc" id="L28">        this.explanation = explanation;</span>
+<span class="fc" id="L29">    }</span>
+
+    /**
+     * 商城的状态枚举名 → 「中文状态（说明）」。
+     *
+     * @param status 商城返回的状态，如 PENDING_SHIPMENT；null 或不认识时返回「处理中」
+     * @return 如「待发货（已付款，商家还没发货）」
+     */
+    public static String describe(String status) {
+<span class="nc" id="L38">        return Arrays.stream(values())</span>
+<span class="nc" id="L39">                .filter(s -&gt; s.name().equals(status))</span>
+<span class="nc" id="L40">                .findFirst()</span>
+<span class="nc" id="L41">                .map(s -&gt; s.text + &quot;（&quot; + s.explanation + &quot;）&quot;)</span>
+<span class="nc" id="L42">                .orElse(&quot;处理中&quot;);</span>
+    }
+
+    /** 全部中文状态词，供 {@link ToolResultGuard} 检查回答里有没有凭空出现的状态。 */
+    public static List&lt;String&gt; words() {
+<span class="fc" id="L47">        return Arrays.stream(values()).map(s -&gt; s.text).toList();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
