@@ -140,15 +140,28 @@ public class MallTools {
                     + "只能查到当前登录账号自己的订单，查不到物流轨迹。")
     public OrderLookup queryOrderStatus(
             @ToolParam(description = "订单号：19 位或 23 位数字，从用户消息里原样照抄，不要编造、不要补位") String orderNo, ToolContext toolContext) {
-        // TODO ch03-2：
-        //  ① orderNo 去掉首尾空白后用 ORDER_NO 校验；为 null 或不匹配时返回
-        //     OrderLookup.notFound(orderNo, "订单号格式不对：应为 19 位或 23 位数字，请核对订单号")，不发请求（参数是模型生成的，可能编造）
-        //  ② token(toolContext) 取令牌；为 null 时返回 OrderLookup.notFound(no, NOT_LOGGED_IN)，不发请求
-        //  ③ mallApi.getOrder(token, no)；成功时返回 new OrderLookup(true, null, 订单号, OrderStatusText.describe(状态),
-        //     实付金额, summarize(商品), 下单时间按 TIME 格式化（可能为 null）, OrderLookup.NO_LOGISTICS)
-        //  ④ 失败时返回 OrderLookup.notFound(no, orderFailureReason(no, result))
-        //  验收：MallToolsTest 的订单用例，以及 ToolCallingFlowTest、ToolApiTest
-        return OrderLookup.notFound(orderNo, "还没实现（第 3 章练习 2）");
+        String no = orderNo == null ? null : orderNo.strip();
+        if (no == null || !ORDER_NO.matcher(no).matches()) {
+            return OrderLookup.notFound(orderNo, "订单号格式不对：应为 19 位或 23 位数字，请核对订单号");
+        }
+        String token = token(toolContext);
+        if (token == null) {
+            return OrderLookup.notFound(no, NOT_LOGGED_IN);
+        }
+        MallResult<MallModels.Order> result = mallApi.getOrder(token, no);
+        if (result.isOk()) {
+            MallModels.Order order = result.body();
+            return new OrderLookup(
+                    true,
+                    null,
+                    order.orderNo(),
+                    OrderStatusText.describe(order.status()),
+                    order.payAmount(),
+                    summarize(order.items()),
+                    order.createdAt() == null ? null : order.createdAt().format(TIME),
+                    OrderLookup.NO_LOGISTICS);
+        }
+        return OrderLookup.notFound(no, orderFailureReason(no, result));
     }
 
     /**
@@ -162,13 +175,30 @@ public class MallTools {
             description =
                     "按商品编号（SKU，一串数字，如 20001）查询商品的名称、价格、是否在售、是否有货。" + "用户问某个商品多少钱、有没有货、还卖不卖时使用。用户没给商品编号时不要调用，请用户提供商品编号。")
     public ProductLookup queryProduct(@ToolParam(description = "商品编号 SKU：一串数字，如 20001，从用户消息里原样照抄") String skuId) {
-        // TODO ch03-3：
-        //  ① skuId 去掉首尾空白后用 SKU_ID 校验；不合法返回 ProductLookup.notFound(skuId, "商品编号格式不对：应为一串数字，如 20001")
-        //  ② mallApi.getProduct(id)；成功时返回 new ProductLookup(true, null, skuId, 名称, 价格, 是否在售, 是否有货)
-        //  ③ 失败时按 result.failure() 分：NOT_FOUND → "没有编号为 <id> 的商品"，REJECTED → "商品编号不合法"，
-        //     其余记一条 warn 日志后返回 MALL_UNAVAILABLE
-        //  验收：MallToolsTest 的商品用例
-        return ProductLookup.notFound(skuId, "还没实现（第 3 章练习 3）");
+        String id = skuId == null ? null : skuId.strip();
+        if (id == null || !SKU_ID.matcher(id).matches()) {
+            return ProductLookup.notFound(skuId, "商品编号格式不对：应为一串数字，如 20001");
+        }
+        MallResult<MallModels.ProductPage> result = mallApi.getProduct(id);
+        if (result.isOk()) {
+            MallModels.Product product = result.body().product();
+            return new ProductLookup(
+                    true,
+                    null,
+                    product.skuId(),
+                    product.name(),
+                    product.price(),
+                    product.onShelf(),
+                    result.body().inStock());
+        }
+        return switch (result.failure()) {
+            case NOT_FOUND -> ProductLookup.notFound(id, "没有编号为 " + id + " 的商品");
+            case REJECTED -> ProductLookup.notFound(id, "商品编号不合法");
+            default -> {
+                log.warn("查商品失败：skuId={}，{}，code={}", id, result.failure(), result.code());
+                yield ProductLookup.notFound(id, MALL_UNAVAILABLE);
+            }
+        };
     }
 
     /** 查订单失败 → 能直接说给用户听的原因。 */

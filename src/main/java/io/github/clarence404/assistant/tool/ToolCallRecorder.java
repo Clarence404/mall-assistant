@@ -46,11 +46,16 @@ public final class ToolCallRecorder {
      */
     public String invoke(
             ToolCallback callback, String arguments, ToolContext toolContext, ToolInvocation.Source source) {
-        // TODO ch03-4：用 System.nanoTime() 计时，执行 callback.call(arguments, toolContext)，然后往 invocations 里加一条
-        //  new ToolInvocation(工具名, source, arguments, 结果, 耗时毫秒)，返回结果。工具名取 callback.getToolDefinition().name()。
-        //  工具抛 RuntimeException 时也要记一条（结果写「执行失败：」+ 异常信息），再把异常原样抛出。
-        //  验收：ToolCallRecorderTest
-        return callback.call(arguments, toolContext);
+        long start = System.nanoTime();
+        String name = callback.getToolDefinition().name();
+        try {
+            String result = callback.call(arguments, toolContext);
+            invocations.add(new ToolInvocation(name, source, arguments, result, elapsedMs(start)));
+            return result;
+        } catch (RuntimeException e) {
+            invocations.add(new ToolInvocation(name, source, arguments, "执行失败：" + e.getMessage(), elapsedMs(start)));
+            throw e;
+        }
     }
 
     /**

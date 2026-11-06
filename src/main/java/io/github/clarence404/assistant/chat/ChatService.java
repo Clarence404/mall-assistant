@@ -156,14 +156,15 @@ public class ChatService {
         if (shouldRefuse(intent)) {
             return Flux.just(new AnswerPart.Text(prompts.refusal()));
         }
-        // TODO ch03-7：和阻塞回答一样用 answerRequest(...) 拼请求再 .stream().content()，加上 timeout(properties.streamTimeout())；
-        //  每段文字之前先推出新的工具调用记录：concatMap(text -> Flux.concat(newToolUses(recorder), Flux.just(new
-        // AnswerPart.Text(text))))，
-        //  流结束后用 concatWith(Flux.defer(() -> newToolUses(recorder))) 再补一次。记录器每个请求一个，整段放进 Flux.defer 里创建；
-        //  最后 onErrorMap(ModelCallException::from)。
-        //  验收：ToolCallingFlowTest.streamEmitsToolUseBeforeText / streamWithDirectLookupStartsWithToolUse、
-        //  ToolApiTest.streamSendsToolEventsBeforeTokens
-        return stream(message).map(AnswerPart.Text::new);
+        return Flux.defer(() -> {
+                    ToolCallRecorder recorder = new ToolCallRecorder();
+                    return answerRequest(message, intent, mallToken, recorder).stream()
+                            .content()
+                            .timeout(properties.streamTimeout())
+                            .concatMap(text -> Flux.concat(newToolUses(recorder), Flux.just(new AnswerPart.Text(text))))
+                            .concatWith(Flux.defer(() -> newToolUses(recorder)));
+                })
+                .onErrorMap(ModelCallException::from);
     }
 
     /** 记录器里新增的工具调用，转成 {@link AnswerPart.ToolUse}。 */
@@ -192,15 +193,17 @@ public class ChatService {
      */
     ChatClient.ChatClientRequestSpec answerRequest(
             String message, IntentResult intent, String mallToken, ToolCallRecorder recorder) {
-        // TODO ch03-6：
-        //  ① toolProperties.directLookup() 为 true 时先 directLookup(intent, mallToken, recorder)；拿到结果（不为 null）时，
-        //     用户消息改用 LOOKUP_TEMPLATE：.user(u -> u.text(LOOKUP_TEMPLATE).param("message", message).param("lookup", 结果))，
-        //     这次不再注册工具
-        //  ② 没有直接查询结果时用户消息就是 message；toolProperties.nativeCalling() 为 true 时再
-        //     .tools(recorder.wrap(mallTools.callbacks()).toArray()).toolContext(MallTools.context(mallToken))
-        //  令牌只能出现在 toolContext 里，不能拼进任何消息文字。
-        //  验收：ToolCallingFlowTest、ToolApiTest、ToolDecisionReplayTest
-        return chatClient.prompt().system(prompts::applySystem).user(message);
+        String lookup = toolProperties.directLookup() ? directLookup(intent, mallToken, recorder) : null;
+        ChatClient.ChatClientRequestSpec spec = chatClient.prompt().system(prompts::applySystem);
+        if (lookup != null) {
+            return spec.user(
+                    u -> u.text(LOOKUP_TEMPLATE).param("message", message).param("lookup", lookup));
+        }
+        spec = spec.user(message);
+        if (toolProperties.nativeCalling()) {
+            spec = spec.tools(recorder.wrap(mallTools.callbacks()).toArray()).toolContext(MallTools.context(mallToken));
+        }
+        return spec;
     }
 
     /**
@@ -215,14 +218,12 @@ public class ChatService {
      * @return 工具结果（JSON 字符串）；不需要直接查询时返回 null
      */
     String directLookup(IntentResult intent, String mallToken, ToolCallRecorder recorder) {
-        // TODO ch03-5：意图是 Intent.ORDER_STATUS 且 intent.orderNo() 不为 null 时，
-        //  runTool("queryOrderStatus", Map.of("orderNo", 订单号), mallToken, recorder)；
-        //  意图是 Intent.PRODUCT_INFO 且 intent.skuId() 不为 null 时，runTool("queryProduct", Map.of("skuId", SKU), mallToken,
-        // recorder)；
-        //  其余返回 null（不直接查询）。
-        //  验收：ToolCallingFlowTest.orderStatusWithOrderNoIsLookedUpDirectly /
-        // productInfoWithSkuIsLookedUpDirectlyWithoutLogin /
-        //  notLoggedInLookupSaysPleaseLoginWithoutCallingMall、CliProviderWebTest
+        if (intent.intent() == Intent.ORDER_STATUS && intent.orderNo() != null) {
+            return runTool("queryOrderStatus", Map.of("orderNo", intent.orderNo()), mallToken, recorder);
+        }
+        if (intent.intent() == Intent.PRODUCT_INFO && intent.skuId() != null) {
+            return runTool("queryProduct", Map.of("skuId", intent.skuId()), mallToken, recorder);
+        }
         return null;
     }
 

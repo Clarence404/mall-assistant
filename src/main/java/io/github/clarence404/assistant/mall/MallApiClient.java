@@ -104,20 +104,47 @@ public class MallApiClient {
      * @return 成功或失败的结果，从不返回 null
      */
     <T> MallResult<T> exchange(String action, RestClient.RequestHeadersSpec<?> request, Class<T> type) {
-        // TODO ch03-1：用 request.exchange((req, res) -> ...) 发请求、自己处理响应（retrieve() 遇到 4xx / 5xx 会直接抛异常）：
-        //  2xx 用 res.bodyTo(type) 读出响应体，返回 MallResult.ok(body)（响应体为空按 UNAVAILABLE）；
-        //  其他状态码用 readProblem(res) 读出商城的业务码，返回 MallResult.failed(classify(状态码), problem.code(), problem.detail())。
-        //  连接被拒、超时（RestClientException）和响应体解析失败（HttpMessageConversionException）都 catch 住，记一条 warn 日志，
-        //  返回 UNAVAILABLE；不抛异常，日志里不记令牌和密码。
-        //  验收：MallApiClientTest、MallLoginApiTest
-        return MallResult.failed(MallFailure.UNAVAILABLE, null, "还没实现（第 3 章练习 1）");
+        long start = System.nanoTime();
+        try {
+            // exchange 拿到原始响应自己处理：默认的 retrieve() 遇到 4xx / 5xx 会直接抛异常，这里要按状态码分类，不想靠异常走流程
+            MallResult<T> result = request.exchange((req, res) -> {
+                HttpStatusCode status = res.getStatusCode();
+                if (status.is2xxSuccessful()) {
+                    T body = res.bodyTo(type);
+                    return body != null
+                            ? MallResult.ok(body)
+                            : MallResult.failed(MallFailure.UNAVAILABLE, null, "响应体为空");
+                }
+                MallModels.Problem problem = readProblem(res);
+                return MallResult.failed(classify(status), problem.code(), problem.detail());
+            });
+            long ms = (System.nanoTime() - start) / 1_000_000;
+            if (result.isOk()) {
+                log.debug("商城接口{}成功：{} ms", action, ms);
+            } else {
+                log.info("商城接口{}失败：{}，code={}，{} ms", action, result.failure(), result.code(), ms);
+            }
+            return result;
+        } catch (RestClientException | HttpMessageConversionException e) {
+            // RestClientException 含 ResourceAccessException（连接被拒、超时）；HttpMessageConversionException 是响应体解析不了
+            log.warn("商城接口{}调用失败：{}", action, e.getMessage());
+            return MallResult.failed(MallFailure.UNAVAILABLE, null, e.getMessage());
+        }
     }
 
     /** 状态码归类，见 {@link #exchange} 的说明。 */
     static MallFailure classify(HttpStatusCode status) {
-        // TODO ch03-1：401 / 403 → UNAUTHORIZED；404 → NOT_FOUND；429 与 5xx（status.is5xxServerError()）→ UNAVAILABLE；其余 →
-        // REJECTED
-        return MallFailure.UNAVAILABLE;
+        int code = status.value();
+        if (code == 401 || code == 403) {
+            return MallFailure.UNAUTHORIZED;
+        }
+        if (code == 404) {
+            return MallFailure.NOT_FOUND;
+        }
+        if (code == 429 || status.is5xxServerError()) {
+            return MallFailure.UNAVAILABLE;
+        }
+        return MallFailure.REJECTED;
     }
 
     /**
