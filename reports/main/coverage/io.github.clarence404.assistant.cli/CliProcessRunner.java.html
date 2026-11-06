@@ -185,72 +185,76 @@ public class CliProcessRunner {
         void timeout() {
 <span class="pc bpc" id="L186" title="1 of 2 branches missed.">            if (process.isAlive()) {</span>
 <span class="fc" id="L187">                timedOut.set(true);</span>
-<span class="fc" id="L188">                log.warn(&quot;{} 超过 {} 没有结束，杀掉进程树（pid {}）&quot;, name, timeout, process.pid());</span>
-<span class="fc" id="L189">                killTree(process);</span>
+                String stderr;
+<span class="fc" id="L189">                synchronized (stderrTail) {</span>
+<span class="pc bpc" id="L190" title="1 of 2 branches missed.">                    stderr = stderrTail.isEmpty() ? &quot;（空）&quot; : String.join(&quot;\n&quot;, stderrTail);</span>
+<span class="fc" id="L191">                }</span>
+<span class="fc" id="L192">                log.warn(&quot;{} 超过 {} 没有结束，杀掉进程树（pid {}），stderr 末尾：{}&quot;, name, timeout, process.pid(), stderr);</span>
+<span class="fc" id="L193">                killTree(process);</span>
             }
-<span class="fc" id="L191">        }</span>
+<span class="fc" id="L195">        }</span>
 
         CliTimeoutException timeoutError() {
-<span class="fc" id="L194">            return new CliTimeoutException(name + &quot; 超过 &quot; + timeout + &quot; 没有结束&quot;);</span>
+<span class="fc" id="L198">            return new CliTimeoutException(name + &quot; 超过 &quot; + timeout + &quot; 没有结束&quot;);</span>
         }
 
         void checkTimedOut() {
-<span class="fc bfc" id="L198" title="All 2 branches covered.">            if (timedOut.get()) {</span>
-<span class="fc" id="L199">                throw timeoutError();</span>
+<span class="fc bfc" id="L202" title="All 2 branches covered.">            if (timedOut.get()) {</span>
+<span class="fc" id="L203">                throw timeoutError();</span>
             }
-<span class="fc" id="L201">        }</span>
+<span class="fc" id="L205">        }</span>
 
         void checkExit(int exitCode) {
-<span class="fc" id="L204">            checkTimedOut();</span>
-<span class="fc bfc" id="L205" title="All 2 branches covered.">            if (exitCode != 0) {</span>
-<span class="fc" id="L206">                throw new CliExecutionException(name + &quot; 退出码 &quot; + exitCode + &quot;，stderr 末尾：&quot; + stderrTail());</span>
+<span class="fc" id="L208">            checkTimedOut();</span>
+<span class="fc bfc" id="L209" title="All 2 branches covered.">            if (exitCode != 0) {</span>
+<span class="fc" id="L210">                throw new CliExecutionException(name + &quot; 退出码 &quot; + exitCode + &quot;，stderr 末尾：&quot; + stderrTail());</span>
             }
-<span class="fc" id="L208">        }</span>
+<span class="fc" id="L212">        }</span>
 
         void drainStderr() {
-<span class="fc" id="L211">            try (BufferedReader reader =</span>
-<span class="fc" id="L212">                    new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {</span>
+<span class="fc" id="L215">            try (BufferedReader reader =</span>
+<span class="fc" id="L216">                    new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {</span>
                 String line;
-<span class="fc bfc" id="L214" title="All 2 branches covered.">                while ((line = reader.readLine()) != null) {</span>
-<span class="fc" id="L215">                    synchronized (stderrTail) {</span>
-<span class="fc" id="L216">                        stderrTail.addLast(line);</span>
-<span class="pc bpc" id="L217" title="1 of 2 branches missed.">                        if (stderrTail.size() &gt; STDERR_TAIL_LINES) {</span>
-<span class="nc" id="L218">                            stderrTail.removeFirst();</span>
+<span class="fc bfc" id="L218" title="All 2 branches covered.">                while ((line = reader.readLine()) != null) {</span>
+<span class="fc" id="L219">                    synchronized (stderrTail) {</span>
+<span class="fc" id="L220">                        stderrTail.addLast(line);</span>
+<span class="pc bpc" id="L221" title="1 of 2 branches missed.">                        if (stderrTail.size() &gt; STDERR_TAIL_LINES) {</span>
+<span class="nc" id="L222">                            stderrTail.removeFirst();</span>
                         }
-<span class="fc" id="L220">                    }</span>
+<span class="fc" id="L224">                    }</span>
                 }
-<span class="nc" id="L222">            } catch (IOException e) {</span>
-<span class="nc" id="L223">                log.debug(&quot;读取 stderr 结束：{}&quot;, e.getMessage());</span>
-<span class="fc" id="L224">            }</span>
-<span class="fc" id="L225">        }</span>
+<span class="nc" id="L226">            } catch (IOException e) {</span>
+<span class="nc" id="L227">                log.debug(&quot;读取 stderr 结束：{}&quot;, e.getMessage());</span>
+<span class="fc" id="L228">            }</span>
+<span class="fc" id="L229">        }</span>
 
         String stderrTail() {
             // 进程已经退出，stderr 可能还没读完：最多等 1 秒让读线程把管道读空
-<span class="fc" id="L229">            Thread reader = stderrReader;</span>
-<span class="pc bpc" id="L230" title="1 of 2 branches missed.">            if (reader != null) {</span>
+<span class="fc" id="L233">            Thread reader = stderrReader;</span>
+<span class="pc bpc" id="L234" title="1 of 2 branches missed.">            if (reader != null) {</span>
                 try {
-<span class="fc" id="L232">                    reader.join(Duration.ofSeconds(1));</span>
-<span class="nc" id="L233">                } catch (InterruptedException e) {</span>
-<span class="nc" id="L234">                    Thread.currentThread().interrupt();</span>
-<span class="fc" id="L235">                }</span>
+<span class="fc" id="L236">                    reader.join(Duration.ofSeconds(1));</span>
+<span class="nc" id="L237">                } catch (InterruptedException e) {</span>
+<span class="nc" id="L238">                    Thread.currentThread().interrupt();</span>
+<span class="fc" id="L239">                }</span>
             }
-<span class="fc" id="L237">            synchronized (stderrTail) {</span>
-<span class="pc bpc" id="L238" title="1 of 2 branches missed.">                return stderrTail.isEmpty() ? &quot;（空）&quot; : String.join(&quot;\n&quot;, stderrTail);</span>
+<span class="fc" id="L241">            synchronized (stderrTail) {</span>
+<span class="pc bpc" id="L242" title="1 of 2 branches missed.">                return stderrTail.isEmpty() ? &quot;（空）&quot; : String.join(&quot;\n&quot;, stderrTail);</span>
             }
         }
 
         void stop() {
-<span class="pc bpc" id="L243" title="1 of 2 branches missed.">            if (!stopped.compareAndSet(false, true)) {</span>
-<span class="nc" id="L244">                return;</span>
+<span class="pc bpc" id="L247" title="1 of 2 branches missed.">            if (!stopped.compareAndSet(false, true)) {</span>
+<span class="nc" id="L248">                return;</span>
             }
-<span class="fc" id="L246">            ScheduledFuture&lt;?&gt; current = watchdog;</span>
-<span class="pc bpc" id="L247" title="1 of 2 branches missed.">            if (current != null) {</span>
-<span class="fc" id="L248">                current.cancel(false);</span>
+<span class="fc" id="L250">            ScheduledFuture&lt;?&gt; current = watchdog;</span>
+<span class="pc bpc" id="L251" title="1 of 2 branches missed.">            if (current != null) {</span>
+<span class="fc" id="L252">                current.cancel(false);</span>
             }
-<span class="pc bpc" id="L250" title="1 of 4 branches missed.">            if (process.isAlive() || process.descendants().findAny().isPresent()) {</span>
-<span class="fc" id="L251">                killTree(process);</span>
+<span class="pc bpc" id="L254" title="1 of 4 branches missed.">            if (process.isAlive() || process.descendants().findAny().isPresent()) {</span>
+<span class="fc" id="L255">                killTree(process);</span>
             }
-<span class="fc" id="L253">        }</span>
+<span class="fc" id="L257">        }</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
