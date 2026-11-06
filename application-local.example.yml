@@ -19,3 +19,8 @@ spring:
     #   api-key: <your-api-key>
     #   chat:
     #     model: <model-name>
+
+# —— 第 3 章：商城 mall-evolution 的网关不在本机时 ——
+# assistant:
+#   mall:
+#     base-url: http://<mall-gateway-host>:9000

@@ -32,6 +32,10 @@ class IndexPageTest extends FakeModelWebTest {
                 .contains("示例商城智能客服")
                 .contains("/api/chat/stream")
                 .contains("调试面板")
-                .contains("dbgIntent");
+                .contains("dbgIntent")
+                // 第 3 章：登录框（经 /api/mall/login 登录）、提问时带 Authorization、调试面板列出工具调用
+                .contains("/api/mall/login")
+                .contains("Authorization")
+                .contains("dbgTools");
     }
 }

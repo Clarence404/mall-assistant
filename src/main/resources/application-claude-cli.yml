@@ -10,6 +10,8 @@ spring:
       chat: none             # 关掉 Ollama / OpenAI 的 ChatModel 自动配置，由 CliChatModel 提供
 
 assistant:
+  tools:
+    native-calling: false    # 命令行模型只当纯文本模型用，不支持原生工具调用；查订单 / 商品只走「按意图直接查询」
   cli:
     flavor: claude           # 用哪种命令行工具（决定参数与输出格式，见 CliFlavor / ClaudeCliDialect）
     command: ${CLAUDE_CLI_COMMAND:claude}   # 在 PATH 里找；找不到时填完整路径，Windows 下可以直接填 claude.cmd 的路径

@@ -1,0 +1,136 @@
+{
+  "model" : "qwen2.5:0.5b",
+  "recordedAt" : "2026-11-06",
+  "cases" : [ {
+    "message" : "我的订单 21182516707889029120785 到哪了？",
+    "expectedTool" : "queryOrderStatus",
+    "expectedArguments" : {
+      "orderNo" : "21182516707889029120785"
+    },
+    "calls" : [ {
+      "promptHash" : "1257b1d0fd39036f",
+      "text" : "查询结果",
+      "toolCalls" : [ ]
+    } ],
+    "invocations" : [ ],
+    "reply" : "查询结果"
+  }, {
+    "message" : "帮我看看订单 21182516707889029129999 发货了没有",
+    "expectedTool" : "queryOrderStatus",
+    "expectedArguments" : {
+      "orderNo" : "21182516707889029129999"
+    },
+    "calls" : [ {
+      "promptHash" : "0d3418fc38fad32a",
+      "text" : "",
+      "toolCalls" : [ {
+        "id" : "4udUWRFe5qfPU0LtHxcWWFVsW8FT2rqE",
+        "name" : "queryOrderStatus",
+        "arguments" : "{\"orderNo\":\"21182516707889029129999\"}"
+      } ]
+    }, {
+      "promptHash" : "d7ee5b33f7dd3252",
+      "text" : "对不起，我找不到订单 21182516707889029129999。请确认订单号是否正确。",
+      "toolCalls" : [ ]
+    } ],
+    "invocations" : [ {
+      "name" : "queryOrderStatus",
+      "arguments" : "{\"orderNo\":\"21182516707889029129999\"}"
+    } ],
+    "reply" : "对不起，我找不到订单 21182516707889029129999。请确认订单号是否正确。"
+  }, {
+    "message" : "20001 有货吗",
+    "expectedTool" : "queryProduct",
+    "expectedArguments" : {
+      "skuId" : "20001"
+    },
+    "calls" : [ {
+      "promptHash" : "68555756ee5a8074",
+      "text" : "查询结果",
+      "toolCalls" : [ ]
+    } ],
+    "invocations" : [ ],
+    "reply" : "查询结果"
+  }, {
+    "message" : "SKU 20004 这个商品还卖吗？",
+    "expectedTool" : "queryProduct",
+    "expectedArguments" : {
+      "skuId" : "20004"
+    },
+    "calls" : [ {
+      "promptHash" : "0f12f19a662f8c80",
+      "text" : "",
+      "toolCalls" : [ {
+        "id" : "92UiFg6fj3fbsO6wOj8ZCoZKKTwPS9MQ",
+        "name" : "queryProduct",
+        "arguments" : "{\"skuId\":\"20004\"}"
+      } ]
+    }, {
+      "promptHash" : "f219041bcec4540e",
+      "text" : "这个商品已下架，库存为0。",
+      "toolCalls" : [ ]
+    } ],
+    "invocations" : [ {
+      "name" : "queryProduct",
+      "arguments" : "{\"skuId\":\"20004\"}"
+    } ],
+    "reply" : "这个商品已下架，库存为0。"
+  }, {
+    "message" : "商品 99999 多少钱",
+    "expectedTool" : "queryProduct",
+    "expectedArguments" : {
+      "skuId" : "99999"
+    },
+    "calls" : [ {
+      "promptHash" : "2ed08f4e56557830",
+      "text" : "",
+      "toolCalls" : [ {
+        "id" : "mBhpQEpzhVDx4U9rZBjJIYqnoZdMEXnS",
+        "name" : "queryProduct",
+        "arguments" : "{\"skuId\":\"99999\"}"
+      } ]
+    }, {
+      "promptHash" : "8d4afe145a1e3b24",
+      "text" : "对不起，没有编号为 99999 的商品。请提供正确的商品编号。",
+      "toolCalls" : [ ]
+    } ],
+    "invocations" : [ {
+      "name" : "queryProduct",
+      "arguments" : "{\"skuId\":\"99999\"}"
+    } ],
+    "reply" : "对不起，没有编号为 99999 的商品。请提供正确的商品编号。"
+  }, {
+    "message" : "我的订单到哪了？",
+    "expectedTool" : null,
+    "expectedArguments" : null,
+    "calls" : [ {
+      "promptHash" : "6ad996a291b6c3cb",
+      "text" : "请提供订单号，我将查询订单状态。",
+      "toolCalls" : [ ]
+    } ],
+    "invocations" : [ ],
+    "reply" : "请提供订单号，我将查询订单状态。"
+  }, {
+    "message" : "怎么申请退货？",
+    "expectedTool" : null,
+    "expectedArguments" : null,
+    "calls" : [ {
+      "promptHash" : "ffde34789de7424e",
+      "text" : "请问您需要查询哪个订单的退货信息？",
+      "toolCalls" : [ ]
+    } ],
+    "invocations" : [ ],
+    "reply" : "请问您需要查询哪个订单的退货信息？"
+  }, {
+    "message" : "你好",
+    "expectedTool" : null,
+    "expectedArguments" : null,
+    "calls" : [ {
+      "promptHash" : "b8cb8d0d73f4947f",
+      "text" : "您好！请问您有什么问题需要帮助吗？",
+      "toolCalls" : [ ]
+    } ],
+    "invocations" : [ ],
+    "reply" : "您好！请问您有什么问题需要帮助吗？"
+  } ]
+}

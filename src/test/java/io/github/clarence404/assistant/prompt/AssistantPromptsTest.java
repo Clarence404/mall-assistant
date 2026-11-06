@@ -24,6 +24,7 @@ class AssistantPromptsTest {
     void versionPropertySelectsTemplateFile() {
         assertThat(TestPrompts.prompts("v2").systemTemplate().getFilename()).isEqualTo("system-v2.st");
         assertThat(TestPrompts.prompts("v1").systemTemplate().getFilename()).isEqualTo("system-v1.st");
+        assertThat(TestPrompts.prompts("v3").systemTemplate().getFilename()).isEqualTo("system-v3.st");
     }
 
     @Test
@@ -81,6 +82,29 @@ class AssistantPromptsTest {
 
         String system = model.lastPrompt().getSystemMessage().getText();
         assertThat(system).contains("只用简体中文").contains("绝不编造").contains("示例：");
+    }
+
+    /** 第 3 章：v3 让模型先调工具查，订单、商品信息只能来自工具或查询结果，没查到就照实说，绝不编造。v3 刻意写得很短：长提示词会让小模型不调工具（见 docs/ch03.md）。 */
+    @Test
+    void v3RequiresFactsFromLookupResults() {
+        FakeChatModel model = new FakeChatModel();
+
+        ChatClient.builder(model)
+                .build()
+                .prompt()
+                .system(TestPrompts.prompts("v3")::applySystem)
+                .user("在吗")
+                .call()
+                .content();
+
+        String system = model.lastPrompt().getSystemMessage().getText();
+        assertThat(system)
+                .contains("今天是2026年11月5日 星期四")
+                .contains("调用工具查询")
+                .contains("只能来自工具结果或「查询结果」")
+                .contains("found 为 false")
+                .contains("绝不编造订单、库存、价格和物流信息")
+                .doesNotContain("{");
     }
 
     @Test

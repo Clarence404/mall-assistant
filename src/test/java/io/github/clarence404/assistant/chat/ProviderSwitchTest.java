@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.github.clarence404.assistant.cli.CliChatModel;
 import io.github.clarence404.assistant.cli.CliFlavor;
 import io.github.clarence404.assistant.cli.CliProperties;
+import io.github.clarence404.assistant.tool.ToolProperties;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
@@ -31,9 +32,19 @@ class ProviderSwitchTest {
         @Autowired
         ChatModel chatModel;
 
+        @Autowired
+        ToolProperties tools;
+
         @Test
         void usesOllama() {
             assertThat(chatModel).isInstanceOf(OllamaChatModel.class);
+        }
+
+        /** 第 3 章：Ollama 支持原生工具调用，默认两种方式都开。 */
+        @Test
+        void ollamaUsesNativeToolCallingAndDirectLookup() {
+            assertThat(tools.nativeCalling()).isTrue();
+            assertThat(tools.directLookup()).isTrue();
         }
     }
 
@@ -71,6 +82,16 @@ class ProviderSwitchTest {
 
         @Autowired
         CliProperties properties;
+
+        @Autowired
+        ToolProperties tools;
+
+        /** 第 3 章：命令行模型不支持原生工具调用，profile 关掉它，只走按意图直接查询。 */
+        @Test
+        void cliProfileDisablesNativeToolCalling() {
+            assertThat(tools.nativeCalling()).isFalse();
+            assertThat(tools.directLookup()).isTrue();
+        }
 
         /** 容器里只有 CliChatModel（profile 里 spring.ai.model.chat=none 关掉了 Ollama），并带上了不读 CLAUDE.md 的环境变量。 */
         @Test

@@ -59,6 +59,19 @@
   .debug dt { color: var(--muted); }
   .debug dd { margin: 0; font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
   .placeholder { color: var(--muted); }
+  .head-right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .login { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); flex-wrap: wrap; justify-content: flex-end; }
+  .login input {
+    width: 120px; height: 30px; padding: 0 8px; font: inherit; color: var(--fg);
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .login button { height: 30px; padding: 0 12px; border-radius: 8px; font-size: 13px; }
+  .login .ok { color: var(--fg); }
+  .login .err { color: var(--err-fg); }
+  .tools { margin: 0; padding-left: 18px; font-family: ui-monospace, Consolas, monospace; }
+  .tools li { margin: 2px 0 6px; word-break: break-all; }
+  .tools .meta { color: var(--muted); }
+  .debug section.wide { grid-column: 1 / -1; }
 </style>
 </head>
 <body>
@@ -68,7 +81,17 @@
       <h1>示例商城智能客服</h1>
       <div class="sub">商品、下单、支付、物流、售后，都可以问我</div>
     </div>
-    <label class="mode"><input type="checkbox" id="streamMode" checked> 流式输出</label>
+    <div class="head-right">
+      <!-- 第 3 章：登录商城账号（经 POST /api/mall/login 转给 mall-evolution），之后提问时带上 Authorization: Bearer <令牌> -->
+      <form class="login" id="loginForm" autocomplete="off">
+        <span id="loginState">未登录</span>
+        <input id="phone" placeholder="手机号" value="13800000000" aria-label="手机号">
+        <input id="password" type="password" placeholder="密码（演示 mall123）" aria-label="密码">
+        <button type="submit" id="loginBtn">登录</button>
+        <button type="button" id="logoutBtn" hidden>退出</button>
+      </form>
+      <label class="mode"><input type="checkbox" id="streamMode" checked> 流式输出</label>
+    </div>
   </header>
 
   <main class="messages" id="messages" aria-live="polite">
@@ -103,9 +126,9 @@
           <dt>SKU</dt><dd id="dbgSku">-</dd>
         </dl>
       </section>
-      <section>
+      <section class="wide">
         <h3>工具调用</h3>
-        <p class="placeholder">第 3 章接入工具后，这里显示模型调用了哪些工具、参数与结果。</p>
+        <ol class="tools" id="dbgTools"><li class="placeholder">-</li></ol>
       </section>
       <section>
         <h3>引用来源</h3>
@@ -122,7 +145,9 @@
 <script>
 // 聊天页：原生 JS，无构建步骤。两种模式（右上角切换）：
 //   阻塞 —— POST /api/chat，等完整回答一次显示；流式 —— POST /api/chat/stream，按 SSE 事件逐段追加到气泡里
-// 底部「调试面板」显示接口、状态、首段 / 总耗时、片段数、错误码，以及识别出的意图（第 2 章）
+// 底部「调试面板」显示接口、状态、首段 / 总耗时、片段数、错误码，以及识别出的意图（第 2 章）、调用过的工具（第 3 章）
+// 第 3 章：右上角登录商城账号，令牌存在 sessionStorage（关掉标签页就没了），提问时放进 Authorization 请求头；
+//   令牌只给后端的工具用，后端不会把它发给模型
 (() => {
   const $ = (id) => document.getElementById(id);
   const messages = $('messages');
@@ -167,6 +192,78 @@
     });
   }
 
+  // 第 3 章：商城令牌。sessionStorage 在隐私模式或被禁用时会抛异常，读写都包一层，失败就只存在内存里
+  const TOKEN_KEY = 'mallToken';
+  const PHONE_KEY = 'mallPhone';
+  let mallToken = null;
+  try { mallToken = sessionStorage.getItem(TOKEN_KEY); } catch { /* 存不了就算了 */ }
+
+  function saveLogin(token, phone) {
+    mallToken = token;
+    try {
+      if (token) { sessionStorage.setItem(TOKEN_KEY, token); sessionStorage.setItem(PHONE_KEY, phone); }
+      else { sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(PHONE_KEY); }
+    } catch { /* 同上 */ }
+    renderLogin();
+  }
+
+  function renderLogin(error) {
+    let phone = '';
+    try { phone = sessionStorage.getItem(PHONE_KEY) || ''; } catch { /* 同上 */ }
+    const state = $('loginState');
+    state.className = error ? 'err' : (mallToken ? 'ok' : '');
+    state.textContent = error || (mallToken ? '已登录 ' + phone.replace(/^(\d{3})\d{4}(\d+)$/, '$1****$2') : '未登录');
+    $('phone').hidden = $('password').hidden = $('loginBtn').hidden = !!mallToken;
+    $('logoutBtn').hidden = !mallToken;
+  }
+
+  // 登录：经智能客服的 /api/mall/login 转给商城网关，页面不直接调 9000（免跨域）
+  $('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const phone = $('phone').value.trim();
+    const password = $('password').value;
+    if (!phone || !password) { renderLogin('请输入手机号和密码'); return; }
+    try {
+      const res = await fetch('/api/mall/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, password })
+      });
+      if (!res.ok) { renderLogin((await problemMessage(res)).message); return; }
+      const body = await res.json();
+      $('password').value = '';
+      saveLogin(body.accessToken, phone);
+    } catch {
+      renderLogin('登录失败：网络异常');
+    }
+  });
+  $('logoutBtn').addEventListener('click', () => saveLogin(null));
+
+  // 提问时的请求头：登录了就带上 Authorization: Bearer <商城令牌>
+  function authHeaders(headers) {
+    return mallToken ? { ...headers, 'Authorization': 'Bearer ' + mallToken } : headers;
+  }
+
+  // 第 3 章：工具调用记录（阻塞接口在响应体的 tools 字段里，流式接口是 tool 事件）
+  const SOURCE_LABELS = { MODEL: '模型决定调用', DIRECT: '按意图直接查询' };
+
+  function resetTools() {
+    $('dbgTools').innerHTML = '<li class="placeholder">-</li>';
+  }
+
+  function addTool(t) {
+    const list = $('dbgTools');
+    list.querySelector('.placeholder')?.remove();
+    const li = document.createElement('li');
+    const result = t.result && t.result.length > 300 ? t.result.slice(0, 300) + '…' : t.result;
+    li.textContent = t.name + ' ' + t.arguments + ' → ' + result;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = (SOURCE_LABELS[t.source] || t.source) + '，' + t.durationMs + ' ms';
+    li.appendChild(meta);
+    list.appendChild(li);
+  }
+
   // 非 2xx 时尽量读出 ProblemDetail 的 detail，读不出就给通用提示
   async function problemMessage(res) {
     try {
@@ -182,12 +279,13 @@
     debug({ endpoint: 'POST /api/chat' });
     const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json', 'Accept': 'application/json' }),
       body: JSON.stringify({ message: text })
     });
     if (!res.ok) throw await problemMessage(res);
     const body = await res.json();
     showIntent(body.intent);
+    (body.tools || []).forEach(addTool);
     bubble.textContent = body.reply;
     debug({ status: 'done', first: '-', chunks: '1', total: (performance.now() - t0).toFixed(0) + ' ms' });
   }
@@ -201,7 +299,7 @@
     debug({ endpoint: 'POST /api/chat/stream' });
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+      headers: authHeaders({ 'Content-Type': 'application/json', 'Accept': 'text/event-stream' }),
       body: JSON.stringify({ message: text })
     });
     if (!res.ok) throw await problemMessage(res);
@@ -215,6 +313,8 @@
     const handle = (event, data) => {
       if (event === 'intent') {
         showIntent(JSON.parse(data));
+      } else if (event === 'tool') {
+        addTool(JSON.parse(data));
       } else if (event === 'token') {
         if (chunks === 0) debug({ first: (performance.now() - t0).toFixed(0) + ' ms' });
         chunks++;
@@ -262,6 +362,7 @@
     const bubble = addMessage('bot pending', '');
     send.disabled = true;
     debug({ status: 'waiting', first: '-', total: '-', chunks: '0', error: '-', intent: '-', confidence: '-', orderNo: '-', sku: '-' });
+    resetTools();
     const t0 = performance.now();
     try {
       if (streamMode.checked) await askStreaming(text, bubble, t0);
@@ -284,6 +385,7 @@
     input.style.height = Math.min(input.scrollHeight, 160) + 'px';
   }
 
+  renderLogin();
   form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
   input.addEventListener('input', autosize);
   input.addEventListener('keydown', (e) => {

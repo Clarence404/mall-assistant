@@ -35,8 +35,9 @@ import org.springframework.stereotype.Component;
  * <p>目前用到的模板（都在 {@code src/main/resources/prompts/}，模板里不能写注释，否则会一起发给模型；同目录的 README.md 有同样的说明）：
  *
  * <ul>
- *   <li>{@code system-v1.st} / {@code system-v2.st}：回答用的系统提示词（客服人设与规则），按版本二选一；v2 比 v1 多了
- *       {@code {today}}、更明确的「不编造」规则和 few-shot 示例。变量：shopName、assistantName、supportScope、today（v1 不用 today）
+ *   <li>{@code system-v1.st} / {@code system-v2.st} / {@code system-v3.st}：回答用的系统提示词（客服人设与规则），按版本三选一；v2 比 v1 多了
+ *       {@code {today}}、更明确的「不编造」规则和 few-shot 示例；v3（第 3 章，默认）让模型先调工具查、事实只能来自工具或查询结果，
+ *       而且刻意写得很短（长提示词会让小模型不调工具）。变量：shopName、assistantName、supportScope、today（v1 不用 today）
  *   <li>{@code refusal.st}：拒答话术，直接返回给用户，不发给模型。变量同上
  *   <li>{@code intent-v1.st}：意图识别的系统提示词，没有变量，由 {@code IntentService} 直接加载，不经过这个类
  * </ul>

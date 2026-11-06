@@ -1,5 +1,6 @@
 package io.github.clarence404.assistant.chat;
 
+import io.github.clarence404.assistant.mall.StubMallApi;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -7,6 +8,8 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
@@ -18,6 +21,9 @@ import org.springframework.test.web.servlet.MockMvc;
  *
  * <p>{@code spring.ai.model.chat=none} 关掉 Ollama / OpenAI 的自动配置，Spring AI 的 ChatClient.Builder 会用这里提供的假模型。
  * 子类的配置相同，Spring 测试框架会缓存并复用同一个上下文，假模型也就是共享的，所以每个测试前都要 {@link #resetModel()}。
+ *
+ * <p>第 3 章起回答时会调商城接口：{@link StubMallApi} 在随机端口起一个假的商城网关，{@code @DynamicPropertySource} 把它的地址填进
+ * {@code assistant.mall.base-url}。它在整个测试进程里只起一个（static），同样每个测试前清空记录。
  */
 @SpringBootTest(properties = "spring.ai.model.chat=none")
 @AutoConfigureMockMvc
@@ -27,13 +33,22 @@ abstract class FakeModelWebTest {
     @Autowired
     protected MockMvc mockMvc;
 
+    /** 假商城网关：整个测试进程共用一个，JVM 退出时随之关闭。 */
+    protected static final StubMallApi MALL = StubMallApi.start();
+
     @Autowired
     protected FakeChatModel model;
+
+    @DynamicPropertySource
+    static void mallApi(DynamicPropertyRegistry registry) {
+        registry.add("assistant.mall.base-url", MALL::baseUrl);
+    }
 
     /** 上下文与假模型在测试之间复用：先清掉上一个测试的预设和记录，避免互相影响。 */
     @BeforeEach
     void resetModel() {
         model.reset();
+        MALL.reset();
     }
 
     /** 把假模型注册成 Spring Bean：容器里唯一的 ChatModel，ChatClient.Builder 会拿它来构建 ChatClient。 */

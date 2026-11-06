@@ -1,0 +1,10 @@
+[
+  {"message": "我的订单 21182516707889029120785 到哪了？", "expectedTool": "queryOrderStatus", "expectedArguments": {"orderNo": "21182516707889029120785"}},
+  {"message": "帮我看看订单 21182516707889029129999 发货了没有", "expectedTool": "queryOrderStatus", "expectedArguments": {"orderNo": "21182516707889029129999"}},
+  {"message": "20001 有货吗", "expectedTool": "queryProduct", "expectedArguments": {"skuId": "20001"}},
+  {"message": "SKU 20004 这个商品还卖吗？", "expectedTool": "queryProduct", "expectedArguments": {"skuId": "20004"}},
+  {"message": "商品 99999 多少钱", "expectedTool": "queryProduct", "expectedArguments": {"skuId": "99999"}},
+  {"message": "我的订单到哪了？", "expectedTool": null, "expectedArguments": null},
+  {"message": "怎么申请退货？", "expectedTool": null, "expectedArguments": null},
+  {"message": "你好", "expectedTool": null, "expectedArguments": null}
+]

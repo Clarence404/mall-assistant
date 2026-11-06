@@ -6,10 +6,14 @@ package io.github.clarence404.assistant.chat;
  * <ul>
  *   <li>{@code event: intent}，data 为 {@code IntentResult}：第 2 章新增，最先推送，告诉前端识别出的意图；只认 token / done / error
  *       的旧前端忽略它即可
+ *   <li>{@code event: tool}，data 为 {@code ToolInvocation}：第 3 章新增，0 到多个，在它之后的文字之前推送，告诉前端调用了哪个工具、
+ *       参数和结果；不认识它的前端同样可以忽略
  *   <li>{@code event: token}，data 为 {@link Token}：一段增量文本，前端按顺序拼接
  *   <li>{@code event: done}，data 为 {@link Done}：回答结束，之后连接关闭
  *   <li>{@code event: error}，data 为 {@link Error}：出错，之后连接关闭，不再有 done
  * </ul>
+ *
+ * <p>顺序：{@code intent → tool* → token* → done | error}（第 3 章起 tool 也可能夹在 token 之间：模型先说了几句再调工具时）。
  *
  * <p>data 用 JSON 而不是纯文本：增量文本里常有换行和前导空格，纯文本 SSE 会把换行拆成多行 data、 把行首空格吃掉。
  *
@@ -21,6 +25,7 @@ package io.github.clarence404.assistant.chat;
 public final class StreamEvents {
 
     public static final String INTENT = "intent";
+    public static final String TOOL = "tool";
     public static final String TOKEN = "token";
     public static final String DONE = "done";
     public static final String ERROR = "error";

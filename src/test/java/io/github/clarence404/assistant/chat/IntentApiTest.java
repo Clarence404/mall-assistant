@@ -114,7 +114,11 @@ class IntentApiTest extends FakeModelWebTest {
 
         List<ChatStreamApiTest.Sse> events = ChatStreamApiTest.parse(stream("我的订单 1849203385720832512 到哪了"));
 
-        assertThat(events).extracting(ChatStreamApiTest.Sse::event).containsExactly("intent", "token", "token", "done");
+        // 第 3 章起，查订单的意图会先直接查一次订单，多出 tool 事件；这里只看 intent 在最前、回答照常推完
+        assertThat(events)
+                .extracting(ChatStreamApiTest.Sse::event)
+                .filteredOn(name -> !"tool".equals(name))
+                .containsExactly("intent", "token", "token", "done");
         assertThat(events.getFirst().json().get("intent").asString()).isEqualTo("ORDER_STATUS");
         assertThat(events.getFirst().json().get("orderNo").asString()).isEqualTo("1849203385720832512");
     }

@@ -29,6 +29,11 @@ spring:
         transcription: none
       moderation: none
       # chat（用哪家的对话模型）不在这里写，由各 profile 的 yml 指定：ollama / openai / none（命令行模型）
+    tools:                   # Spring AI 自己的工具调用设置（第 3 章）；本项目的开关在下面的 assistant.tools
+      limits:                # 一轮回答里最多调几次工具：防止模型反复调同一个工具停不下来（循环失控）
+        max-total-tool-calls: 4          # 所有工具合计（默认 150）
+        max-calls-per-tool-default: 2    # 单个工具（默认 40）
+        on-limit-exceeded: return-error-response   # 超了不抛异常，而是告诉模型「超过次数了」，让它用已有结果回答
     retry:                   # 默认会重试 10 次、指数退避，模型挂了要等好几分钟才报错；客服场景快速失败
       # Spring AI 2.0 把这个值当作「失败后再重试几次」（交给 RetryPolicy.maxRetries），1 = 最多共调 2 次；改成 0 就完全不重试。
       # 只对 Ollama 的阻塞调用生效（流式调用不经过它），重试连接失败（ResourceAccessException）和厂商返回的临时性错误
@@ -38,13 +43,21 @@ spring:
         initial-interval: 500ms   # 第一次重试前等多久（默认 2 秒）
         max-interval: 2s          # 指数退避的等待上限（默认 3 分钟）
 
-# 本项目自己的配置，分别绑定到 ChatProperties（assistant.chat）与 PromptProperties（assistant.prompt）
+# 本项目自己的配置，分别绑定到 ChatProperties（assistant.chat）、PromptProperties（assistant.prompt）、
+# ToolProperties（assistant.tools）与 MallApiProperties（assistant.mall）
 assistant:
   chat:
     stream-timeout: 30s      # 流式：首段和相邻两段之间最多等多久
     refuse-min-confidence: 0.6   # 意图为 OUT_OF_SCOPE 且把握不低于它才直接拒答（不调回答模型）
+  tools:                     # 第 3 章：怎么让模型用上商城数据（见 ToolProperties）
+    native-calling: true     # 把工具注册给模型，由模型决定调不调（ollama / openai 支持；命令行模型的 profile 里改成 false）
+    direct-lookup: true      # 意图识别抽到了订单号 / SKU 时，代码直接查询，把结果作为「查询结果」放进提示词
+  mall:                      # 第 3 章：商城 mall-evolution 的网关（见 MallApiProperties）
+    base-url: ${MALL_API_BASE_URL:http://localhost:9000}   # 先按 mall-evolution 的 README 启动四个服务；连别的机器写进 application-local.yml
+    connect-timeout: 2s      # 网关没启动时快速失败，工具返回「商城服务暂时不可用」
+    read-timeout: 5s         # 商城接口正常几十毫秒返回，比调模型的超时短得多
   prompt:
-    version: v2              # 系统提示词版本：prompts/system-v2.st；改回 v1 可对比效果
+    version: v3              # 系统提示词版本：prompts/system-v3.st（第 3 章：订单、商品信息只能来自查询结果）；改回 v2 / v1 可对比效果
     shop-name: 示例商城      # 以下三项是模板变量 {shopName} / {assistantName} / {supportScope}，同时用于系统提示词与拒答话术
     assistant-name: 小示
     support-scope: 商品、下单、支付、物流、退换货与售后、账户与积分

@@ -6,7 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.clarence404.assistant.error.ModelCallException;
 import io.github.clarence404.assistant.error.ModelFailure;
 import io.github.clarence404.assistant.intent.IntentService;
+import io.github.clarence404.assistant.mall.MallApiClient;
+import io.github.clarence404.assistant.mall.MallApiProperties;
 import io.github.clarence404.assistant.prompt.TestPrompts;
+import io.github.clarence404.assistant.tool.MallTools;
+import io.github.clarence404.assistant.tool.ToolProperties;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.time.Duration;
@@ -35,8 +39,16 @@ class ChatServiceTest {
         ChatClient chatClient = new ChatClientConfig().chatClient(ChatClient.builder(model));
         IntentService intentService = new IntentService(chatClient, new ClassPathResource("prompts/intent-v1.st"));
         // 流式空闲超时只给 300 毫秒，「模型一直不吭声」的测试很快就能结束；0.6 是拒答的置信度门槛，与 application.yml 一致
+        // 这里只测第 1 章的 reply / stream，不会调商城，商城地址随便给一个（工具调用见第 3 章的 ToolCallingFlowTest）
+        MallTools tools = new MallTools(new MallApiClient(
+                new MallApiProperties("http://127.0.0.1:1", Duration.ofSeconds(1), Duration.ofSeconds(1))));
         service = new ChatService(
-                chatClient, new ChatProperties(Duration.ofMillis(300), 0.6), TestPrompts.prompts("v2"), intentService);
+                chatClient,
+                new ChatProperties(Duration.ofMillis(300), 0.6),
+                TestPrompts.prompts("v2"),
+                intentService,
+                tools,
+                new ToolProperties(true, true));
     }
 
     @Test
