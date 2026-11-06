@@ -63,6 +63,17 @@ public class CliChatModel implements ChatModel {
                 : ChatOptions.builder().model(properties.model()).build();
     }
 
+    /** 工具输出里带模型名就用它；没带时用配置的模型；都没有说明用的是工具自己的默认模型（codex 的 JSON 事件不含模型名）。 */
+    private String modelForLog(CliReply reply, CliRequest request) {
+        if (reply.model() != null) {
+            return reply.model();
+        }
+        if (request.model() != null && !request.model().isBlank()) {
+            return request.model();
+        }
+        return dialect.name() + " 默认模型";
+    }
+
     @Override
     public ChatResponse call(Prompt prompt) {
         CliRequest request = toRequest(prompt, false);
@@ -75,10 +86,11 @@ public class CliChatModel implements ChatModel {
                     "{} 调用完成：{} ms，模型 {}，tokens 输入 {} / 输出 {}，费用 {}",
                     dialect.name(),
                     (System.nanoTime() - start) / 1_000_000,
-                    reply.model() != null ? reply.model() : request.model(),
+                    modelForLog(reply, request),
                     reply.inputTokens(),
                     reply.outputTokens(),
-                    reply.costUsd() != null ? "$" + reply.costUsd() : "未知");
+                    // codex 用 ChatGPT 账号登录时按订阅计费，不报告单次费用；claude 会在结果里给出 total_cost_usd
+                    reply.costUsd() != null ? "$" + reply.costUsd() : "工具未报告（订阅计费）");
             return response(reply);
         } catch (CliExecutionException e) {
             log.warn("{} 调用失败：{}", dialect.name(), e.getMessage());
