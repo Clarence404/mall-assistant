@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>LazyJdbcChatMemoryRepository.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.memory</a> &gt; <span class="el_source">LazyJdbcChatMemoryRepository.java</span></div><h1>LazyJdbcChatMemoryRepository.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.memory;
+
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.memory.ChatMemoryRepository;
+import org.springframework.ai.chat.memory.repository.jdbc.JdbcChatMemoryRepository;
+import org.springframework.ai.chat.memory.repository.jdbc.PostgresChatMemoryRepositoryDialect;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
+
+/**
+ * 记忆存进 PostgreSQL：包一层 Spring AI 的 {@link JdbcChatMemoryRepository}，第一次用到时才建表、才创建它（第 6 章引入）。
+ *
+ * &lt;p&gt;所在层：记忆的存储。由 {@link MemoryConfig} 在 {@code assistant.memory.store=jdbc} 时创建，交给 {@code MessageWindowChatMemory} 使用。
+ *
+ * &lt;p&gt;&lt;b&gt;表结构&lt;/b&gt;（Spring AI 自带的 {@code schema-postgresql.sql}）：{@code SPRING_AI_CHAT_MEMORY(conversation_id VARCHAR(36), content TEXT,
+ * type VARCHAR(10), &quot;timestamp&quot; TIMESTAMP, sequence_id BIGINT)}，一条消息一行。只存文字、类型和时间——所以记忆里只能放纯文字消息，
+ * 我们放进 metadata 的别的东西都会丢（时间戳例外，见 {@link MemoryMessages#TIMESTAMP}）；工具调用消息它直接过滤掉不存。
+ * 每次 {@code saveAll} 是「删掉这个会话的全部行、再整体插入」（在一个事务里），所以存储窗口不宜太大。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么要「懒」&lt;/b&gt;（和第 4 章 {@code PgVectorConfig} 同一个思路：数据库没启动，应用也要能起来）：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;{@code JdbcChatMemoryRepository.builder().build()} 会&lt;b&gt;当场连一次数据库&lt;/b&gt;：就算明确指定了方言，它也要读数据库的产品名，和指定的比对一下；
+ *       连不上时等满连接超时、打一大段警告，然后默认用 PostgreSQL 方言。放在启动时，数据库没开就拖慢启动
+ *   &lt;li&gt;建表脚本也要连数据库。Spring AI 的 Starter 是借 Spring Boot 的 SQL 初始化机制执行它的，我们没用 Starter（会触发 JDBC 自动配置），
+ *       只能自己用 {@link ResourceDatabasePopulator} 执行
+ * &lt;/ul&gt;
+ *
+ * 所以连接池设成启动时不连（{@code initializationFailTimeout = -1}），建表和创建 repository 都推迟到第一次读写。失败了下次再试；
+ * 失败时的异常由 {@link ConversationMemory} 接住，对话降级成单轮，接口返回 503。
+ */
+public final class LazyJdbcChatMemoryRepository implements ChatMemoryRepository, AutoCloseable {
+
+<span class="fc" id="L39">    private static final Logger log = LoggerFactory.getLogger(LazyJdbcChatMemoryRepository.class);</span>
+
+    /** Spring AI 自带的建表脚本（在 spring-ai-model-chat-memory-repository-jdbc 的 jar 里，各数据库各一份）。 */
+    static final String SCHEMA = &quot;org/springframework/ai/chat/memory/repository/jdbc/schema-postgresql.sql&quot;;
+
+    private final HikariDataSource dataSource;
+    private final boolean initializeSchema;
+    private volatile JdbcChatMemoryRepository delegate;
+
+    /**
+     * 创建：只建连接池（不连数据库）。
+     *
+     * @param jdbc 连接配置
+     */
+<span class="fc" id="L53">    public LazyJdbcChatMemoryRepository(MemoryProperties.Jdbc jdbc) {</span>
+<span class="fc" id="L54">        this.dataSource = dataSource(jdbc);</span>
+<span class="fc" id="L55">        this.initializeSchema = jdbc.initializeSchema();</span>
+<span class="fc" id="L56">    }</span>
+
+    /**
+     * 记忆专用的连接池（HikariCP）。和第 4 章知识库的连接池分开：两边各自开关、各自出问题互不影响，也不用在 Spring 容器里放两个
+     * {@code DataSource} Bean（第 4 章的 {@code PgVectorConfig} 按类型注入，多一个就分不清了）。
+     *
+     * @param jdbc 连接配置
+     * @return 连接池：启动时不连数据库、不常驻空闲连接、连接超时 3 秒
+     */
+    static HikariDataSource dataSource(MemoryProperties.Jdbc jdbc) {
+<span class="fc" id="L66">        HikariConfig config = new HikariConfig();</span>
+<span class="fc" id="L67">        config.setPoolName(&quot;memory-jdbc&quot;);</span>
+<span class="fc" id="L68">        config.setJdbcUrl(jdbc.url());</span>
+<span class="fc" id="L69">        config.setUsername(jdbc.username());</span>
+<span class="fc" id="L70">        config.setPassword(jdbc.password());</span>
+<span class="fc" id="L71">        config.setMaximumPoolSize(jdbc.maxPoolSize());</span>
+<span class="fc" id="L72">        config.setMinimumIdle(0);</span>
+<span class="fc" id="L73">        config.setConnectionTimeout(3_000);</span>
+<span class="fc" id="L74">        config.setInitializationFailTimeout(-1);</span>
+<span class="fc" id="L75">        return new HikariDataSource(config);</span>
+    }
+
+    /**
+     * 第一次用到时：（按配置）执行建表脚本，再创建 {@link JdbcChatMemoryRepository}。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;已经建好就直接返回（双重检查：{@code volatile} 字段 + {@code synchronized}，并发的第一次只初始化一次）
+     *   &lt;li&gt;{@code initialize-schema=true} 时用 {@code new ResourceDatabasePopulator(new ClassPathResource(SCHEMA)).execute(dataSource)} 建表
+     *       （脚本里都是 {@code IF NOT EXISTS}，重复执行无害）
+     *   &lt;li&gt;{@code JdbcChatMemoryRepository.builder().dataSource(dataSource).dialect(new PostgresChatMemoryRepositoryDialect()).build()}
+     *   &lt;li&gt;任何一步失败都直接抛出（不缓存失败），下次调用再试
+     * &lt;/ul&gt;
+     *
+     * @return 已初始化的 repository
+     */
+    JdbcChatMemoryRepository delegate() {
+<span class="fc" id="L94">        JdbcChatMemoryRepository current = delegate;</span>
+<span class="fc bfc" id="L95" title="All 2 branches covered.">        if (current != null) {</span>
+<span class="fc" id="L96">            return current;</span>
+        }
+<span class="fc" id="L98">        synchronized (this) {</span>
+<span class="pc bpc" id="L99" title="1 of 2 branches missed.">            if (delegate == null) {</span>
+<span class="pc bpc" id="L100" title="1 of 2 branches missed.">                if (initializeSchema) {</span>
+<span class="fc" id="L101">                    new ResourceDatabasePopulator(new ClassPathResource(SCHEMA)).execute(dataSource);</span>
+                }
+<span class="fc" id="L103">                delegate = JdbcChatMemoryRepository.builder()</span>
+<span class="fc" id="L104">                        .dataSource(dataSource)</span>
+<span class="fc" id="L105">                        .dialect(new PostgresChatMemoryRepositoryDialect())</span>
+<span class="fc" id="L106">                        .build();</span>
+<span class="fc" id="L107">                log.info(&quot;对话记忆库已就绪：PostgreSQL 表 SPRING_AI_CHAT_MEMORY&quot;);</span>
+            }
+<span class="fc" id="L109">            return delegate;</span>
+        }
+    }
+
+    @Override
+    public List&lt;String&gt; findConversationIds() {
+<span class="fc" id="L115">        return delegate().findConversationIds();</span>
+    }
+
+    @Override
+    public List&lt;Message&gt; findByConversationId(String conversationId) {
+<span class="fc" id="L120">        return delegate().findByConversationId(conversationId);</span>
+    }
+
+    @Override
+    public void saveAll(String conversationId, List&lt;Message&gt; messages) {
+<span class="fc" id="L125">        delegate().saveAll(conversationId, messages);</span>
+<span class="fc" id="L126">    }</span>
+
+    @Override
+    public void deleteByConversationId(String conversationId) {
+<span class="fc" id="L130">        delegate().deleteByConversationId(conversationId);</span>
+<span class="fc" id="L131">    }</span>
+
+    /** 应用关闭时关掉连接池。 */
+    @Override
+    public void close() {
+<span class="fc" id="L136">        dataSource.close();</span>
+<span class="fc" id="L137">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

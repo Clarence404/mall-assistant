@@ -33,6 +33,15 @@ public final class MallModels {
 <span class="fc" id="L33">    public record Tokens(String accessToken, String refreshToken, long expiresIn) {}</span>
 
     /**
+     * {@code GET /api/users/me} 的响应（商城「我的」页面的 Profile）：第 6 章用它确认令牌属于哪个用户，把会话绑定到这个用户。
+     *
+     * @param userId 用户 ID（商城按字符串输出）
+     * @param nickname 昵称，智能客服不使用
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+<span class="fc" id="L42">    public record UserProfile(String userId, String nickname) {}</span>
+
+    /**
      * {@code GET /api/orders/{orderNo}} 的响应（商城的 OrderView），只取客服回答用得到的字段。
      *
      * @param orderNo 订单号
@@ -44,7 +53,7 @@ public final class MallModels {
      * @param paidAt 支付时间，未支付为 null
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-<span class="fc" id="L47">    public record Order(</span>
+<span class="fc" id="L56">    public record Order(</span>
             String orderNo,
             String status,
             String totalAmount,
@@ -64,7 +73,7 @@ public final class MallModels {
      * @param hasMore 是否还有更早的订单
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-<span class="fc" id="L67">    public record OrderPage(List&lt;OrderListItem&gt; items, String nextCursor, boolean hasMore) {}</span>
+<span class="fc" id="L76">    public record OrderPage(List&lt;OrderListItem&gt; items, String nextCursor, boolean hasMore) {}</span>
 
     /**
      * 「我的订单」列表里的一项（商城的 OrderListItemView）。注意列表项&lt;b&gt;没有商品明细&lt;/b&gt;，商品要再按订单号查详情。
@@ -75,7 +84,7 @@ public final class MallModels {
      * @param createdAt 下单时间
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-<span class="fc" id="L78">    public record OrderListItem(String orderNo, String status, String payAmount, LocalDateTime createdAt) {}</span>
+<span class="fc" id="L87">    public record OrderListItem(String orderNo, String status, String payAmount, LocalDateTime createdAt) {}</span>
 
     /**
      * 订单里的一行商品。
@@ -86,7 +95,7 @@ public final class MallModels {
      * @param quantity 数量
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-<span class="fc" id="L89">    public record OrderItem(String skuId, String productName, String unitPrice, int quantity) {}</span>
+<span class="fc" id="L98">    public record OrderItem(String skuId, String productName, String unitPrice, int quantity) {}</span>
 
     /**
      * {@code GET /api/products/{skuId}} 的响应：商品详情 + 是否有货。商品详情匿名可查，不需要登录。
@@ -95,7 +104,7 @@ public final class MallModels {
      * @param inStock 是否有货：商城的「库存展示」，10 秒缓存，只是提示，下单时以实际扣减为准
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-<span class="fc" id="L98">    public record ProductPage(Product product, boolean inStock) {}</span>
+<span class="fc" id="L107">    public record ProductPage(Product product, boolean inStock) {}</span>
 
     /**
      * 商品信息。
@@ -106,7 +115,7 @@ public final class MallModels {
      * @param onShelf 是否在售（下架的商品还能查到，但不能下单）
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-<span class="fc" id="L109">    public record Product(String skuId, String name, String price, boolean onShelf) {}</span>
+<span class="fc" id="L118">    public record Product(String skuId, String name, String price, boolean onShelf) {}</span>
 
     /**
      * 商城失败时返回的 ProblemDetail（RFC 9457），只取业务码和说明。
@@ -115,6 +124,6 @@ public final class MallModels {
      * @param detail 说明，如「订单 xxx 不存在」
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-<span class="fc" id="L118">    public record Problem(String code, String detail) {}</span>
+<span class="fc" id="L127">    public record Problem(String code, String detail) {}</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

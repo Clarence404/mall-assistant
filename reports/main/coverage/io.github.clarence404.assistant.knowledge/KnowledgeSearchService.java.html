@@ -37,6 +37,15 @@ public class KnowledgeSearchService {
 <span class="fc" id="L37">    }</span>
 
     /**
+     * 当前向量模型的名字（第 6 章：RAG 按模型选相似度门槛用）。
+     *
+     * @return 模型名，如 {@code bge-m3}
+     */
+    public String modelName() {
+<span class="fc" id="L45">        return embedding.modelName();</span>
+    }
+
+    /**
      * 检索：库里有别的模型生成的块时先报 409（{@link KnowledgeIngestionService#ensureSameModel}），再做相似度检索。
      *
      * @param query 问题，不能为空
@@ -45,14 +54,14 @@ public class KnowledgeSearchService {
      * @throws KnowledgeException 向量模型或向量库不可用（503），或需要重建（409）
      */
     public List&lt;KnowledgeHit&gt; search(String query, Integer topK) {
-<span class="fc bfc" id="L48" title="All 2 branches covered.">        int k = topK == null</span>
-<span class="fc" id="L49">                ? properties.search().defaultTopK()</span>
-<span class="fc" id="L50">                : Math.clamp(topK, 1, properties.search().maxTopK());</span>
+<span class="fc bfc" id="L57" title="All 2 branches covered.">        int k = topK == null</span>
+<span class="fc" id="L58">                ? properties.search().defaultTopK()</span>
+<span class="fc" id="L59">                : Math.clamp(topK, 1, properties.search().maxTopK());</span>
         try {
-<span class="fc" id="L52">            KnowledgeIngestionService.ensureSameModel(store.documents(), embedding, store);</span>
-<span class="fc" id="L53">            return similaritySearch(query, k);</span>
-<span class="fc" id="L54">        } catch (RuntimeException e) {</span>
-<span class="fc" id="L55">            throw KnowledgeException.classify(e, embedding.modelName(), store.location());</span>
+<span class="fc" id="L61">            KnowledgeIngestionService.ensureSameModel(store.documents(), embedding, store);</span>
+<span class="fc" id="L62">            return similaritySearch(query, k);</span>
+<span class="fc" id="L63">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L64">            throw KnowledgeException.classify(e, embedding.modelName(), store.location());</span>
         }
     }
 
@@ -79,32 +88,32 @@ public class KnowledgeSearchService {
      * @return 命中块
      */
     List&lt;KnowledgeHit&gt; similaritySearch(String query, int topK) {
-<span class="fc" id="L82">        SearchRequest request = SearchRequest.builder()</span>
-<span class="fc" id="L83">                .query(query)</span>
-<span class="fc" id="L84">                .topK(topK)</span>
-<span class="fc" id="L85">                .similarityThresholdAll()</span>
-<span class="fc" id="L86">                .build();</span>
-<span class="fc" id="L87">        List&lt;Document&gt; results = store.vectorStore().similaritySearch(request);</span>
-<span class="fc" id="L88">        return results.stream().map(KnowledgeSearchService::toHit).toList();</span>
+<span class="fc" id="L91">        SearchRequest request = SearchRequest.builder()</span>
+<span class="fc" id="L92">                .query(query)</span>
+<span class="fc" id="L93">                .topK(topK)</span>
+<span class="fc" id="L94">                .similarityThresholdAll()</span>
+<span class="fc" id="L95">                .build();</span>
+<span class="fc" id="L96">        List&lt;Document&gt; results = store.vectorStore().similaritySearch(request);</span>
+<span class="fc" id="L97">        return results.stream().map(KnowledgeSearchService::toHit).toList();</span>
     }
 
     private static KnowledgeHit toHit(Document document) {
-<span class="fc" id="L92">        Map&lt;String, Object&gt; metadata = document.getMetadata();</span>
-<span class="pc bpc" id="L93" title="1 of 2 branches missed.">        double score = round(document.getScore() == null ? 0.0 : document.getScore());</span>
-<span class="fc" id="L94">        Object index = metadata.get(ChunkMetadata.CHUNK_INDEX);</span>
-<span class="fc" id="L95">        return new KnowledgeHit(</span>
-<span class="fc" id="L96">                document.getText(),</span>
-<span class="fc" id="L97">                text(metadata, ChunkMetadata.SOURCE),</span>
-<span class="fc" id="L98">                text(metadata, ChunkMetadata.TITLE),</span>
-<span class="fc" id="L99">                text(metadata, ChunkMetadata.HEADING_PATH),</span>
-<span class="pc bpc" id="L100" title="1 of 2 branches missed.">                index instanceof Number n ? n.intValue() : null,</span>
-<span class="fc" id="L101">                text(metadata, ChunkMetadata.DOC_VERSION),</span>
+<span class="fc" id="L101">        Map&lt;String, Object&gt; metadata = document.getMetadata();</span>
+<span class="pc bpc" id="L102" title="1 of 2 branches missed.">        double score = round(document.getScore() == null ? 0.0 : document.getScore());</span>
+<span class="fc" id="L103">        Object index = metadata.get(ChunkMetadata.CHUNK_INDEX);</span>
+<span class="fc" id="L104">        return new KnowledgeHit(</span>
+<span class="fc" id="L105">                document.getText(),</span>
+<span class="fc" id="L106">                text(metadata, ChunkMetadata.SOURCE),</span>
+<span class="fc" id="L107">                text(metadata, ChunkMetadata.TITLE),</span>
+<span class="fc" id="L108">                text(metadata, ChunkMetadata.HEADING_PATH),</span>
+<span class="pc bpc" id="L109" title="1 of 2 branches missed.">                index instanceof Number n ? n.intValue() : null,</span>
+<span class="fc" id="L110">                text(metadata, ChunkMetadata.DOC_VERSION),</span>
                 score,
-<span class="fc" id="L103">                round(1.0 - score));</span>
+<span class="fc" id="L112">                round(1.0 - score));</span>
     }
 
     private static double round(double value) {
-<span class="fc" id="L107">        return Math.round(value * 10_000) / 10_000.0;</span>
+<span class="fc" id="L116">        return Math.round(value * 10_000) / 10_000.0;</span>
     }
 
     /**
@@ -115,38 +124,38 @@ public class KnowledgeSearchService {
      * @throws KnowledgeException 向量库连不上
      */
     public KnowledgeStats stats() {
-<span class="fc" id="L118">        List&lt;StoredDocument&gt; documents = store.documents();</span>
-<span class="fc" id="L119">        String warning = null;</span>
-<span class="fc" id="L120">        Integer dimensions = null;</span>
-<span class="pc bpc" id="L121" title="1 of 2 branches missed.">        if (!embedding.configured()) {</span>
-<span class="nc" id="L122">            warning = &quot;没有配置向量模型，知识库不可用。&quot;;</span>
+<span class="fc" id="L127">        List&lt;StoredDocument&gt; documents = store.documents();</span>
+<span class="fc" id="L128">        String warning = null;</span>
+<span class="fc" id="L129">        Integer dimensions = null;</span>
+<span class="pc bpc" id="L130" title="1 of 2 branches missed.">        if (!embedding.configured()) {</span>
+<span class="nc" id="L131">            warning = &quot;没有配置向量模型，知识库不可用。&quot;;</span>
         } else {
             try {
-<span class="fc" id="L125">                dimensions = embedding.dimensions();</span>
-<span class="fc" id="L126">                KnowledgeIngestionService.ensureSameModel(documents, embedding, store);</span>
-<span class="fc" id="L127">            } catch (KnowledgeException e) {</span>
-<span class="fc" id="L128">                warning = e.getMessage();</span>
-<span class="fc" id="L129">            }</span>
-<span class="pc bpc" id="L130" title="1 of 4 branches missed.">            if (warning == null &amp;&amp; documents.isEmpty()) {</span>
-<span class="nc" id="L131">                warning = &quot;知识库还是空的：点「入库」或调用 POST /api/knowledge/ingest。&quot;;</span>
+<span class="fc" id="L134">                dimensions = embedding.dimensions();</span>
+<span class="fc" id="L135">                KnowledgeIngestionService.ensureSameModel(documents, embedding, store);</span>
+<span class="fc" id="L136">            } catch (KnowledgeException e) {</span>
+<span class="fc" id="L137">                warning = e.getMessage();</span>
+<span class="fc" id="L138">            }</span>
+<span class="pc bpc" id="L139" title="1 of 4 branches missed.">            if (warning == null &amp;&amp; documents.isEmpty()) {</span>
+<span class="nc" id="L140">                warning = &quot;知识库还是空的：点「入库」或调用 POST /api/knowledge/ingest。&quot;;</span>
             }
         }
-<span class="fc" id="L134">        return new KnowledgeStats(</span>
-<span class="fc" id="L135">                store.type(),</span>
-<span class="fc" id="L136">                store.location(),</span>
-<span class="fc" id="L137">                embedding.modelName(),</span>
-<span class="fc bfc" id="L138" title="All 2 branches covered.">                dimensions != null ? dimensions : embedding.dimensionsIfKnown(),</span>
-<span class="fc" id="L139">                embedding.profile().queryPrefix(),</span>
-<span class="fc" id="L140">                embedding.profile().documentPrefix(),</span>
-<span class="fc" id="L141">                documents.size(),</span>
-<span class="fc" id="L142">                documents.stream().mapToInt(StoredDocument::chunkCount).sum(),</span>
+<span class="fc" id="L143">        return new KnowledgeStats(</span>
+<span class="fc" id="L144">                store.type(),</span>
+<span class="fc" id="L145">                store.location(),</span>
+<span class="fc" id="L146">                embedding.modelName(),</span>
+<span class="fc bfc" id="L147" title="All 2 branches covered.">                dimensions != null ? dimensions : embedding.dimensionsIfKnown(),</span>
+<span class="fc" id="L148">                embedding.profile().queryPrefix(),</span>
+<span class="fc" id="L149">                embedding.profile().documentPrefix(),</span>
+<span class="fc" id="L150">                documents.size(),</span>
+<span class="fc" id="L151">                documents.stream().mapToInt(StoredDocument::chunkCount).sum(),</span>
                 documents,
                 warning);
     }
 
     private static String text(Map&lt;String, Object&gt; metadata, String key) {
-<span class="fc" id="L148">        Object value = metadata.get(key);</span>
-<span class="pc bpc" id="L149" title="1 of 2 branches missed.">        return value == null ? &quot;&quot; : value.toString();</span>
+<span class="fc" id="L157">        Object value = metadata.get(key);</span>
+<span class="pc bpc" id="L158" title="1 of 2 branches missed.">        return value == null ? &quot;&quot; : value.toString();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -238,13 +238,13 @@ public class CliChatModel implements ChatModel {
      * &lt;p&gt;{@code claude -p} / {@code codex exec} 一次只接收一段输入，没有「消息列表」的概念，所以历史消息只能拼成文本交给它。
      */
     static String render(List&lt;Message&gt; conversation) {
-<span class="pc bpc" id="L241" title="2 of 4 branches missed.">        if (conversation.size() == 1 &amp;&amp; conversation.getFirst().getMessageType() == MessageType.USER) {</span>
+<span class="pc bpc" id="L241" title="1 of 4 branches missed.">        if (conversation.size() == 1 &amp;&amp; conversation.getFirst().getMessageType() == MessageType.USER) {</span>
 <span class="fc" id="L242">            return Objects.requireNonNullElse(conversation.getFirst().getText(), &quot;&quot;);</span>
         }
-<span class="nc" id="L244">        return conversation.stream()</span>
-<span class="nc bnc" id="L245" title="All 2 branches missed.">                .map(m -&gt; (m.getMessageType() == MessageType.ASSISTANT ? &quot;助手：&quot; : &quot;用户：&quot;)</span>
-<span class="nc" id="L246">                        + Objects.requireNonNullElse(m.getText(), &quot;&quot;))</span>
-<span class="nc" id="L247">                .collect(Collectors.joining(&quot;\n\n&quot;));</span>
+<span class="fc" id="L244">        return conversation.stream()</span>
+<span class="fc bfc" id="L245" title="All 2 branches covered.">                .map(m -&gt; (m.getMessageType() == MessageType.ASSISTANT ? &quot;助手：&quot; : &quot;用户：&quot;)</span>
+<span class="fc" id="L246">                        + Objects.requireNonNullElse(m.getText(), &quot;&quot;))</span>
+<span class="fc" id="L247">                .collect(Collectors.joining(&quot;\n\n&quot;));</span>
     }
 
     /** 把解析结果包成 Spring AI 的 {@link ChatResponse}：一个 Generation（回答文本），元数据里放模型名和 token 用量（有才放）。 */

@@ -158,7 +158,7 @@ public class RagRetriever {
      * &lt;p&gt;要求（测试按这个写）：
      *
      * &lt;ul&gt;
-     *   &lt;li&gt;候选算「相关」的条件（满足其一即可）：向量相似度不为 null 且 ≥ {@code min-score}；或覆盖率不为 null 且 ≥
+     *   &lt;li&gt;候选算「相关」的条件（满足其一即可）：向量相似度不为 null 且 ≥ {@link #minScore()}（第 6 章起按当前向量模型取）；或覆盖率不为 null 且 ≥
      *       {@code keyword-min-coverage}
      *   &lt;li&gt;保持 ranked 的先后，取前 {@code topK} 个相关的
      * &lt;/ul&gt;
@@ -172,28 +172,38 @@ public class RagRetriever {
      * @return 相关的候选，最多 topK 个；一个都不相关时为空列表
      */
     List&lt;RagCandidate&gt; select(List&lt;RagCandidate&gt; ranked, int topK) {
-<span class="fc" id="L175">        return ranked.stream()</span>
-<span class="fc bfc" id="L176" title="All 4 branches covered.">                .filter(c -&gt; (c.vectorScore() != null &amp;&amp; c.vectorScore() &gt;= properties.minScore())</span>
-<span class="fc bfc" id="L177" title="All 4 branches covered.">                        || (c.coverage() != null &amp;&amp; c.coverage() &gt;= properties.keywordMinCoverage()))</span>
-<span class="fc" id="L178">                .limit(topK)</span>
-<span class="fc" id="L179">                .toList();</span>
+<span class="fc" id="L175">        double minScore = minScore();</span>
+<span class="fc" id="L176">        return ranked.stream()</span>
+<span class="fc bfc" id="L177" title="All 4 branches covered.">                .filter(c -&gt; (c.vectorScore() != null &amp;&amp; c.vectorScore() &gt;= minScore)</span>
+<span class="fc bfc" id="L178" title="All 4 branches covered.">                        || (c.coverage() != null &amp;&amp; c.coverage() &gt;= properties.keywordMinCoverage()))</span>
+<span class="fc" id="L179">                .limit(topK)</span>
+<span class="fc" id="L180">                .toList();</span>
+    }
+
+    /**
+     * 当前向量模型的相似度门槛（第 6 章补充）：{@code assistant.rag.model-profiles} 里按模型名配了的用配置的，否则用 {@code min-score}。
+     *
+     * @return 门槛
+     */
+    public double minScore() {
+<span class="fc" id="L189">        return properties.minScoreFor(searchService.modelName());</span>
     }
 
     /** 关键词索引：库里的文档汇总没变就复用，变了（重新入库过）就从全部块重建。 */
     KeywordIndex keywordIndex() {
-<span class="fc" id="L184">        List&lt;StoredDocument&gt; signature = store.documents();</span>
-<span class="fc" id="L185">        CachedIndex current = cachedIndex;</span>
-<span class="fc bfc" id="L186" title="All 4 branches covered.">        if (current == null || !current.signature().equals(signature)) {</span>
-<span class="fc" id="L187">            List&lt;RagChunk&gt; chunks = store.chunks().stream().map(RagChunk::from).toList();</span>
-<span class="fc" id="L188">            current = new CachedIndex(signature, KeywordIndex.build(chunks));</span>
-<span class="fc" id="L189">            cachedIndex = current;</span>
-<span class="fc" id="L190">            log.info(&quot;关键词索引已建好：{} 块&quot;, chunks.size());</span>
+<span class="fc" id="L194">        List&lt;StoredDocument&gt; signature = store.documents();</span>
+<span class="fc" id="L195">        CachedIndex current = cachedIndex;</span>
+<span class="fc bfc" id="L196" title="All 4 branches covered.">        if (current == null || !current.signature().equals(signature)) {</span>
+<span class="fc" id="L197">            List&lt;RagChunk&gt; chunks = store.chunks().stream().map(RagChunk::from).toList();</span>
+<span class="fc" id="L198">            current = new CachedIndex(signature, KeywordIndex.build(chunks));</span>
+<span class="fc" id="L199">            cachedIndex = current;</span>
+<span class="fc" id="L200">            log.info(&quot;关键词索引已建好：{} 块&quot;, chunks.size());</span>
         }
-<span class="fc" id="L192">        return current.index();</span>
+<span class="fc" id="L202">        return current.index();</span>
     }
 
     /** 建好的关键词索引和建它时库里的文档汇总（用来判断要不要重建）。 */
-<span class="fc" id="L196">    private record CachedIndex(List&lt;StoredDocument&gt; signature, KeywordIndex index) {}</span>
+<span class="fc" id="L206">    private record CachedIndex(List&lt;StoredDocument&gt; signature, KeywordIndex index) {}</span>
 
     /**
      * 一次检索的结果。
@@ -205,7 +215,7 @@ public class RagRetriever {
      * @param passed 通过门槛的候选数（取前 topK 之后）
      * @param durationMs 耗时，毫秒（含把问题向量化的一次模型调用）
      */
-<span class="fc" id="L208">    public record Retrieval(</span>
+<span class="fc" id="L218">    public record Retrieval(</span>
             List&lt;RagSource&gt; sources,
             List&lt;RagCandidate&gt; ranked,
             int vectorCandidates,

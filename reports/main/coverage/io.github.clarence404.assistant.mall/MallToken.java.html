@@ -34,10 +34,10 @@ public final class MallToken {
      * @return 如 {@code eyJhbG…}；null 时返回「未登录」
      */
     public static String mask(String token) {
-<span class="nc bnc" id="L37" title="All 2 branches missed.">        if (token == null) {</span>
+<span class="pc bpc" id="L37" title="1 of 2 branches missed.">        if (token == null) {</span>
 <span class="nc" id="L38">            return &quot;未登录&quot;;</span>
         }
-<span class="nc bnc" id="L40" title="All 2 branches missed.">        return token.length() &lt;= 6 ? &quot;…&quot; : token.substring(0, 6) + &quot;…&quot;;</span>
+<span class="pc bpc" id="L40" title="1 of 2 branches missed.">        return token.length() &lt;= 6 ? &quot;…&quot; : token.substring(0, 6) + &quot;…&quot;;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

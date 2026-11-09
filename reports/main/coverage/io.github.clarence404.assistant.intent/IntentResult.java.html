@@ -63,16 +63,36 @@ import java.util.regex.Pattern;
     }
 
     /**
+     * 换一个订单号（第 6 章：这一句没提订单号，从会话历史里沿用上一句提到的）。
+     *
+     * @param value 订单号，同样要符合格式，否则置为 null
+     * @return 新的结果；原对象不变
+     */
+    public IntentResult withOrderNo(String value) {
+<span class="fc" id="L72">        return new IntentResult(intent, confidence, valid(value, ORDER_NO), skuId);</span>
+    }
+
+    /**
+     * 换一个 SKU（第 6 章：从会话历史里沿用）。
+     *
+     * @param value SKU，同样要符合格式，否则置为 null
+     * @return 新的结果；原对象不变
+     */
+    public IntentResult withSkuId(String value) {
+<span class="fc" id="L82">        return new IntentResult(intent, confidence, orderNo, valid(value, SKU_ID));</span>
+    }
+
+    /**
      * 格式校验：去掉首尾空白后整串匹配才保留。
      *
      * @return 去掉空白后的值；null 或格式不对时为 null
      */
     private static String valid(String value, Pattern pattern) {
-<span class="fc bfc" id="L71" title="All 2 branches covered.">        if (value == null) {</span>
-<span class="fc" id="L72">            return null;</span>
+<span class="fc bfc" id="L91" title="All 2 branches covered.">        if (value == null) {</span>
+<span class="fc" id="L92">            return null;</span>
         }
-<span class="fc" id="L74">        String stripped = value.strip();</span>
-<span class="fc bfc" id="L75" title="All 2 branches covered.">        return pattern.matcher(stripped).matches() ? stripped : null;</span>
+<span class="fc" id="L94">        String stripped = value.strip();</span>
+<span class="fc bfc" id="L95" title="All 2 branches covered.">        return pattern.matcher(stripped).matches() ? stripped : null;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
