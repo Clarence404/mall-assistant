@@ -8,7 +8,7 @@
     </envs>
     <module name="mall-assistant" />
     <option name="SPRING_BOOT_MAIN_CLASS" value="io.github.clarence404.assistant.AssistantApplication" />
-    <option name="VM_PARAMETERS" value="-Dfile.encoding=UTF-8" />
+    <option name="VM_PARAMETERS" value="-Dfile.encoding=UTF-8 --enable-native-access=ALL-UNNAMED" />
     <option name="WORKING_DIRECTORY" value="file://$PROJECT_DIR$" />
     <method v="2">
       <option name="Make" enabled="true" />

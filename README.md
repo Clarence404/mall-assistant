@@ -70,6 +70,8 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 
 ### 在 IntelliJ IDEA 里运行
 
+运行配置的 VM 参数里带了 `--enable-native-access=ALL-UNNAMED`：用 JDK 24 及以上运行时，依赖里的 Netty 等库会加载本地库，JVM 会打印「A restricted method in java.lang.System has been called」的警告，加上这个参数就不再提示；JDK 21 也认识它，没有副作用。
+
 仓库带了共享运行配置（`.run/`），用 IDEA 打开项目、等 Maven 导入完成（项目 SDK 选 JDK 21）后，右上角直接选：
 
 | 运行配置 | 作用 |
