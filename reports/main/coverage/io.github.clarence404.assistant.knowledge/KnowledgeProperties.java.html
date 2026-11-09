@@ -121,7 +121,7 @@ public record KnowledgeProperties(
      *
      * @param url JDBC 地址，如 {@code jdbc:postgresql://localhost:5432/mall_assistant}
      * @param username 数据库用户
-     * @param password 数据库密码；真实密码写进不入库的 application-local.yml 或环境变量
+     * @param password 数据库密码；真实密码写进不入库的 config/application-local.yml 或环境变量
      * @param schema 表所在的 schema，默认 public
      * @param table 表名；留空 = 按模型自动生成（{@code knowledge_chunk_bge_m3}、{@code knowledge_chunk_nomic_embed_text}），
      *     不同模型的向量各存一张表
