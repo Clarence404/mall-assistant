@@ -8,8 +8,15 @@ spring:
   ai:
     model:
       chat: none             # 关掉 Ollama / OpenAI 的 ChatModel 自动配置，由 CliChatModel 提供
+      embedding: ollama      # 第 4 章：命令行工具只能对话、没有向量模型，知识库的向量化改用 Ollama（先 ollama pull bge-m3）
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}   # 同 ollama profile；远程地址写进 application-local.yml
+      embedding:
+        model: ${OLLAMA_EMBEDDING_MODEL:bge-m3}             # 同 ollama profile：bge-m3（1024 维）或 nomic-embed-text（768 维）
 
 assistant:
+  knowledge:
+    embedding-model: ${spring.ai.ollama.embedding.model}   # 知识库用这个名字选前缀、给表名加后缀
   tools:
     native-calling: false    # 命令行模型只当纯文本模型用，不支持原生工具调用；查订单 / 商品只走「按意图直接查询」
   cli:

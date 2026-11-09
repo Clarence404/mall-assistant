@@ -12,6 +12,8 @@ spring:
       base-url: http://<ollama-host>:11434
       chat:
         model: qwen2.5:0.5b
+      embedding:
+        model: bge-m3            # 第 4 章的向量模型：bge-m3（1024 维）或 nomic-embed-text（768 维），先在那台机器上 ollama pull
 
     # —— 用 OpenAI 兼容接口（openai profile）：取消注释并填写 ——
     # openai:
@@ -24,3 +26,15 @@ spring:
 # assistant:
 #   mall:
 #     base-url: http://<mall-gateway-host>:9000
+
+# —— 第 4 章：知识库用 pgvector（默认 memory 不需要数据库）——
+# 先起一个带 pgvector 扩展的 PostgreSQL，如：
+#   docker run -d --name mall-pgvector -p 5432:5432 -e POSTGRES_DB=mall_assistant -e POSTGRES_USER=mall -e POSTGRES_PASSWORD=<your-password> pgvector/pgvector:0.8.1-pg17
+# 表按向量模型自动生成（knowledge_chunk_bge_m3 / knowledge_chunk_nomic_embed_text），首次入库时自动建表、建 HNSW 索引
+# assistant:
+#   knowledge:
+#     store: pgvector
+#     pgvector:
+#       url: jdbc:postgresql://<pg-host>:5432/mall_assistant
+#       username: mall
+#       password: <your-password>

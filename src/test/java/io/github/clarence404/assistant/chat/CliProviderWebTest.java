@@ -39,7 +39,7 @@ import tools.jackson.databind.json.JsonMapper;
  * FakeCli 的意图固定是带订单号的 ORDER_STATUS，所以每次回答前都会先查一次订单，查询结果拼进 stdin 的用户消息里；FakeCli 把收到的
  * stdin 原样回显，正好用来检查「查询结果进了提示词、令牌没进」。
  */
-@SpringBootTest
+@SpringBootTest(properties = "assistant.knowledge.ingest-on-startup=false") // 第 4 章：不在启动时去连 Ollama 的向量模型
 @AutoConfigureMockMvc
 @ActiveProfiles("claude-cli")
 class CliProviderWebTest {

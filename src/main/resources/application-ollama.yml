@@ -1,11 +1,21 @@
-# 默认 profile：本机 Ollama（http://localhost:11434），先执行 ollama pull qwen2.5:0.5b
+# 默认 profile：本机 Ollama（http://localhost:11434），先执行 ollama pull qwen2.5:0.5b；第 4 章的向量模型再 ollama pull bge-m3
 spring:
   ai:
     model:
       chat: ollama           # 选用 Ollama 的 ChatModel 自动配置（OllamaChatModel），ChatClient 背后就是它
+      embedding: ollama      # 第 4 章：向量模型也用 Ollama（OllamaEmbeddingModel），把文字变成向量
     ollama:
       base-url: ${OLLAMA_BASE_URL:http://localhost:11434}   # Ollama 服务地址；连远程机器设环境变量或写进 application-local.yml
       chat:
         model: ${OLLAMA_CHAT_MODEL:qwen2.5:0.5b}   # 0.5b 约 400 MB、CPU 也能跑，够走通流程；想要更准换 qwen2.5:1.5b（先 ollama pull）
         temperature: 0.3     # 回答的默认温度：低一点，客服措辞稳定、少发挥；意图识别在代码里单独设为 0（见 IntentService）
         keep-alive: 10m      # 请求结束后模型在内存里保留多久；保留期内再次提问不用重新加载模型，首个字出来得更快
+      embedding:
+        # 向量模型（第 4 章）：bge-m3 输出 1024 维、中英文都好、约 1.2 GB；nomic-embed-text 输出 768 维、以英文为主、约 270 MB
+        # 换模型后要重新入库：不同模型的向量不能混用，本项目按模型分表 / 分文件存放（knowledge_chunk_bge_m3 …），各用各的
+        model: ${OLLAMA_EMBEDDING_MODEL:bge-m3}
+        keep-alive: 10m      # 同 chat：入库时连续调用，模型留在内存里
+
+assistant:
+  knowledge:
+    embedding-model: ${spring.ai.ollama.embedding.model}   # 知识库用这个名字选前缀、给表名加后缀，和上面的模型保持一致

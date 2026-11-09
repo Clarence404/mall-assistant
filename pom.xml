@@ -84,6 +84,22 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
+        <!-- 第 4 章：向量库。spring-ai-vector-store 带内存版 SimpleVectorStore（默认，不需要数据库）；
+             spring-ai-pgvector-store 是 PgVectorStore 本身（非 Starter，不会自动配置、不强制要求 DataSource），
+             只有 assistant.knowledge.store=pgvector 时才由 PgVectorConfig 手动创建 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-vector-store</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-pgvector-store</artifactId>
+        </dependency>
+        <!-- pgvector 模式的连接池（版本由 Spring Boot 管理）；只在 PgVectorConfig 里手动创建，不触发任何数据源自动配置 -->
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -108,6 +124,12 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers-ollama</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 第 4 章：PgVectorStoreIT 用 pgvector/pgvector 镜像起真实的 PostgreSQL -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

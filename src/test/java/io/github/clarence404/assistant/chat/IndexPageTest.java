@@ -36,6 +36,10 @@ class IndexPageTest extends FakeModelWebTest {
                 // 第 3 章：登录框（经 /api/mall/login 登录）、提问时带 Authorization、调试面板列出工具调用
                 .contains("/api/mall/login")
                 .contains("Authorization")
-                .contains("dbgTools");
+                .contains("dbgTools")
+                // 第 4 章：知识库调试区（入库、检索、概况）
+                .contains("/api/knowledge/search")
+                .contains("/api/knowledge/ingest")
+                .contains("/api/knowledge/stats");
     }
 }

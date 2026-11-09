@@ -41,7 +41,9 @@ import org.springframework.test.context.DynamicPropertySource;
  * <p>做法：意图固定为 UNKNOWN、关掉直接查询（{@link ToolRecordings#chatService}），每条消息都由模型自己决定；商城是 {@link StubMallApi}，
  * 已登录（令牌在 ToolContext 里），所以工具结果是确定的。温度设为 0，同一个模型连续录几次结果一致。
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE, properties = "spring.ai.ollama.chat.temperature=0")
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.NONE,
+        properties = {"spring.ai.ollama.chat.temperature=0", "assistant.knowledge.ingest-on-startup=false"})
 @EnabledIfEnvironmentVariable(named = "RECORD_OLLAMA_URL", matches = "https?://.+")
 class ToolDecisionRecordingIT {
 

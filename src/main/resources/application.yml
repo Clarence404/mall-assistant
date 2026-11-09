@@ -21,8 +21,9 @@ spring:
       read-timeout: 60s      # 阻塞调用要等整段回答生成完，给足时间；流式调用是两段之间的间隔
       # 注意：openai profile 走 OpenAI 官方 Java SDK，不用这里的设置，超时与重试见 application-openai.yml
   ai:
-    model:                   # 本章只用对话模型，其余能力关掉，免得 openai Starter 要求配置 api-key
-      embedding: none        # 向量化模型：第 4 章知识入库时才会用到
+    model:                   # 用不到的模型能力关掉，免得 openai Starter 要求配置 api-key
+      # embedding（向量模型，第 4 章知识入库用）和 chat 一样不在这里写，由各 profile 的 yml 指定：
+      # ollama profile 用 Ollama，openai profile 用 OpenAI 兼容接口，claude-cli / codex-cli 没有向量模型、也用 Ollama
       image: none
       audio:
         speech: none
@@ -44,7 +45,7 @@ spring:
         max-interval: 2s          # 指数退避的等待上限（默认 3 分钟）
 
 # 本项目自己的配置，分别绑定到 ChatProperties（assistant.chat）、PromptProperties（assistant.prompt）、
-# ToolProperties（assistant.tools）与 MallApiProperties（assistant.mall）
+# ToolProperties（assistant.tools）、MallApiProperties（assistant.mall）与 KnowledgeProperties（assistant.knowledge）
 assistant:
   chat:
     stream-timeout: 30s      # 流式：首段和相邻两段之间最多等多久
@@ -62,6 +63,35 @@ assistant:
     assistant-name: 小示
     support-scope: 商品、下单、支付、物流、退换货与售后、账户与积分
     zone: Asia/Shanghai      # 渲染「今天」用的时区
+  knowledge:                 # 第 4 章：知识入库（见 KnowledgeProperties）。只做入库与检索调试，第 5 章 RAG 才接进对话
+    store: ${ASSISTANT_KNOWLEDGE_STORE:memory}   # 向量库：memory（默认，不装数据库也能跑）或 pgvector（PostgreSQL + pgvector 扩展）
+    location: classpath:knowledge/*.md           # 知识文档在哪；也可以写 file:/某个目录/*.md
+    ingest-on-startup: true  # 启动后自动增量入库一次；向量模型或向量库不可用时只打警告，不影响启动和对话
+    # embedding-model（当前向量模型的名字）由各 profile 的 yml 从对应厂商的配置引用过来，用来选前缀、给表名 / 文件名加后缀
+    dimensions: 0            # 向量维度：0 = 第一次用到时调一次模型探测（bge-m3 是 1024、nomic-embed-text 是 768），大于 0 = 按配置
+    chunk:                   # 切块：先按标题分节，超长的节再按长度切
+      max-chars: 300         # 每块正文最多多少个字符：太大一块里混了好几件事、检索不准，太小丢上下文；规则文档一节一两百字，一节一块
+      overlap: 50            # 相邻两块重叠多少个字符：按长度硬切时句子可能被切断，重叠让跨边界的内容在两块里都完整出现
+    search:                  # 相似度检索（GET /api/knowledge/search）
+      default-top-k: 4       # 不传 topK 时返回几块
+      max-top-k: 10          # topK 上限
+    memory:                  # store=memory 时
+      dir: target/knowledge  # 入库后把向量存成 JSON（knowledge_chunk_<模型>.json），重启后读回来、没变的文档直接跳过；留空 = 不持久化
+    pgvector:                # store=pgvector 时（见 PgVectorConfig）；真实地址和密码写进不入库的 application-local.yml 或环境变量
+      url: ${PGVECTOR_URL:jdbc:postgresql://localhost:5432/mall_assistant}
+      username: ${PGVECTOR_USERNAME:mall}
+      password: ${PGVECTOR_PASSWORD:}
+      schema: public
+      table: ""              # 留空 = 按模型生成表名（knowledge_chunk_bge_m3 / knowledge_chunk_nomic_embed_text），不同模型各用一张表
+      initialize-schema: true   # 自动建扩展、建表、建 HNSW 索引（都是 IF NOT EXISTS，已存在不动）
+      max-pool-size: 4       # 连接池大小，入库和检索都是偶尔调用
+    model-profiles:          # 按模型名前缀匹配的「查询前缀 / 文档前缀」，前缀只在调模型时加，不存进库里
+      - match: nomic-embed-text            # nomic 官方要求：检索的问题加 search_query: ，入库的文档加 search_document:
+        query-prefix: "search_query: "
+        document-prefix: "search_document: "
+      - match: bge-m3                      # bge-m3 不需要前缀（列在这里只是说明，不写效果一样）
+        query-prefix: ""
+        document-prefix: ""
 
 server:
   port: ${SERVER_PORT:8088}    # 与 mall-evolution（8080 / 8082 / 8083 / 9000）错开，两个项目可以同时运行

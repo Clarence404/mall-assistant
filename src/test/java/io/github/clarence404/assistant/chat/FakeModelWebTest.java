@@ -1,5 +1,6 @@
 package io.github.clarence404.assistant.chat;
 
+import io.github.clarence404.assistant.knowledge.FakeEmbeddingModel;
 import io.github.clarence404.assistant.mall.StubMallApi;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,8 +25,18 @@ import org.springframework.test.web.servlet.MockMvc;
  *
  * <p>第 3 章起回答时会调商城接口：{@link StubMallApi} 在随机端口起一个假的商城网关，{@code @DynamicPropertySource} 把它的地址填进
  * {@code assistant.mall.base-url}。它在整个测试进程里只起一个（static），同样每个测试前清空记录。
+ *
+ * <p>第 4 章起应用里还有向量模型：同样关掉 Ollama 的自动配置（{@code spring.ai.model.embedding=none}），换成不联网的
+ * {@link FakeEmbeddingModel}；知识库不在启动时自动入库、不写 JSON 文件，由知识库的测试自己调用入库接口，免得测试之间互相影响。
  */
-@SpringBootTest(properties = "spring.ai.model.chat=none")
+@SpringBootTest(
+        properties = {
+            "spring.ai.model.chat=none",
+            "spring.ai.model.embedding=none",
+            "assistant.knowledge.embedding-model=fake-ngram",
+            "assistant.knowledge.ingest-on-startup=false",
+            "assistant.knowledge.memory.dir="
+        })
 @AutoConfigureMockMvc
 @Import(FakeModelWebTest.FakeModelConfig.class)
 abstract class FakeModelWebTest {
@@ -39,6 +50,10 @@ abstract class FakeModelWebTest {
     @Autowired
     protected FakeChatModel model;
 
+    /** 第 4 章：假向量模型。 */
+    @Autowired
+    protected FakeEmbeddingModel embeddingModel;
+
     @DynamicPropertySource
     static void mallApi(DynamicPropertyRegistry registry) {
         registry.add("assistant.mall.base-url", MALL::baseUrl);
@@ -48,6 +63,7 @@ abstract class FakeModelWebTest {
     @BeforeEach
     void resetModel() {
         model.reset();
+        embeddingModel.reset();
         MALL.reset();
     }
 
@@ -58,6 +74,12 @@ abstract class FakeModelWebTest {
         @Bean
         FakeChatModel fakeChatModel() {
             return new FakeChatModel();
+        }
+
+        /** 第 4 章：容器里唯一的 EmbeddingModel，知识库拿它向量化。 */
+        @Bean
+        FakeEmbeddingModel fakeEmbeddingModel() {
+            return new FakeEmbeddingModel();
         }
     }
 }

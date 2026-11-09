@@ -51,7 +51,13 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>{@code disabledWithoutDocker = true}：没有 Docker 时自动跳过。模型文件放在宿主机目录（默认 ~/.cache/mall-assistant/ollama，可用环境变量
  * OLLAMA_MODELS_CACHE 指定）并挂进容器的 /root/.ollama，第二次起不再下载；CI 用 actions/cache 缓存这个目录。
  */
-@SpringBootTest(properties = {"spring.ai.ollama.chat.num-predict=128", "spring.ai.ollama.chat.temperature=0"})
+@SpringBootTest(
+        properties = {
+            "spring.ai.ollama.chat.num-predict=128",
+            "spring.ai.ollama.chat.temperature=0",
+            // 第 4 章：容器里只拉了对话模型，没有向量模型，不在启动时入库（真实向量模型的集成测试见 OllamaEmbeddingIT）
+            "assistant.knowledge.ingest-on-startup=false"
+        })
 @AutoConfigureMockMvc
 @Testcontainers(disabledWithoutDocker = true)
 class OllamaChatIT {

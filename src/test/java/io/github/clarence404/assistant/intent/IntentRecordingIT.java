@@ -39,7 +39,9 @@ import org.springframework.test.context.DynamicPropertySource;
  * 每次模型调用都记下 Prompt 指纹和原样输出。{@code @EnabledIfEnvironmentVariable} 让它在没设置环境变量时被跳过而不是失败。
  * 类名以 IT 结尾，由 failsafe 在 verify 阶段执行。第 2 章引入。
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.NONE,
+        properties = "assistant.knowledge.ingest-on-startup=false")
 @EnabledIfEnvironmentVariable(named = "RECORD_OLLAMA_URL", matches = "https?://.+")
 class IntentRecordingIT {
 

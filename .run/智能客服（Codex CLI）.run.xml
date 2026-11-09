@@ -3,6 +3,7 @@
     <option name="ACTIVE_PROFILES" value="codex-cli,local" />
     <envs>
       <env name="CODEX_CLI_MODEL" value="" />
+      <env name="OLLAMA_EMBEDDING_MODEL" value="bge-m3" />
     </envs>
     <module name="mall-assistant" />
     <option name="SPRING_BOOT_MAIN_CLASS" value="io.github.clarence404.assistant.AssistantApplication" />

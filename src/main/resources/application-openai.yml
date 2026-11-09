@@ -8,6 +8,7 @@ spring:
   ai:
     model:
       chat: openai           # 选用 OpenAI 的 ChatModel 自动配置（OpenAiChatModel）；业务代码不用改，只换了 ChatClient 背后的模型
+      embedding: openai      # 第 4 章：向量模型也走同一个兼容接口的 /v1/embeddings（OpenAiEmbeddingModel）
     openai:
       base-url: ${OPENAI_BASE_URL}     # 含 /v1，例如 https://api.deepseek.com/v1、http://localhost:11434/v1
       api-key: ${OPENAI_API_KEY}
@@ -18,3 +19,11 @@ spring:
       chat:
         model: ${OPENAI_MODEL}
         temperature: 0.3     # 同 ollama：回答的默认温度，意图识别在代码里单独设为 0
+      embedding:
+        # 向量模型（第 4 章），默认 OpenAI 的 text-embedding-3-small（1536 维）。不是每家兼容接口都有 embeddings：
+        # DeepSeek 没有；通义千问兼容模式用 text-embedding-v3，Ollama 的 /v1 用 bge-m3。接口不支持时入库与检索返回 503，对话不受影响
+        model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
+
+assistant:
+  knowledge:
+    embedding-model: ${spring.ai.openai.embedding.model}   # 知识库用这个名字选前缀、给表名加后缀

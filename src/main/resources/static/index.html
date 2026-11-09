@@ -72,6 +72,21 @@
   .tools li { margin: 2px 0 6px; word-break: break-all; }
   .tools .meta { color: var(--muted); }
   .debug section.wide { grid-column: 1 / -1; }
+  /* 第 4 章：知识库调试区 */
+  .kb-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .kb-bar input[type=text] {
+    flex: 1; min-width: 200px; height: 34px; padding: 0 10px; font: inherit; color: var(--fg);
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .kb-bar select { height: 34px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--fg); }
+  .kb-bar button { height: 34px; padding: 0 14px; border-radius: 8px; font-size: 13px; }
+  .kb-bar label { color: var(--muted); display: flex; align-items: center; gap: 4px; }
+  .kb-stats { color: var(--muted); margin-top: 6px; word-break: break-all; }
+  .kb-stats.err { color: var(--err-fg); }
+  .kb-hits { margin: 8px 0 0; padding-left: 18px; }
+  .kb-hits li { margin: 0 0 10px; }
+  .kb-hits .meta { color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+  .kb-hits .text { white-space: pre-wrap; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -140,12 +155,32 @@
       </section>
     </div>
   </details>
+
+  <!-- 第 4 章：知识库调试区（只检索、不回答；第 5 章 RAG 才把检索结果用进回答） -->
+  <details id="knowledgePanel">
+    <summary>知识库（入库与相似度检索）</summary>
+    <div class="kb-stats" id="kbStats">展开后读取知识库概况…</div>
+    <form class="kb-bar" id="kbSearchForm" autocomplete="off">
+      <input type="text" id="kbQuery" maxlength="500" placeholder="输入问题，看看能检索到哪些知识块，如：七天无理由退货要什么条件" aria-label="检索问题">
+      <select id="kbTopK" aria-label="返回块数">
+        <option value="3">前 3 块</option><option value="4" selected>前 4 块</option><option value="6">前 6 块</option><option value="10">前 10 块</option>
+      </select>
+      <button type="submit" id="kbSearchBtn">检索</button>
+    </form>
+    <div class="kb-bar">
+      <button type="button" id="kbIngestBtn">入库</button>
+      <label><input type="checkbox" id="kbRebuild"> 清空重建</label>
+      <span class="placeholder" id="kbIngestResult">增量入库：没变的文档跳过，变了的重切重写，删掉的清理</span>
+    </div>
+    <ol class="kb-hits" id="kbHits"></ol>
+  </details>
 </div>
 
 <script>
 // 聊天页：原生 JS，无构建步骤。两种模式（右上角切换）：
 //   阻塞 —— POST /api/chat，等完整回答一次显示；流式 —— POST /api/chat/stream，按 SSE 事件逐段追加到气泡里
 // 底部「调试面板」显示接口、状态、首段 / 总耗时、片段数、错误码，以及识别出的意图（第 2 章）、调用过的工具（第 3 章）
+// 第 4 章：最下面的「知识库」调试区：入库、看概况、输入问题看相似度检索命中哪些知识块（不调对话模型）
 // 第 3 章：右上角登录商城账号，令牌存在 sessionStorage（关掉标签页就没了），提问时放进 Authorization 请求头；
 //   令牌只给后端的工具用，后端不会把它发给模型
 (() => {
@@ -384,6 +419,79 @@
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 160) + 'px';
   }
+
+  // 第 4 章：知识库调试区。GET /api/knowledge/stats 看概况，GET /api/knowledge/search 只做相似度检索，POST /api/knowledge/ingest 入库
+  async function kbStats() {
+    const el = $('kbStats');
+    try {
+      const res = await fetch('/api/knowledge/stats');
+      if (!res.ok) { const p = await problemMessage(res); el.className = 'kb-stats err'; el.textContent = p.code + '：' + p.message; return; }
+      const s = await res.json();
+      el.className = 'kb-stats' + (s.warning ? ' err' : '');
+      el.textContent = '向量库 ' + s.store + '（' + s.location + '），模型 ' + s.embeddingModel
+        + (s.dimensions ? '（' + s.dimensions + ' 维）' : '') + '，' + s.documentCount + ' 篇文档 / ' + s.chunkCount + ' 块'
+        + (s.queryPrefix ? '，查询前缀「' + s.queryPrefix + '」' : '') + (s.warning ? '。' + s.warning : '');
+    } catch {
+      el.className = 'kb-stats err';
+      el.textContent = '读取知识库概况失败：网络异常';
+    }
+  }
+
+  function kbShowHits(hits) {
+    const list = $('kbHits');
+    list.innerHTML = '';
+    if (!hits.length) { list.innerHTML = '<li class="placeholder">没有检索到知识块（知识库是空的？先点「入库」）</li>'; return; }
+    for (const h of hits) {
+      const li = document.createElement('li');
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = '相似度 ' + h.score.toFixed(4) + '（距离 ' + h.distance.toFixed(4) + '）  ' + h.source + ' #' + h.chunkIndex + '  ' + h.headingPath;
+      const text = document.createElement('div');
+      text.className = 'text';
+      text.textContent = h.content;
+      li.append(meta, text);
+      list.appendChild(li);
+    }
+  }
+
+  $('kbSearchForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const q = $('kbQuery').value.trim();
+    if (!q) return;
+    $('kbSearchBtn').disabled = true;
+    try {
+      const params = new URLSearchParams({ q, topK: $('kbTopK').value });
+      const res = await fetch('/api/knowledge/search?' + params);
+      if (!res.ok) { const p = await problemMessage(res); $('kbHits').innerHTML = ''; $('kbIngestResult').textContent = p.code + '：' + p.message; return; }
+      const body = await res.json();
+      $('kbIngestResult').textContent = '检索耗时 ' + body.durationMs + ' ms，命中 ' + body.count + ' 块';
+      kbShowHits(body.hits);
+    } catch {
+      $('kbIngestResult').textContent = '检索失败：网络异常';
+    } finally {
+      $('kbSearchBtn').disabled = false;
+    }
+  });
+
+  $('kbIngestBtn').addEventListener('click', async () => {
+    const btn = $('kbIngestBtn');
+    btn.disabled = true;
+    $('kbIngestResult').textContent = '入库中…（第一次要逐块调向量模型，可能要几十秒）';
+    try {
+      const res = await fetch('/api/knowledge/ingest?rebuild=' + $('kbRebuild').checked, { method: 'POST' });
+      if (!res.ok) { const p = await problemMessage(res); $('kbIngestResult').textContent = p.code + '：' + p.message; return; }
+      const r = await res.json();
+      $('kbIngestResult').textContent = '新增 ' + r.documentsAdded + ' / 更新 ' + r.documentsUpdated + ' / 跳过 ' + r.documentsSkipped
+        + ' / 删除 ' + r.documentsRemoved + ' 篇，写入 ' + r.chunksAdded + ' 块，耗时 ' + r.durationMs + ' ms';
+      kbStats();
+    } catch {
+      $('kbIngestResult').textContent = '入库失败：网络异常';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('knowledgePanel').addEventListener('toggle', (e) => { if (e.target.open) kbStats(); });
 
   renderLogin();
   form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });

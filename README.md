@@ -2,7 +2,7 @@
 
 Java Doc「AI」模块的配套练习项目：给 [mall-evolution](https://github.com/Clarence404/mall-evolution) 里的示例商城做一个智能客服，一章一章自己动手写出来。
 
-**版本基线**：JDK 21、Spring Boot 4.0.9、Spring AI 2.0.2、Testcontainers 2.0.5、Ollama 0.40（默认模型 `qwen2.5:0.5b`）。
+**版本基线**：JDK 21、Spring Boot 4.0.9、Spring AI 2.0.2、Testcontainers 2.0.5、Ollama 0.40（默认对话模型 `qwen2.5:0.5b`，向量模型 `bge-m3`）、pgvector 0.8.1（PostgreSQL 17，可选）。
 
 [![verify](https://github.com/Clarence404/mall-assistant/actions/workflows/verify.yml/badge.svg)](https://github.com/Clarence404/mall-assistant/actions/workflows/verify.yml) [测试报告](https://clarence404.github.io/mall-assistant/)
 
@@ -34,7 +34,7 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 | 1 | 接入模型与流式对话 | ChatClient + 系统提示词、按 profile 切换 Ollama / OpenAI 兼容接口、阻塞与 SSE 流式接口、超时与友好报错 | [Spring AI](https://clarence404.github.io/java-doc/ai/2_frameworks/0_spring_ai.html)、[Ollama](https://clarence404.github.io/java-doc/ai/3_integration/0_ollama.html) | [`ch01-start`](https://github.com/Clarence404/mall-assistant/tree/ch01-start) / [`ch01-done`](https://github.com/Clarence404/mall-assistant/tree/ch01-done) |
 | 2 | Prompt 与结构化输出 | 带变量、分版本的提示词模板，意图识别输出 Java 对象（原生结构化输出 + 重试兜底），超出范围直接拒答，录制回放测试 | [Prompt 工程](https://clarence404.github.io/java-doc/ai/1_concepts/1_prompt.html) | [`ch02-start`](https://github.com/Clarence404/mall-assistant/tree/ch02-start) / [`ch02-done`](https://github.com/Clarence404/mall-assistant/tree/ch02-done) |
 | 3 | 工具调用 | `@Tool` 查订单、查商品（调 mall-evolution 网关），原生工具调用 + 按意图直接查询，令牌只走 ToolContext，查不到返回结构化结果、不编造，工具调用记录与录制回放；`main` 上补充了列出我的订单（`listMyOrders`，见 [`docs/ch03.md`](docs/ch03.md#补充列出我的订单)） | [Function Calling](https://clarence404.github.io/java-doc/ai/1_concepts/2_function_calling.html)、[Spring AI](https://clarence404.github.io/java-doc/ai/2_frameworks/0_spring_ai.html) | [`ch03-start`](https://github.com/Clarence404/mall-assistant/tree/ch03-start) / [`ch03-done`](https://github.com/Clarence404/mall-assistant/tree/ch03-done) |
-| 4 | 知识入库 | 商城规则文档切块、向量化、存入 pgvector | [Embedding](https://clarence404.github.io/java-doc/ai/4_core_tech/0_embedding.html)、[向量数据库](https://clarence404.github.io/java-doc/ai/4_core_tech/1_vector_db.html) | 计划中 |
+| 4 | 知识入库 | 6 篇商城规则文档按标题与长度切块（带重叠）、带元数据向量化，按内容哈希增量入库；向量库默认内存（零依赖）、可选 pgvector（余弦距离 + HNSW），向量模型 bge-m3 / nomic-embed-text 按模型分表；入库、相似度检索、概况三个调试接口 | [Embedding](https://clarence404.github.io/java-doc/ai/4_core_tech/0_embedding.html)、[向量数据库](https://clarence404.github.io/java-doc/ai/4_core_tech/1_vector_db.html)、[Spring AI](https://clarence404.github.io/java-doc/ai/2_frameworks/0_spring_ai.html) | [`ch04-start`](https://github.com/Clarence404/mall-assistant/tree/ch04-start) / [`ch04-done`](https://github.com/Clarence404/mall-assistant/tree/ch04-done) |
 | 5 | RAG | 检索增强回答、引用来源 | [RAG](https://clarence404.github.io/java-doc/ai/4_core_tech/2_rag.html) | 计划中 |
 | 6 | 多轮对话与记忆 | 会话 ID、ChatMemory、上下文裁剪 | [Spring AI](https://clarence404.github.io/java-doc/ai/2_frameworks/0_spring_ai.html) | 计划中 |
 | 7 | Agent | 售后退款流程，关键操作人工确认 | [AI Agent](https://clarence404.github.io/java-doc/ai/5_advanced/0_agent.html) | 计划中 |
@@ -52,6 +52,8 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 
 第 3 章起要查订单、查商品，还需要先启动 [mall-evolution](https://github.com/Clarence404/mall-evolution)（四个服务，网关 9000，见它的 README「本地运行」），再在页面右上角用演示账号 `13800000000` / `mall123` 登录；没启动它时对话照常可用，只是工具会返回「商城服务暂时不可用」。网关地址用 `assistant.mall.base-url`（环境变量 `MALL_API_BASE_URL`）修改。
 
+第 4 章起还要一个向量模型（把知识文档变成向量）：`ollama pull bge-m3`（约 1.2 GB，1024 维，中文好）；想要更小的可以用 `nomic-embed-text`（约 270 MB，768 维，以英文为主，中文检索明显差一些），设置环境变量 `OLLAMA_EMBEDDING_MODEL=nomic-embed-text`。启动时会自动入库（日志「知识入库完成」），向量模型没 pull 也能启动，只是知识库不可用；页面最下面的「知识库」可以入库、看概况、试检索。向量库默认在内存里（存成 `target/knowledge/*.json`），**不需要 Docker 和数据库**；想用 pgvector 见 [`docs/ch04.md`](docs/ch04.md#本地运行)。换向量模型后要重新入库（不同模型的向量不能混用，本项目按模型分表 / 分文件，切换后自动入库到新表）。
+
 换模型：设置环境变量 `OLLAMA_CHAT_MODEL`（如 `qwen2.5:1.5b`，约 1 GB），先 `ollama pull` 好。0.5b 能跑通全部流程，但第 2 章起的意图识别只分对一半左右；1.5b 明显更准（录制的 12 条消息分对 11 条）。
 
 提示词版本：`assistant.prompt.version`（默认 `v3`，可改回 `v2` / `v1` 对比）；商城名、服务范围等模板变量在 `application.yml` 的 `assistant.prompt.*`。工具调用的两个开关在 `assistant.tools.*`（原生工具调用、按意图直接查询，见 [`docs/ch03.md`](docs/ch03.md)）。
@@ -67,6 +69,7 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 | mall-evolution | 库存服务 / 支付服务 | 8082 / 8083 |
 | mall-evolution | 网关（对外入口，第 3 章起智能客服调用它，`MALL_API_BASE_URL` 可改） | 9000 |
 | 模型 | Ollama | 11434 |
+| 向量库（第 4 章，可选） | PostgreSQL + pgvector（`store=pgvector` 时，`PGVECTOR_URL` 可改） | 5432 |
 
 ### 在 IntelliJ IDEA 里运行
 
@@ -76,13 +79,15 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 
 | 运行配置 | 作用 |
 |---------|------|
-| 智能客服（本地 Ollama） | profile `ollama,local`，可在配置里改 `OLLAMA_CHAT_MODEL` |
+| 智能客服（本地 Ollama） | profile `ollama,local`，可在配置里改 `OLLAMA_CHAT_MODEL` 与向量模型 `OLLAMA_EMBEDDING_MODEL`（`bge-m3` / `nomic-embed-text`） |
 | 智能客服（OpenAI 兼容接口） | profile `openai,local`，环境变量 `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL` 留空，填上才能启动 |
 | 智能客服（Claude CLI） | profile `claude-cli,local`，用本机已登录的 Claude Code 当模型，见下文「用命令行工具当模型」 |
 | 智能客服（Codex CLI） | profile `codex-cli,local`，用本机已登录的 Codex CLI 当模型 |
 | 测试：mvn verify | 跑全部检查与测试，等同 `./mvnw verify` |
 
 注意：这些配置存放在入库的 `.run/*.run.xml` 里，在里面填的值会出现在 `git diff` 中。密钥和内部地址不要填进运行配置，改用下面的本地配置文件。
+
+第 4 章：知识库用 pgvector 时，把 `assistant.knowledge.store: pgvector` 和连接信息写进 `application-local.yml`（见 `application-local.example.yml` 最后一段），不要写进运行配置；两个命令行模型的运行配置也列了 `OLLAMA_EMBEDDING_MODEL`（命令行工具没有向量模型，知识库用 Ollama 的）。
 
 第 3 章：先在 mall-evolution 的项目里用它自带的运行配置「全部服务（先起中间件）」启动四个服务（两个项目可以同时开在两个 IDEA 窗口里），再启动智能客服。想临时关掉某种工具用法，在运行配置的 Program arguments 里加 `--assistant.tools.direct-lookup=false` 或 `--assistant.tools.native-calling=false`。
 
@@ -131,6 +136,8 @@ codex 没有「关掉全部工具」的单个开关，只读沙箱仍能读本�
 
 **结构化输出**：意图识别的 JSON Schema 原生交给工具，claude 用 `--json-schema`（结果在 `structured_output` 字段），codex 用 `--output-schema <文件>`；第 2 章的重试与兜底照常生效。设置 `assistant.cli.native-structured-output=false` 可改回把格式说明拼进提示词。
 
+**没有向量模型**（第 4 章）：这两个 profile 的知识库用 Ollama 的向量模型（`OLLAMA_EMBEDDING_MODEL`，默认 `bge-m3`，地址同 `spring.ai.ollama.base-url`），Ollama 没启动时只是知识库不可用。
+
 **不支持原生工具调用**（第 3 章）：`CliChatModel` 只把模型当纯文本用，这两个 profile 设了 `assistant.tools.native-calling=false`，查订单、查商品只走「按意图直接查询」（代码查好结果放进提示词）；意图识别没抽到 SKU 的商品问题查不到真数据（没抽到订单号的订单问题会直接列出最近的订单）。商城令牌同样只在工具里用，不进 stdin、系统提示词文件和命令行参数（`CliProviderWebTest` 有断言）。
 
 **慢、费 token**：每次调用都要启动一个进程，一次对话调两次（意图识别 + 回答），费用记在你自己的账号上。本机实测：
@@ -153,10 +160,11 @@ codex 的 `--json` 只在一条消息完整生成后才输出它，没有逐字�
 5. `mall/MallApiClient`（连同 `MallResult`、`MallModels`、`MallLoginController`、`MallToken`）：怎么调 mall-evolution 网关、错误怎么归类、为什么看不到别人的订单
 6. `intent/IntentService`（连同 `IntentResult`、`Intent`）：结构化输出成 Java 对象、解析失败重试一次、校验模型输出、失败兜底
 7. `prompt/AssistantPrompts`（连同 `PromptProperties`、`src/main/resources/prompts/`）：提示词模板、变量渲染与版本切换（v3 为什么这么短）
-8. `chat/ChatClientConfig`：`ChatClient` 怎么由 Spring AI 自动配置的 `ChatModel` 构建出来
-9. `error/`：模型调用失败分成「不可用」和「超时」两类，统一成 `ProblemDetail` 响应
-10. `cli/`（选读）：用本机 Claude Code / Codex 命令行当模型：安全参数、stdin 传参、输出解析、超时杀进程树
-11. `src/test/java`：从 `FakeChatModel` 和 `ChatServiceTest` 读起，再看 `ToolCallingFlowTest`（工具调用的两轮、令牌不进提示词）、`StubMallApi`（假商城网关）、`FakeModelWebTest` 系列接口测试、`IntentReplayTest` / `ToolDecisionReplayTest` 录制回放、`FakeCli` 与 `OllamaChatIT`
+8. `knowledge/`（第 4 章）：`KnowledgeIngestionService`（入库主流程）→ `MarkdownKnowledgeReader`（front matter）→ `MarkdownChunker`（按标题分节、按长度切、重叠）→ `ChunkDocumentFactory`（块文字、确定性 ID、元数据、内容哈希）→ `IngestPlanner`（增量判断）→ `KnowledgeStore` 的两个实现（`MemoryKnowledgeStore` / `PgVectorKnowledgeStore` 与 `PgVectorConfig`）；检索看 `KnowledgeSearchService`，向量模型的名字、维度、前缀看 `KnowledgeEmbedding` 与 `PrefixedEmbeddingModel`
+9. `chat/ChatClientConfig`：`ChatClient` 怎么由 Spring AI 自动配置的 `ChatModel` 构建出来
+10. `error/`：模型调用失败分成「不可用」和「超时」两类，统一成 `ProblemDetail` 响应（第 4 章起还有知识库的三类错误）
+11. `cli/`（选读）：用本机 Claude Code / Codex 命令行当模型：安全参数、stdin 传参、输出解析、超时杀进程树
+12. `src/test/java`：从 `FakeChatModel` 和 `ChatServiceTest` 读起，再看 `ToolCallingFlowTest`（工具调用的两轮、令牌不进提示词）、`StubMallApi`（假商城网关）、`FakeModelWebTest` 系列接口测试、`IntentReplayTest` / `ToolDecisionReplayTest` 录制回放、`FakeCli` 与 `OllamaChatIT`；第 4 章看 `FakeEmbeddingModel`（字符 n-gram 哈希的假向量模型）、`KnowledgeIngestionServiceTest`（增量）、`PgVectorStoreIT`
 
 ## 构建与测试
 
@@ -170,8 +178,9 @@ codex 的 `--json` 只在一条消息完整生成后才输出它，没有逐字�
 | 单元 / 切片测试 | `*Test` | 否 | 用不联网的 `FakeChatModel` 替换模型：提示词模板、阻塞与流式回答、意图识别的解析 / 重试 / 兜底、超时与不可用的错误映射、SSE 事件序列、profile 切换 |
 | 工具与商城 | `MallApiClientTest`、`MallToolsTest`、`ToolCallingFlowTest`、`ToolApiTest` 等 | 否 | `StubMallApi`（JDK 自带 HttpServer 起的假网关）代替 mall-evolution；`FakeChatModel.willCallTool` 模拟模型的调用意图，由 Spring AI 真实地执行工具循环：工具结果回传、令牌只在 ToolContext、直接查询、未登录、参数不合法、商城超时 / 5xx |
 | 命令行提供方 | `Cli*Test`、`CliProviderWebTest` | 否 | 用假命令行程序 `FakeCli`（`java -cp target/test-classes`）代替 claude / codex：安全参数、stdin 中文、JSON / 流式 / JSONL 解析、结构化输出、退出码非 0、输出乱码、超时杀进程树 |
+| 知识库 | `MarkdownChunkerTest`、`KnowledgeIngestionServiceTest`、`KnowledgeApiTest` 等 | 否 | 不联网的 `FakeEmbeddingModel`（字面越像向量越近）+ 内存向量库：切块边界与重叠、元数据、增量（跳过 / 更新 / 删除）、检索排序与分数、前缀、接口、启动时模型不可用不阻止启动 |
 | 录制回放 | `IntentReplayTest`、`ToolDecisionReplayTest` | 否 | 回放 `src/test/resources/recordings/` 里真实模型（qwen2.5 0.5b / 1.5b）录下的原样输出：意图识别的 JSON、拿到工具清单后的调用决策，验证代码能处理真实输出；重新录制见 [`docs/ch02.md`](docs/ch02.md#录制回放)、[`docs/ch03.md`](docs/ch03.md#录制回放) |
-| 集成测试 | `*IT` | 是 | Testcontainers 起真实 Ollama、拉取 `qwen2.5:0.5b`，走一遍阻塞与流式接口、意图识别和工具调用（商城用假网关）；录制工具 `IntentRecordingIT`、`ToolDecisionRecordingIT` 只在设置了 `RECORD_OLLAMA_URL` 时运行 |
+| 集成测试 | `*IT` | 是 | Testcontainers 起真实 Ollama、拉取 `qwen2.5:0.5b`，走一遍阻塞与流式接口、意图识别和工具调用（商城用假网关）；第 4 章起 `PgVectorStoreIT` 起 `pgvector/pgvector:0.8.1-pg17` 跑真实的 PgVectorStore，`OllamaEmbeddingIT` 用真实的 `nomic-embed-text` 入库与检索（没有 Docker 时也可以用环境变量指向现成的服务，见 [`docs/ch04.md`](docs/ch04.md#验收标准)）；录制工具 `IntentRecordingIT`、`ToolDecisionRecordingIT` 只在设置了 `RECORD_OLLAMA_URL` 时运行 |
 
 没有 Docker 的机器上集成测试自动跳过（`@Testcontainers(disabledWithoutDocker = true)`）。模型文件缓存在 `~/.cache/mall-assistant/ollama`（可用 `OLLAMA_MODELS_CACHE` 指定），只下载一次。
 
@@ -191,15 +200,17 @@ mall-assistant/
 │   ├── mall/                 商城 mall-evolution 网关的客户端、登录代理接口、令牌工具
 │   ├── prompt/               提示词模板：按版本选文件、渲染变量、拒答话术
 │   ├── intent/               意图识别：IntentResult、结构化输出与重试兜底、/api/intent
+│   ├── knowledge/            知识库（第 4 章）：读取、切块、元数据、增量入库、memory / pgvector 向量库、相似度检索、调试接口
 │   ├── cli/                  命令行模型提供方：CliChatModel、claude / codex 的参数与输出解析、进程超时与清理
 │   └── error/                模型失败分类（MODEL_UNAVAILABLE / MODEL_TIMEOUT）与 ProblemDetail
 ├── src/main/resources/
-│   ├── application.yml       公共配置：超时、重试、ProblemDetail、工具调用上限、商城网关地址
+│   ├── application.yml       公共配置：超时、重试、ProblemDetail、工具调用上限、商城网关地址、知识库（切块、向量库、前缀）
 │   ├── application-ollama.yml / application-openai.yml   按 profile 切换模型厂商
 │   ├── application-claude-cli.yml / application-codex-cli.yml   用本机命令行工具当模型（可选）
+│   ├── knowledge/            示例商城的规则文档（第 4 章入库的知识）
 │   ├── prompts/              客服人设 system-v1.st / v2 / v3、意图识别 intent-v1.st、拒答话术 refusal.st
-│   └── static/index.html     聊天页面（原生 HTML/CSS/JS，第 3 章起带登录框）
-├── src/test/java/            FakeChatModel、StubMallApi、单元与接口测试、录制回放、OllamaChatIT
+│   └── static/index.html     聊天页面（原生 HTML/CSS/JS，第 3 章起带登录框，第 4 章起带知识库调试区）
+├── src/test/java/            FakeChatModel、StubMallApi、FakeEmbeddingModel、单元与接口测试、录制回放、OllamaChatIT、PgVectorStoreIT
 ├── src/test/resources/recordings/   真实模型的录制输出（录制回放用）
 ├── docs/chNN.md              每章的练习说明
 ├── application-local.example.yml   本地覆盖配置模板（复制为 application-local.yml，不入库）

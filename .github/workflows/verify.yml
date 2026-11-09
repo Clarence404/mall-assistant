@@ -1,4 +1,4 @@
-# 完整验证并发布测试报告：main 与章节 tag（chNN-start / chNN-done）每次推送都跑 ./mvnw -B verify（Ollama 集成测试不跳过）
+# 完整验证并发布测试报告：main 与章节 tag（chNN-start / chNN-done）每次推送都跑 ./mvnw -B verify（Ollama 与 pgvector 集成测试不跳过）
 # 报告发布到 gh-pages 分支的 reports/<ref>/，即 https://clarence404.github.io/mall-assistant/reports/<ref>/
 # chNN-start 是练习起点，验收测试本来就不通过：照常出报告，但不把这次运行标红
 name: verify
@@ -13,7 +13,7 @@ concurrency:
   group: gh-pages-reports   # 串行发布，避免两个 ref 同时改 gh-pages 根目录
   cancel-in-progress: false
 env:
-  # OllamaChatIT 把这个目录挂进容器的 /root/.ollama，模型只在缓存未命中时下载
+  # OllamaChatIT / OllamaEmbeddingIT 把这个目录挂进容器的 /root/.ollama，模型只在缓存未命中时下载
   OLLAMA_MODELS_CACHE: /home/runner/.cache/mall-assistant/ollama
 jobs:
   verify:
@@ -25,13 +25,13 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      # 键里写死镜像与模型版本（与 OllamaChatIT 保持一致），换版本时同步改这里
+      # 键里写死镜像与模型版本（与 OllamaChatIT、OllamaEmbeddingIT 保持一致），换版本或加模型时同步改这里
       - name: 缓存 Ollama 模型
         uses: actions/cache@v6
         with:
           path: /home/runner/.cache/mall-assistant/ollama
-          key: ollama-0.40.14-qwen2.5-0.5b
-      # GitHub 托管的 runner 自带 Docker，Testcontainers 集成测试会真正执行
+          key: ollama-0.40.14-qwen2.5-0.5b-nomic-embed-text
+      # GitHub 托管的 runner 自带 Docker，Testcontainers 集成测试（Ollama、pgvector）会真正执行
       - name: 构建与测试
         run: |
           if [[ "$GITHUB_REF_NAME" == *-start ]]; then
