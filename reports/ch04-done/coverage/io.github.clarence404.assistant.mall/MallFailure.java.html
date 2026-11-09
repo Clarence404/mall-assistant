@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MallFailure.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.mall</a> &gt; <span class="el_source">MallFailure.java</span></div><h1>MallFailure.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.mall;
+
+/**
+ * 调商城接口失败的几类原因：调用方（工具、登录接口）按类别决定给用户说什么，不关心具体的 HTTP 状态码。
+ *
+ * &lt;p&gt;所在层：外部系统接入（第 3 章引入）。{@link MallApiClient} 把 HTTP 状态码和网络异常归成这几类，放进 {@link MallResult}。
+ */
+<span class="fc" id="L8">public enum MallFailure {</span>
+    /** 401 / 403：没带令牌、令牌无效或已过期，或者没有权限。 */
+<span class="fc" id="L10">    UNAUTHORIZED,</span>
+    /** 404：订单或商品不存在。商城对「别人的订单」也返回 404（不让人借 403 / 404 的差别探测订单号）。 */
+<span class="fc" id="L12">    NOT_FOUND,</span>
+    /** 其余 4xx：请求本身不合法，如参数格式不对（400）。 */
+<span class="fc" id="L14">    REJECTED,</span>
+    /** 连不上、超时、429 限流、5xx：商城暂时不可用，稍后再试可能就好了。 */
+<span class="fc" id="L16">    UNAVAILABLE</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ApiExceptionHandler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.error</a> &gt; <span class="el_source">ApiExceptionHandler.java</span></div><h1>ApiExceptionHandler.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.error;
+
+import io.github.clarence404.assistant.knowledge.KnowledgeException;
+import io.github.clarence404.assistant.knowledge.KnowledgeFailure;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+/**
+ * 阻塞接口的统一错误出口：模型调用失败返回 503 + ProblemDetail（RFC 9457），带 {@code code} 字段，不带堆栈。
+ *
+ * &lt;p&gt;参数校验失败（400）交给 Spring MVC 自带的 ProblemDetail 处理（{@code spring.mvc.problemdetails.enabled=true}）。
+ *
+ * &lt;p&gt;ProblemDetail 是 HTTP 接口报错的标准 JSON 格式（RFC 9457，{@code Content-Type: application/problem+json}），固定字段有
+ * type、title、status、detail、instance，可以加扩展字段。这里加了 {@code code}（MODEL_UNAVAILABLE / MODEL_TIMEOUT），前端按 code
+ * 分支、按 detail 显示，和流式接口 error 事件里的 code 是同一套。
+ *
+ * &lt;p&gt;所在层：错误处理（第 1 章引入）。上游是 Spring MVC：任何 Controller 抛出 {@link ModelCallException} 都会被路由到这里；
+ * 流式接口的错误不经过这里（响应已经开始写了），由 {@code ChatController} 转成 error 事件。
+ *
+ * &lt;p&gt;第 4 章起还处理知识库的 {@link KnowledgeException}：向量模型 / 向量库不可用 503，库里是别的模型生成的向量 409，同样带 code。
+ */
+@RestControllerAdvice
+<span class="fc" id="L29">public class ApiExceptionHandler {</span>
+
+<span class="fc" id="L31">    private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);</span>
+
+    /**
+     * 模型调用失败 → 503 Service Unavailable + ProblemDetail。
+     *
+     * &lt;p&gt;为什么是 503 而不是 500：问题出在下游的模型服务，不是我们的代码有 bug，稍后重试有可能成功；{@code Retry-After: 5}
+     * 告诉客户端过 5 秒再试。
+     *
+     * @param e 已归类的模型调用异常，原始异常在 cause 里，只写日志
+     * @return 503 响应，body 里只有面向用户的提示，没有堆栈和内部地址
+     */
+    @ExceptionHandler(ModelCallException.class)
+    public ResponseEntity&lt;ProblemDetail&gt; handleModelFailure(ModelCallException e) {
+<span class="fc" id="L44">        ModelFailure failure = e.failure();</span>
+        // 细节只进日志，不给前端
+<span class="fc" id="L46">        log.warn(&quot;调用模型失败：{}&quot;, failure, e.getCause());</span>
+<span class="fc" id="L47">        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, failure.message());</span>
+<span class="fc" id="L48">        problem.setTitle(failure.title());</span>
+<span class="fc" id="L49">        problem.setProperty(&quot;code&quot;, failure.name());</span>
+<span class="fc" id="L50">        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)</span>
+<span class="fc" id="L51">                .header(HttpHeaders.RETRY_AFTER, &quot;5&quot;)</span>
+<span class="fc" id="L52">                .body(problem);</span>
+    }
+
+    /**
+     * 知识库操作失败 → ProblemDetail（第 4 章）：EMBEDDING_UNAVAILABLE / VECTOR_STORE_UNAVAILABLE 是 503（带 Retry-After），
+     * INDEX_MODEL_MISMATCH 是 409（重试没用，要重建）。
+     *
+     * @param e 已归类的知识库异常，detail 是给用户看的说明，原始异常只写日志
+     * @return 对应状态码的响应
+     */
+    @ExceptionHandler(KnowledgeException.class)
+    public ResponseEntity&lt;ProblemDetail&gt; handleKnowledgeFailure(KnowledgeException e) {
+<span class="fc" id="L64">        KnowledgeFailure failure = e.failure();</span>
+<span class="fc" id="L65">        log.warn(&quot;知识库操作失败：{} {}&quot;, failure, e.getMessage(), e.getCause());</span>
+<span class="fc" id="L66">        ProblemDetail problem = ProblemDetail.forStatusAndDetail(failure.status(), e.getMessage());</span>
+<span class="fc" id="L67">        problem.setTitle(failure.title());</span>
+<span class="fc" id="L68">        problem.setProperty(&quot;code&quot;, failure.name());</span>
+<span class="fc" id="L69">        ResponseEntity.BodyBuilder response = ResponseEntity.status(failure.status());</span>
+<span class="pc bpc" id="L70" title="1 of 2 branches missed.">        if (failure.status() == HttpStatus.SERVICE_UNAVAILABLE) {</span>
+<span class="fc" id="L71">            response.header(HttpHeaders.RETRY_AFTER, &quot;5&quot;);</span>
+        }
+<span class="fc" id="L73">        return response.body(problem);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
