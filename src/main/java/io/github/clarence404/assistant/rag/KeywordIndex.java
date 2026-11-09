@@ -1,9 +1,12 @@
 package io.github.clarence404.assistant.rag;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 内存里的关键词索引，用 BM25 给块打分（第 5 章引入）。
@@ -116,8 +119,36 @@ public final class KeywordIndex {
      * @return 命中的块，按 BM25 分数从高到低
      */
     public List<KeywordHit> search(String query, int topK) {
-        // TODO ch05-1：BM25 打分（规则见上面的 Javadoc 与类注释里的公式）
-        return List.of();
+        Set<String> queryTerms = new LinkedHashSet<>(Terms.of(query));
+        if (queryTerms.isEmpty() || chunks.isEmpty()) {
+            return List.of();
+        }
+        int n = chunks.size();
+        List<KeywordHit> hits = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            Map<String, Integer> tf = termFrequencies.get(i);
+            double score = 0;
+            int matched = 0;
+            for (String term : queryTerms) {
+                int df = documentFrequencies.getOrDefault(term, 0);
+                int freq = tf.getOrDefault(term, 0);
+                if (df == 0 || freq == 0) {
+                    continue;
+                }
+                matched++;
+                // idf：词项越少见越值钱；加 1 再取对数，保证常见词也不会得负分
+                double idf = Math.log(1 + (n - df + 0.5) / (df + 0.5));
+                // 长度归一：块比平均长，分母变大，同样的词频得分更少
+                double norm = K1 * (1 - B + B * lengths[i] / averageLength);
+                score += idf * freq * (K1 + 1) / (freq + norm);
+            }
+            if (score > 0) {
+                hits.add(new KeywordHit(chunks.get(i), round(score), round((double) matched / queryTerms.size())));
+            }
+        }
+        // List.sort 是稳定排序：分数相同时保持块在索引里的顺序
+        hits.sort(Comparator.comparingDouble(KeywordHit::score).reversed());
+        return hits.size() > topK ? List.copyOf(hits.subList(0, topK)) : List.copyOf(hits);
     }
 
     private static double round(double value) {

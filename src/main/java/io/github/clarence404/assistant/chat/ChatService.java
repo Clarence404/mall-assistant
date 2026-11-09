@@ -149,7 +149,9 @@ public class ChatService {
      * @throws ModelCallException 模型调用失败
      */
     public ChatReply answer(String message, IntentResult intent, String mallToken) {
-        // TODO ch05-6：规则类问题（ragService.handles(intent)）走 ragAnswer
+        if (ragService.handles(intent)) {
+            return ragAnswer(message, intent);
+        }
         ToolCallRecorder recorder = new ToolCallRecorder();
         try {
             String content =
@@ -179,7 +181,9 @@ public class ChatService {
         if (shouldRefuse(intent)) {
             return Flux.just(new AnswerPart.Text(prompts.refusal()));
         }
-        // TODO ch05-8：规则类问题走 ragStream
+        if (ragService.handles(intent)) {
+            return ragStream(message);
+        }
         return Flux.defer(() -> {
                     ToolCallRecorder recorder = new ToolCallRecorder();
                     return answerRequest(message, intent, mallToken, recorder).stream()
@@ -213,8 +217,23 @@ public class ChatService {
      * @throws ModelCallException 模型调用失败
      */
     ChatReply ragAnswer(String message, IntentResult intent) {
-        // TODO ch05-6：plan → 短路（不调模型）→ 调模型 → 引用校验（规则见上面的 Javadoc）
-        throw new UnsupportedOperationException("TODO ch05-6");
+        RagPlan plan = ragService.plan(message);
+        if (plan.shortCircuited()) {
+            return new ChatReply(plan.fallback(), intent, List.of(), List.of(), plan.trace());
+        }
+        try {
+            String content = ragService.request(message, plan).call().content();
+            CitationChecker.Check check = CitationChecker.check(
+                    Objects.requireNonNullElse(content, ""), plan.sources().size());
+            return new ChatReply(
+                    check.reply(),
+                    intent,
+                    List.of(),
+                    plan.sources(),
+                    plan.trace().withCitations(check));
+        } catch (RuntimeException e) {
+            throw ModelCallException.from(e);
+        }
     }
 
     /**
@@ -236,8 +255,19 @@ public class ChatService {
      * @return 引用来源与文字片段的序列
      */
     Flux<AnswerPart> ragStream(String message) {
-        // TODO ch05-8：Flux.defer 里 plan → 短路只推固定话术；否则先推每条来源，再推模型的文字（规则见上面的 Javadoc）
-        return Flux.error(new UnsupportedOperationException("TODO ch05-8"));
+        return Flux.defer(() -> {
+                    RagPlan plan = ragService.plan(message);
+                    if (plan.shortCircuited()) {
+                        return Flux.<AnswerPart>just(new AnswerPart.Text(plan.fallback()));
+                    }
+                    Flux<AnswerPart> sources = Flux.fromIterable(plan.sources()).map(AnswerPart.Source::new);
+                    Flux<AnswerPart> text = ragService.request(message, plan).stream()
+                            .content()
+                            .timeout(properties.streamTimeout())
+                            .map(AnswerPart.Text::new);
+                    return Flux.concat(sources, text);
+                })
+                .onErrorMap(ModelCallException::from);
     }
 
     /** 记录器里新增的工具调用，转成 {@link AnswerPart.ToolUse}。 */

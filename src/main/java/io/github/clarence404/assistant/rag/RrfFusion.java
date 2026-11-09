@@ -1,6 +1,10 @@
 package io.github.clarence404.assistant.rag;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * RRF（Reciprocal Rank Fusion，倒数排名融合）：把几个检索器各自的排名合成一个排名（第 5 章引入）。
@@ -34,8 +38,24 @@ public final class RrfFusion {
      * @return 融合后的排名与分数
      */
     public static List<Fused> fuse(List<List<String>> rankings, int k) {
-        // TODO ch05-2：每份排名第 r 名得 1 / (k + r)，同一个键的分数相加，按总分从高到低（同分按第一次出现的先后）
-        return List.of();
+        // LinkedHashMap 记住键第一次出现的顺序，排序时作为同分的先后
+        Map<String, Double> scores = new LinkedHashMap<>();
+        for (List<String> ranking : rankings) {
+            List<String> seen = new ArrayList<>();
+            for (String key : ranking) {
+                if (seen.contains(key)) {
+                    continue;
+                }
+                seen.add(key);
+                int rank = seen.size();
+                scores.merge(key, 1.0 / (k + rank), Double::sum);
+            }
+        }
+        List<Fused> fused = new ArrayList<>(scores.size());
+        scores.forEach((key, score) -> fused.add(new Fused(key, score)));
+        // 稳定排序：同分时保持第一次出现的先后
+        fused.sort(Comparator.comparingDouble(Fused::score).reversed());
+        return fused;
     }
 
     /**

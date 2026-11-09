@@ -1,5 +1,7 @@
 package io.github.clarence404.assistant.rag;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -47,8 +49,57 @@ public final class ContextPacker {
      * @return 编了号的引用来源；selected 为空时是空列表
      */
     public static List<RagSource> pack(List<RagCandidate> selected, int budgetChars, int snippetChars) {
-        // TODO ch05-4：去重 → 合并同一节的相邻块（重叠只留一份，可以用 join）→ 上下文预算 → 编号与片段（规则见上面的 Javadoc）
-        return List.of();
+        List<List<RagCandidate>> groups = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (RagCandidate candidate : selected) {
+            if (!seen.add(candidate.chunk().key())) {
+                continue;
+            }
+            List<RagCandidate> group = groups.stream()
+                    .filter(g -> adjacent(g, candidate.chunk()))
+                    .findFirst()
+                    .orElse(null);
+            if (group == null) {
+                groups.add(new ArrayList<>(List.of(candidate)));
+            } else {
+                group.add(candidate);
+            }
+        }
+
+        List<RagSource> sources = new ArrayList<>();
+        int used = 0;
+        for (List<RagCandidate> group : groups) {
+            group.sort(Comparator.comparingInt(c -> c.chunk().chunkIndex()));
+            RagChunk first = group.getFirst().chunk();
+            String body = group.stream()
+                    .map(c -> c.chunk().body())
+                    .reduce(ContextPacker::join)
+                    .orElse("");
+            String content = first.headingPath() + "\n" + body;
+            if (used + content.length() > budgetChars) {
+                if (!sources.isEmpty()) {
+                    break;
+                }
+                content = content.substring(0, budgetChars) + "…";
+            }
+            used += content.length();
+            sources.add(new RagSource(
+                    sources.size() + 1,
+                    first.source(),
+                    first.title(),
+                    first.headingPath(),
+                    group.stream().map(c -> c.chunk().chunkIndex()).toList(),
+                    max(group.stream().map(RagCandidate::vectorScore).toList()),
+                    max(group.stream().map(RagCandidate::keywordScore).toList()),
+                    round(group.stream()
+                            .mapToDouble(RagCandidate::fusedScore)
+                            .max()
+                            .orElse(0)),
+                    foundBy(group),
+                    snippet(body, snippetChars),
+                    content));
+        }
+        return sources;
     }
 
     /** 候选块和这一组是不是同一节里紧挨着的块。 */

@@ -4,6 +4,7 @@ import io.github.clarence404.assistant.intent.IntentResult;
 import io.github.clarence404.assistant.knowledge.KnowledgeException;
 import io.github.clarence404.assistant.prompt.AssistantPrompts;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -180,9 +181,11 @@ public class RagService {
      * @return 还没发出的请求，调用方接着 {@code call()} 或 {@code stream()}
      */
     public ChatClient.ChatClientRequestSpec request(String message, RagPlan plan) {
-        // TODO ch05-5：系统消息用 systemTemplate + prompts.variables()；用户消息用 CONTEXT_TEMPLATE（参数 message、context）；温度
-        // TEMPERATURE
-        return chatClient.prompt().user(message);
+        return chatClient
+                .prompt()
+                .system(spec -> spec.text(systemTemplate).params(prompts.variables()))
+                .user(u -> u.text(CONTEXT_TEMPLATE).param("message", message).param("context", context(plan.sources())))
+                .options(ChatOptions.builder().temperature(TEMPERATURE));
     }
 
     /**
@@ -205,8 +208,7 @@ public class RagService {
      * @return 资料文字
      */
     static String context(List<RagSource> sources) {
-        // TODO ch05-5：每条来源一段「[编号] 」+ content，段与段之间空一行
-        return "";
+        return sources.stream().map(s -> "[" + s.index() + "] " + s.content()).collect(Collectors.joining("\n\n"));
     }
 
     /**

@@ -1,6 +1,10 @@
 package io.github.clarence404.assistant.rag;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -49,8 +53,26 @@ public final class CitationChecker {
      * @return 清理后的回答与校验结果
      */
     public static Check check(String reply, int sourceCount) {
-        // TODO ch05-7：找出每处引用，有效编号统一写成 [n]，无效的去掉并记下；一个有效编号都没有时 uncited 为 true
-        return new Check(reply, List.of(), List.of(), true);
+        Set<Integer> cited = new LinkedHashSet<>();
+        Set<Integer> invalid = new LinkedHashSet<>();
+        Matcher matcher = CITATION.matcher(reply);
+        StringBuilder cleaned = new StringBuilder();
+        while (matcher.find()) {
+            StringBuilder kept = new StringBuilder();
+            Matcher numbers = NUMBER.matcher(matcher.group(1));
+            while (numbers.find()) {
+                int n = Integer.parseInt(numbers.group());
+                if (n >= 1 && n <= sourceCount) {
+                    cited.add(n);
+                    kept.append('[').append(n).append(']');
+                } else {
+                    invalid.add(n);
+                }
+            }
+            matcher.appendReplacement(cleaned, Matcher.quoteReplacement(kept.toString()));
+        }
+        matcher.appendTail(cleaned);
+        return new Check(cleaned.toString(), new ArrayList<>(cited), new ArrayList<>(invalid), cited.isEmpty());
     }
 
     /**

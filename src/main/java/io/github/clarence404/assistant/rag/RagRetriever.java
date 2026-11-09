@@ -172,8 +172,11 @@ public class RagRetriever {
      * @return 相关的候选，最多 topK 个；一个都不相关时为空列表
      */
     List<RagCandidate> select(List<RagCandidate> ranked, int topK) {
-        // TODO ch05-3：向量相似度 ≥ min-score，或覆盖率 ≥ keyword-min-coverage，才算相关；保持先后，取前 topK 个
-        return List.of();
+        return ranked.stream()
+                .filter(c -> (c.vectorScore() != null && c.vectorScore() >= properties.minScore())
+                        || (c.coverage() != null && c.coverage() >= properties.keywordMinCoverage()))
+                .limit(topK)
+                .toList();
     }
 
     /** 关键词索引：库里的文档汇总没变就复用，变了（重新入库过）就从全部块重建。 */
