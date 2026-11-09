@@ -26,7 +26,7 @@ import tools.jackson.core.JacksonException;
  * 次数越多越慢、越费 token。
  *
  * &lt;p&gt;所在层：业务层（第 2 章引入）。上游是 {@code ChatService}（每次对话先调它）和 {@link IntentController}；下游是共享的
- * {@link ChatClient} 和提示词文件 {@code prompts/intent-v1.st}。
+ * {@link ChatClient} 和提示词文件 {@code prompts/intent-v2.st}（第 5 章加了规则类 POLICY；第 2～4 章用的 intent-v1.st 留着对比）。
  */
 @Service
 public class IntentService {
@@ -67,7 +67,7 @@ public class IntentService {
      * @param intentPrompt 意图识别的系统提示词：取值说明 + few-shot 示例（给模型看几个「输入 → 输出」的例子，比纯文字说明更管用）；
      *     测试里可以换成别的文件
      */
-<span class="fc" id="L70">    public IntentService(ChatClient chatClient, @Value(&quot;classpath:prompts/intent-v1.st&quot;) Resource intentPrompt) {</span>
+<span class="fc" id="L70">    public IntentService(ChatClient chatClient, @Value(&quot;classpath:prompts/intent-v2.st&quot;) Resource intentPrompt) {</span>
 <span class="fc" id="L71">        this.chatClient = chatClient;</span>
 <span class="fc" id="L72">        this.intentPrompt = intentPrompt;</span>
 <span class="fc" id="L73">    }</span>
@@ -97,7 +97,7 @@ public class IntentService {
     /**
      * 调一次模型并把输出转成 {@link IntentResult}。
      *
-     * &lt;p&gt;这一串调用拼出的 Prompt：系统消息 = intent-v1.st 的内容；用户消息 = {@link #USER_TEMPLATE} 填入原文；选项 = 温度 0。
+     * &lt;p&gt;这一串调用拼出的 Prompt：系统消息 = intent-v2.st 的内容；用户消息 = {@link #USER_TEMPLATE} 填入原文；选项 = 温度 0。
      * {@code entity(IntentResult.class, ...)} 做两件事：发请求前根据 record 生成 JSON Schema，收到回答后用 Jackson 转成对象
      * （能容忍模型在 JSON 外面包一层 Markdown 代码块）。{@code useProviderStructuredOutput()} 表示优先把 Schema 作为请求参数交给厂商
      * 原生的结构化输出（Ollama 的 {@code format}），模型在生成每个 token 时就被限制在 Schema 允许的范围内；不支持原生方式的模型，

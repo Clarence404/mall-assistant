@@ -20,7 +20,7 @@ import reactor.core.publisher.Mono;
 /**
  * 对话的 HTTP 入口：阻塞接口 {@code POST /api/chat} 与流式接口 {@code POST /api/chat/stream}。
  *
- * &lt;p&gt;所在层：接口层（第 1 章引入，第 2 章加上意图识别，第 3 章加上商城令牌与工具事件）。上游是 {@code static/index.html} 聊天页或任意
+ * &lt;p&gt;所在层：接口层（第 1 章引入，第 2 章加上意图识别，第 3 章加上商城令牌与工具事件，第 5 章加上 RAG 的 source 事件）。上游是 {@code static/index.html} 聊天页或任意
  * HTTP 客户端；下游是 {@link ChatService}（回答）与 {@link IntentService}（意图识别）。这里只做协议转换：请求体校验、取出请求头里的
  * 商城令牌、把结果写成 JSON 或 SSE 事件，不放业务逻辑。
  *
@@ -48,7 +48,8 @@ public class ChatController {
 <span class="fc" id="L48">    }</span>
 
     /**
-     * 阻塞接口：{&quot;message&quot;: &quot;...&quot;} → {&quot;reply&quot;: &quot;...&quot;, &quot;intent&quot;: {...}, &quot;tools&quot;: [...]}；模型调用失败由 ApiExceptionHandler 转成 503。
+     * 阻塞接口：{&quot;message&quot;: &quot;...&quot;} → {&quot;reply&quot;: &quot;...&quot;, &quot;intent&quot;: {...}, &quot;tools&quot;: [...], &quot;sources&quot;: [...], &quot;rag&quot;: {...}}；
+     * 模型调用失败由 ApiExceptionHandler 转成 503。第 5 章起规则类问题走 RAG，sources 是引用的资料，rag 是检索与引用校验的调试信息。
      *
      * @param request 请求体，{@code @Valid} 触发 {@link ChatRequest} 上的校验（空消息、超长消息直接 400，不浪费一次模型调用）
      * @param authorization {@code Authorization} 请求头，{@code Bearer &lt;商城令牌&gt;}；没登录时不带
@@ -59,11 +60,11 @@ public class ChatController {
     public ChatReply chat(
             @Valid @RequestBody ChatRequest request,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
-<span class="fc" id="L62">        return chatService.chat(request.message(), MallToken.fromAuthorizationHeader(authorization));</span>
+<span class="fc" id="L63">        return chatService.chat(request.message(), MallToken.fromAuthorizationHeader(authorization));</span>
     }
 
     /**
-     * 流式接口：返回 text/event-stream，先推一个 intent 事件，再推 0 到多个 tool 事件和若干 token 事件，最后一个 done 事件；
+     * 流式接口：返回 text/event-stream，先推一个 intent 事件，再推 0 到多个 tool / source 事件和若干 token 事件，最后一个 done 事件；
      * 出错时推一个 error 事件后结束。
      *
      * &lt;p&gt;Spring MVC 直接支持返回 Flux：每个元素写成一条 SSE，Flux 结束时关闭连接。意图识别是一次阻塞调用，放进
@@ -91,30 +92,31 @@ public class ChatController {
     public Flux&lt;ServerSentEvent&lt;Object&gt;&gt; stream(
             @Valid @RequestBody ChatRequest request,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
-<span class="fc" id="L94">        String message = request.message();</span>
-<span class="fc" id="L95">        String mallToken = MallToken.fromAuthorizationHeader(authorization);</span>
-<span class="fc" id="L96">        return Mono.fromCallable(() -&gt; intentService.classify(message))</span>
-<span class="fc" id="L97">                .flatMapMany(intent -&gt; Flux.concat(</span>
-<span class="fc" id="L98">                        Mono.just(event(StreamEvents.INTENT, intent)),</span>
+<span class="fc" id="L95">        String message = request.message();</span>
+<span class="fc" id="L96">        String mallToken = MallToken.fromAuthorizationHeader(authorization);</span>
+<span class="fc" id="L97">        return Mono.fromCallable(() -&gt; intentService.classify(message))</span>
+<span class="fc" id="L98">                .flatMapMany(intent -&gt; Flux.concat(</span>
+<span class="fc" id="L99">                        Mono.just(event(StreamEvents.INTENT, intent)),</span>
                         chatService
-<span class="fc" id="L100">                                .answerStream(message, intent, mallToken)</span>
+<span class="fc" id="L101">                                .answerStream(message, intent, mallToken)</span>
                                 // 模型偶尔会推内容为空的片段，不值得占一条事件
-<span class="fc" id="L102">                                .filter(part -&gt; !(part instanceof AnswerPart.Text text</span>
-<span class="pc bpc" id="L103" title="2 of 6 branches missed.">                                        &amp;&amp; text.text().isEmpty()))</span>
-<span class="fc" id="L104">                                .map(ChatController::partEvent)))</span>
-<span class="fc" id="L105">                .concatWith(Mono.fromSupplier(() -&gt; event(StreamEvents.DONE, StreamEvents.Done.stop())))</span>
-<span class="fc" id="L106">                .onErrorResume(e -&gt; Mono.just(errorEvent(e)));</span>
+<span class="fc" id="L103">                                .filter(part -&gt; !(part instanceof AnswerPart.Text text</span>
+<span class="pc bpc" id="L104" title="2 of 6 branches missed.">                                        &amp;&amp; text.text().isEmpty()))</span>
+<span class="fc" id="L105">                                .map(ChatController::partEvent)))</span>
+<span class="fc" id="L106">                .concatWith(Mono.fromSupplier(() -&gt; event(StreamEvents.DONE, StreamEvents.Done.stop())))</span>
+<span class="fc" id="L107">                .onErrorResume(e -&gt; Mono.just(errorEvent(e)));</span>
     }
 
     /**
-     * 回答片段 → SSE：文字是 token 事件，工具调用记录是 tool 事件。
+     * 回答片段 → SSE：文字是 token 事件，工具调用记录是 tool 事件，RAG 引用来源是 source 事件（第 5 章）。
      *
      * @param part {@link ChatService#answerStream} 产出的片段
      */
     private static ServerSentEvent&lt;Object&gt; partEvent(AnswerPart part) {
-<span class="fc bfc" id="L115" title="All 2 branches covered.">        return switch (part) {</span>
-<span class="fc" id="L116">            case AnswerPart.Text text -&gt; event(StreamEvents.TOKEN, new StreamEvents.Token(text.text()));</span>
-<span class="fc" id="L117">            case AnswerPart.ToolUse tool -&gt; event(StreamEvents.TOOL, tool.invocation());</span>
+<span class="fc bfc" id="L116" title="All 3 branches covered.">        return switch (part) {</span>
+<span class="fc" id="L117">            case AnswerPart.Text text -&gt; event(StreamEvents.TOKEN, new StreamEvents.Token(text.text()));</span>
+<span class="fc" id="L118">            case AnswerPart.ToolUse tool -&gt; event(StreamEvents.TOOL, tool.invocation());</span>
+<span class="fc" id="L119">            case AnswerPart.Source source -&gt; event(StreamEvents.SOURCE, source.source());</span>
         };
     }
 
@@ -125,9 +127,9 @@ public class ChatController {
      * @return {@code event: error} 事件，code 与阻塞接口 ProblemDetail 里的 code 相同
      */
     private static ServerSentEvent&lt;Object&gt; errorEvent(Throwable e) {
-<span class="fc" id="L128">        ModelFailure failure = ModelCallException.from(e).failure();</span>
-<span class="fc" id="L129">        log.warn(&quot;流式调用模型失败：{}&quot;, failure, e);</span>
-<span class="fc" id="L130">        return event(StreamEvents.ERROR, new StreamEvents.Error(failure.name(), failure.message()));</span>
+<span class="fc" id="L130">        ModelFailure failure = ModelCallException.from(e).failure();</span>
+<span class="fc" id="L131">        log.warn(&quot;流式调用模型失败：{}&quot;, failure, e);</span>
+<span class="fc" id="L132">        return event(StreamEvents.ERROR, new StreamEvents.Error(failure.name(), failure.message()));</span>
     }
 
     /**
@@ -137,7 +139,7 @@ public class ChatController {
      * @param data 事件数据，由 Spring 的 JSON 编码器写成一行 JSON
      */
     private static ServerSentEvent&lt;Object&gt; event(String name, Object data) {
-<span class="fc" id="L140">        return ServerSentEvent.builder(data).event(name).build();</span>
+<span class="fc" id="L142">        return ServerSentEvent.builder(data).event(name).build();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
