@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MemoryKnowledgeStore.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">MemoryKnowledgeStore.java</span></div><h1>MemoryKnowledgeStore.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.content.Content;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.vectorstore.SimpleVectorStore;
+import org.springframework.ai.vectorstore.VectorStore;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * 内存向量库：Spring AI 的 {@link SimpleVectorStore}，可选存成 JSON 文件（第 4 章引入，默认的 {@code assistant.knowledge.store}）。
+ *
+ * &lt;p&gt;所在层：知识库的存储层，{@link KnowledgeStore} 的默认实现。由 {@link KnowledgeConfig} 在 {@code store=memory} 时创建。
+ *
+ * &lt;p&gt;SimpleVectorStore 怎么检索：把全部块的向量放在一个 Map 里，检索时把问题向量和&lt;b&gt;每一块&lt;/b&gt;算一遍余弦相似度，排序取前 K 个。
+ * 没有索引，块数上万后就慢了；本项目几十块，毫秒级。好处是零依赖：不装 Docker、不配数据库就能跑通本章。
+ *
+ * &lt;p&gt;持久化：配置了 {@code assistant.knowledge.memory.dir} 时，每次入库后把整个 Map 写成 JSON 文件（含向量），下次启动先读回来，
+ * 增量入库发现文档没变就全部跳过，不用重新调模型。文件名带模型后缀（{@code knowledge_chunk_bge_m3.json}），换模型各用各的文件。
+ *
+ * &lt;p&gt;Spring AI 2.0.2 的几个实际行为（和直觉不同，代码里已处理）：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;{@code add} 逐块调 {@code embed(Document)}，一块一次 HTTP 请求，不批量（PgVectorStore 是批量的）
+ *   &lt;li&gt;{@code add} 传空列表直接抛 IllegalArgumentException，调用方要先判空
+ *   &lt;li&gt;没有「列出全部块」的公开方法，存块的 Map 是 protected 字段 {@code store}，这里用一个子类把它露出来
+ *   &lt;li&gt;{@code save(File)} 不会自动建父目录
+ * &lt;/ul&gt;
+ */
+public class MemoryKnowledgeStore implements KnowledgeStore {
+
+<span class="fc" id="L42">    private static final Logger log = LoggerFactory.getLogger(MemoryKnowledgeStore.class);</span>
+
+    private final KnowledgeEmbedding embedding;
+    private final Path file;
+    private volatile InspectableSimpleVectorStore store;
+
+    /**
+     * 创建。
+     *
+     * @param embedding 当前向量模型
+     * @param file JSON 文件路径；为 null 表示不持久化
+     */
+<span class="fc" id="L54">    public MemoryKnowledgeStore(KnowledgeEmbedding embedding, Path file) {</span>
+<span class="fc" id="L55">        this.embedding = embedding;</span>
+<span class="fc" id="L56">        this.file = file;</span>
+<span class="fc" id="L57">    }</span>
+
+    @Override
+    public String type() {
+<span class="fc" id="L61">        return &quot;memory&quot;;</span>
+    }
+
+    @Override
+    public String location() {
+<span class="fc bfc" id="L66" title="All 2 branches covered.">        return file == null ? &quot;内存（不持久化）&quot; : file.toAbsolutePath().toString();</span>
+    }
+
+    /** 第一次用到时创建；有 JSON 文件就先读回来，并检查文件里的向量维度和当前模型是否一致。 */
+    @Override
+    public VectorStore vectorStore() {
+<span class="fc" id="L72">        InspectableSimpleVectorStore current = store();</span>
+<span class="fc bfc" id="L73" title="All 2 branches covered.">        if (!current.contents().isEmpty()) {</span>
+<span class="fc" id="L74">            int stored = current.firstDimensions();</span>
+<span class="fc" id="L75">            int expected = embedding.dimensions();</span>
+<span class="fc bfc" id="L76" title="All 2 branches covered.">            if (stored != expected) {</span>
+<span class="fc" id="L77">                throw new KnowledgeException(</span>
+                        KnowledgeFailure.INDEX_MODEL_MISMATCH,
+<span class="fc" id="L79">                        &quot;向量库 &quot; + location() + &quot; 里的向量是 &quot; + stored + &quot; 维，当前向量模型 &quot; + embedding.modelName() + &quot; 输出 &quot;</span>
+                                + expected + &quot; 维：不同模型的向量不能混在一起比较，请重建（POST /api/knowledge/ingest?rebuild=true）。&quot;,
+                        null);
+            }
+        }
+<span class="fc" id="L84">        return current;</span>
+    }
+
+    @Override
+    public List&lt;StoredDocument&gt; documents() {
+<span class="pc bpc" id="L89" title="1 of 2 branches missed.">        if (!embedding.configured()) {</span>
+<span class="nc" id="L90">            return List.of();</span>
+        }
+<span class="fc" id="L92">        List&lt;Map&lt;String, Object&gt;&gt; metadata =</span>
+<span class="fc" id="L93">                store().contents().stream().map(Content::getMetadata).toList();</span>
+<span class="fc" id="L94">        return StoredDocument.summarize(metadata);</span>
+    }
+
+    /** 遍历内部 Map：键是块 ID，值里有文字和元数据（第 5 章关键词检索用）。 */
+    @Override
+    public List&lt;Document&gt; chunks() {
+<span class="pc bpc" id="L100" title="1 of 2 branches missed.">        if (!embedding.configured()) {</span>
+<span class="nc" id="L101">            return List.of();</span>
+        }
+<span class="fc" id="L103">        return store().entries().entrySet().stream()</span>
+<span class="fc" id="L104">                .map(e -&gt; Document.builder()</span>
+<span class="fc" id="L105">                        .id(e.getKey())</span>
+<span class="fc" id="L106">                        .text(e.getValue().getText())</span>
+<span class="fc" id="L107">                        .metadata(e.getValue().getMetadata())</span>
+<span class="fc" id="L108">                        .build())</span>
+<span class="fc" id="L109">                .sorted(CHUNK_ORDER)</span>
+<span class="fc" id="L110">                .toList();</span>
+    }
+
+    /** 按来源文件名、块序号排序，两种库返回的顺序一致。 */
+<span class="fc" id="L114">    static final Comparator&lt;Document&gt; CHUNK_ORDER = Comparator.comparing(</span>
+<span class="fc" id="L115">                    (Document d) -&gt; String.valueOf(d.getMetadata().get(ChunkMetadata.SOURCE)))</span>
+<span class="fc" id="L116">            .thenComparingInt(</span>
+<span class="pc bpc" id="L117" title="1 of 2 branches missed.">                    d -&gt; d.getMetadata().get(ChunkMetadata.CHUNK_INDEX) instanceof Number n ? n.intValue() : 0);</span>
+
+    @Override
+    public void persist() {
+<span class="pc bpc" id="L121" title="1 of 4 branches missed.">        if (file == null || store == null) {</span>
+<span class="fc" id="L122">            return;</span>
+        }
+        try {
+<span class="fc" id="L125">            Files.createDirectories(file.toAbsolutePath().getParent());</span>
+<span class="fc" id="L126">            store.save(file.toFile());</span>
+<span class="nc" id="L127">        } catch (IOException e) {</span>
+<span class="nc" id="L128">            throw new UncheckedIOException(&quot;保存内存向量库失败：&quot; + file, e);</span>
+<span class="fc" id="L129">        }</span>
+<span class="fc" id="L130">    }</span>
+
+    @Override
+    public void reset() {
+<span class="fc" id="L134">        store().clear();</span>
+<span class="fc bfc" id="L135" title="All 2 branches covered.">        if (file != null) {</span>
+            try {
+<span class="fc" id="L137">                Files.deleteIfExists(file);</span>
+<span class="nc" id="L138">            } catch (IOException e) {</span>
+<span class="nc" id="L139">                throw new UncheckedIOException(&quot;删除内存向量库文件失败：&quot; + file, e);</span>
+<span class="fc" id="L140">            }</span>
+        }
+<span class="fc" id="L142">    }</span>
+
+    /** 懒加载：创建 SimpleVectorStore（只是持有模型的引用，不调用模型），有 JSON 文件就读回来。 */
+    private synchronized InspectableSimpleVectorStore store() {
+<span class="fc bfc" id="L146" title="All 2 branches covered.">        if (store == null) {</span>
+<span class="fc" id="L147">            InspectableSimpleVectorStore created = new InspectableSimpleVectorStore(embedding.model());</span>
+<span class="fc bfc" id="L148" title="All 4 branches covered.">            if (file != null &amp;&amp; Files.isRegularFile(file)) {</span>
+<span class="fc" id="L149">                created.load(file.toFile());</span>
+<span class="fc" id="L150">                log.info(&quot;已从 {} 读回 {} 个知识块&quot;, file, created.contents().size());</span>
+            }
+<span class="fc" id="L152">            store = created;</span>
+        }
+<span class="fc" id="L154">        return store;</span>
+    }
+
+    /**
+     * 露出 SimpleVectorStore 内部 Map 的子类：Spring AI 只提供了按相似度检索，没有「列出全部」，而 protected 的 {@code store} 字段
+     * 子类可以访问。
+     */
+    static final class InspectableSimpleVectorStore extends SimpleVectorStore {
+
+<span class="fc" id="L163">        private static final JsonMapper JSON = JsonMapper.builder().build();</span>
+
+        InspectableSimpleVectorStore(EmbeddingModel embeddingModel) {
+<span class="fc" id="L166">            super(SimpleVectorStore.builder(embeddingModel));</span>
+<span class="fc" id="L167">        }</span>
+
+        /**
+         * 当前全部块。Map 的值类型 SimpleVectorStoreContent 在 Spring AI 2.0.2 里是包内可见的（不能在别的包里写出这个类名），
+         * 好在它实现了公开接口 {@link Content}，按接口拿文字和元数据。
+         */
+        Collection&lt;? extends Content&gt; contents() {
+<span class="fc" id="L174">            return this.store.values();</span>
+        }
+
+        /** 块 ID → 内容（第 5 章：关键词检索要拿到全部块的 ID、文字和元数据）。 */
+        Map&lt;String, ? extends Content&gt; entries() {
+<span class="fc" id="L179">            return this.store;</span>
+        }
+
+        /**
+         * 第一块向量的维度。向量在 Content 接口上取不到，借 Jackson 把它转成 Map 再看 embedding 数组的长度
+         * （SimpleVectorStore 存 JSON 文件时也是用 Jackson 序列化它的）。
+         */
+        int firstDimensions() {
+<span class="fc" id="L187">            Object first = this.store.values().iterator().next();</span>
+<span class="fc" id="L188">            Map&lt;?, ?&gt; json = JSON.convertValue(first, Map.class);</span>
+<span class="pc bpc" id="L189" title="1 of 2 branches missed.">            return json.get(&quot;embedding&quot;) instanceof List&lt;?&gt; list ? list.size() : -1;</span>
+        }
+
+        /** 清空。 */
+        void clear() {
+<span class="fc" id="L194">            this.store.clear();</span>
+<span class="fc" id="L195">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

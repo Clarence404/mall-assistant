@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CliReply.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.cli</a> &gt; <span class="el_source">CliReply.java</span></div><h1>CliReply.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.cli;
+
+/**
+ * 一次阻塞调用的结果：方言从 stdout 里解析出来（{@link CliDialect#parseReply}），{@link CliChatModel} 再把它包成 Spring AI 的
+ * {@code ChatResponse}（文本 + 模型名 + token 用量元数据）。
+ *
+ * &lt;p&gt;架构层：命令行模型。不属于某一章的练习，是第 2 章之后加的可选扩展（{@code claude-cli} / {@code codex-cli} profile 才启用）。
+ *
+ * &lt;p&gt;token：模型计费和上下文长度的单位，大致是一个词片段。输入 token 包括系统提示词和用户消息，所以提示词越长每次调用越贵；
+ * 这里记下来只用于日志。
+ *
+ * @param text 回答文本；结构化输出时为 JSON 字符串
+ * @param model 工具报告的实际模型名，可能为 null
+ * @param inputTokens 输入 token 数，未知时为 null
+ * @param outputTokens 输出 token 数，未知时为 null
+ * @param costUsd 工具报告的费用（美元），未知时为 null
+ */
+<span class="fc" id="L18">public record CliReply(String text, String model, Integer inputTokens, Integer outputTokens, Double costUsd) {</span>
+
+    /** 只有文本、其余信息未知的结果。 */
+    public static CliReply text(String text) {
+<span class="nc" id="L22">        return new CliReply(text, null, null, null, null);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

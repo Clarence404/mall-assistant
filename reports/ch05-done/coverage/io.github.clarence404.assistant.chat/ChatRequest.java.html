@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ChatRequest.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.chat</a> &gt; <span class="el_source">ChatRequest.java</span></div><h1>ChatRequest.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.chat;
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
+/**
+ * 用户发来的一条消息。
+ *
+ * &lt;p&gt;所在层：接口层的请求体（第 1 章引入）。{@link ChatController} 的两个接口和 {@code IntentController} 共用。
+ *
+ * @param message 用户原文；不能为空白，最长 2000 字。限制长度既防止滥用，也是控制成本：发给模型的文字越长，消耗的 token
+ *     越多（token 是模型计费和计算上下文长度的单位，中文大致一两个字算一个），响应也越慢
+ */
+<span class="fc" id="L14">public record ChatRequest(@NotBlank @Size(max = 2000) String message) {}</span>
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
