@@ -20,7 +20,7 @@ import reactor.core.publisher.Mono;
 /**
  * 对话的 HTTP 入口：阻塞接口 {@code POST /api/chat} 与流式接口 {@code POST /api/chat/stream}。
  *
- * <p>所在层：接口层（第 1 章引入，第 2 章加上意图识别，第 3 章加上商城令牌与工具事件）。上游是 {@code static/index.html} 聊天页或任意
+ * <p>所在层：接口层（第 1 章引入，第 2 章加上意图识别，第 3 章加上商城令牌与工具事件，第 5 章加上 RAG 的 source 事件）。上游是 {@code static/index.html} 聊天页或任意
  * HTTP 客户端；下游是 {@link ChatService}（回答）与 {@link IntentService}（意图识别）。这里只做协议转换：请求体校验、取出请求头里的
  * 商城令牌、把结果写成 JSON 或 SSE 事件，不放业务逻辑。
  *
@@ -48,7 +48,8 @@ public class ChatController {
     }
 
     /**
-     * 阻塞接口：{"message": "..."} → {"reply": "...", "intent": {...}, "tools": [...]}；模型调用失败由 ApiExceptionHandler 转成 503。
+     * 阻塞接口：{"message": "..."} → {"reply": "...", "intent": {...}, "tools": [...], "sources": [...], "rag": {...}}；
+     * 模型调用失败由 ApiExceptionHandler 转成 503。第 5 章起规则类问题走 RAG，sources 是引用的资料，rag 是检索与引用校验的调试信息。
      *
      * @param request 请求体，{@code @Valid} 触发 {@link ChatRequest} 上的校验（空消息、超长消息直接 400，不浪费一次模型调用）
      * @param authorization {@code Authorization} 请求头，{@code Bearer <商城令牌>}；没登录时不带
@@ -63,7 +64,7 @@ public class ChatController {
     }
 
     /**
-     * 流式接口：返回 text/event-stream，先推一个 intent 事件，再推 0 到多个 tool 事件和若干 token 事件，最后一个 done 事件；
+     * 流式接口：返回 text/event-stream，先推一个 intent 事件，再推 0 到多个 tool / source 事件和若干 token 事件，最后一个 done 事件；
      * 出错时推一个 error 事件后结束。
      *
      * <p>Spring MVC 直接支持返回 Flux：每个元素写成一条 SSE，Flux 结束时关闭连接。意图识别是一次阻塞调用，放进
@@ -107,7 +108,7 @@ public class ChatController {
     }
 
     /**
-     * 回答片段 → SSE：文字是 token 事件，工具调用记录是 tool 事件。
+     * 回答片段 → SSE：文字是 token 事件，工具调用记录是 tool 事件，RAG 引用来源是 source 事件（第 5 章）。
      *
      * @param part {@link ChatService#answerStream} 产出的片段
      */
@@ -115,6 +116,7 @@ public class ChatController {
         return switch (part) {
             case AnswerPart.Text text -> event(StreamEvents.TOKEN, new StreamEvents.Token(text.text()));
             case AnswerPart.ToolUse tool -> event(StreamEvents.TOOL, tool.invocation());
+            case AnswerPart.Source source -> event(StreamEvents.SOURCE, source.source());
         };
     }
 

@@ -39,7 +39,10 @@ import org.springframework.stereotype.Component;
  *       {@code {today}}、更明确的「不编造」规则和 few-shot 示例；v3（第 3 章，默认）让模型先调工具查、事实只能来自工具或查询结果，
  *       而且刻意写得很短（长提示词会让小模型不调工具）。变量：shopName、assistantName、supportScope、today（v1 不用 today）
  *   <li>{@code refusal.st}：拒答话术，直接返回给用户，不发给模型。变量同上
- *   <li>{@code intent-v1.st}：意图识别的系统提示词，没有变量，由 {@code IntentService} 直接加载，不经过这个类
+ *   <li>{@code intent-v2.st}（第 5 章起；{@code intent-v1.st} 是第 2～4 章的版本）：意图识别的系统提示词，没有变量，由 {@code IntentService}
+ *       直接加载，不经过这个类
+ *   <li>{@code rag-v1.st} / {@code rag-not-found.st} / {@code rag-unavailable.st} / {@code rag-rewrite.st}（第 5 章）：RAG 回答的系统提示词、
+ *       检索不到时的固定话术、知识库不可用时的固定话术、问题改写，由 {@code rag.RagService} 加载，变量用这里的 {@link #variables()}
  * </ul>
  */
 @Component
@@ -128,8 +131,18 @@ public class AssistantPrompts {
      * @return 渲染好的话术，去掉了首尾空白（模板文件末尾的换行）
      */
     public String refusal() {
+        return render(refusalTemplate);
+    }
+
+    /**
+     * 渲染一段直接给用户看的固定话术（不经过模型），变量同 {@link #variables()}。第 5 章 RAG 的「没找到相关规定」「规则库暂时查不到」也用它。
+     *
+     * @param template 模板文件
+     * @return 渲染好的话术，去掉了首尾空白
+     */
+    public String render(Resource template) {
         return PromptTemplate.builder()
-                .resource(refusalTemplate)
+                .resource(template)
                 .variables(variables())
                 .build()
                 .render()

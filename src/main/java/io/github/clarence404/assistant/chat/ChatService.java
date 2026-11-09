@@ -5,6 +5,9 @@ import io.github.clarence404.assistant.intent.Intent;
 import io.github.clarence404.assistant.intent.IntentResult;
 import io.github.clarence404.assistant.intent.IntentService;
 import io.github.clarence404.assistant.prompt.AssistantPrompts;
+import io.github.clarence404.assistant.rag.CitationChecker;
+import io.github.clarence404.assistant.rag.RagPlan;
+import io.github.clarence404.assistant.rag.RagService;
 import io.github.clarence404.assistant.tool.MallTools;
 import io.github.clarence404.assistant.tool.ToolCallRecorder;
 import io.github.clarence404.assistant.tool.ToolInvocation;
@@ -20,12 +23,22 @@ import reactor.core.publisher.Flux;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 和模型对话：先识别意图，超出范围的直接拒答；其余一问一答（阻塞）或逐段输出（流式），回答时可以用工具查商城的订单和商品。
+ * 和模型对话：先识别意图，超出范围的直接拒答；规则类问题先检索知识库再回答（RAG）；其余一问一答（阻塞）或逐段输出（流式），
+ * 回答时可以用工具查商城的订单和商品。
  * 调用失败统一转成 {@link ModelCallException}。
  *
- * <p>所在层：业务层（第 1 章引入 {@link #reply} / {@link #stream}，第 2 章加上意图识别与拒答，第 3 章加上工具调用）。上游是
- * {@link ChatController}；下游是 {@link IntentService}（识别意图）、{@link AssistantPrompts}（系统提示词与拒答话术）、
- * {@link MallTools}（查订单、查商品）和 {@link ChatClient}（真正调模型）。
+ * <p>所在层：业务层（第 1 章引入 {@link #reply} / {@link #stream}，第 2 章加上意图识别与拒答，第 3 章加上工具调用，第 5 章加上 RAG）。
+ * 上游是 {@link ChatController}；下游是 {@link IntentService}（识别意图）、{@link AssistantPrompts}（系统提示词与拒答话术）、
+ * {@link MallTools}（查订单、查商品）、{@link RagService}（检索知识库、拼带资料的提示词）和 {@link ChatClient}（真正调模型）。
+ *
+ * <p>按意图分三条路（第 5 章）：
+ *
+ * <ul>
+ *   <li>超出范围（把握够大）：拒答话术，不调回答模型（第 2 章）
+ *   <li>售后、规则政策（{@code assistant.rag.intents}）：RAG——检索知识库，有相关资料就带着编了号的资料问模型、要求标注引用；
+ *       一块相关资料都没有就直接回「没找到相关规定」，<b>不调模型</b>（{@link #ragAnswer}）
+ *   <li>其余（查订单、问商品、闲聊、未识别）：第 3 章的路径，按意图直接查询或交给模型调工具（{@link #answerRequest}）
+ * </ul>
  *
  * <p>一次「回答」发给模型的内容由两条消息组成：
  *
@@ -74,6 +87,7 @@ public class ChatService {
     private final IntentService intentService;
     private final MallTools mallTools;
     private final ToolProperties toolProperties;
+    private final RagService ragService;
 
     /**
      * 创建对话服务（Spring 注入；测试里手工 new）。
@@ -84,6 +98,7 @@ public class ChatService {
      * @param intentService 意图识别
      * @param mallTools 查订单、查商品的工具（第 3 章）
      * @param toolProperties {@code assistant.tools.*}：原生工具调用、按意图直接查询的开关（第 3 章）
+     * @param ragService 规则类问题的检索增强回答（第 5 章）
      */
     public ChatService(
             ChatClient chatClient,
@@ -91,13 +106,15 @@ public class ChatService {
             AssistantPrompts prompts,
             IntentService intentService,
             MallTools mallTools,
-            ToolProperties toolProperties) {
+            ToolProperties toolProperties,
+            RagService ragService) {
         this.chatClient = chatClient;
         this.properties = properties;
         this.prompts = prompts;
         this.intentService = intentService;
         this.mallTools = mallTools;
         this.toolProperties = toolProperties;
+        this.ragService = ragService;
     }
 
     /**
@@ -120,17 +137,19 @@ public class ChatService {
     }
 
     /**
-     * 意图已知时的阻塞回答：按 {@link #answerRequest} 拼好请求、调模型，再用 {@link ToolResultGuard} 做一道事后检查。
+     * 意图已知时的阻塞回答：规则类问题走 {@link #ragAnswer}（第 5 章）；其余按 {@link #answerRequest} 拼好请求、调模型，再用
+     * {@link ToolResultGuard} 做一道事后检查。
      *
      * <p>模型决定调工具时，{@code call()} 内部会多次请求模型（Spring AI 的工具调用循环），返回的是最后一次的回答。
      *
      * @param message 用户原文
      * @param intent 已识别的意图
-     * @param mallToken 商城访问令牌，可以为 null
-     * @return 回答、意图与工具调用记录
+     * @param mallToken 商城访问令牌，可以为 null（RAG 路径用不到它）
+     * @return 回答、意图、工具调用记录与引用来源
      * @throws ModelCallException 模型调用失败
      */
     public ChatReply answer(String message, IntentResult intent, String mallToken) {
+        // TODO ch05-6：规则类问题（ragService.handles(intent)）走 ragAnswer
         ToolCallRecorder recorder = new ToolCallRecorder();
         try {
             String content =
@@ -144,7 +163,8 @@ public class ChatService {
     }
 
     /**
-     * 流式接口的回答部分：意图已经识别好，超出范围就只推一段拒答话术，否则流式调用模型；工具调用的记录在它之后的文字之前推出。
+     * 流式接口的回答部分：意图已经识别好，超出范围就只推一段拒答话术；规则类问题走 {@link #ragStream}（第 5 章）；否则流式调用模型，
+     * 工具调用的记录在它之后的文字之前推出。
      *
      * <p>做法：每收到一段文字，先把这期间新发生的工具调用（{@link ToolCallRecorder#drainNew()}）推出去，再推这段文字；
      * 流结束时再检查一次（模型调了工具却一个字没说的情况）。直接查询发生在开始流式调用之前，所以它的记录总在第一段文字前面。
@@ -153,12 +173,13 @@ public class ChatService {
      * @param message 用户原文
      * @param intent 已识别的意图（由 {@link ChatController#stream} 先调 IntentService 得到，并已作为 intent 事件推给前端）
      * @param mallToken 商城访问令牌，可以为 null
-     * @return 文字片段与工具调用记录的序列；拒答时只有一段文字。出错时序列以 {@link ModelCallException} 结束
+     * @return 文字片段、工具调用记录（或 RAG 引用来源）的序列；拒答时只有一段文字。出错时序列以 {@link ModelCallException} 结束
      */
     public Flux<AnswerPart> answerStream(String message, IntentResult intent, String mallToken) {
         if (shouldRefuse(intent)) {
             return Flux.just(new AnswerPart.Text(prompts.refusal()));
         }
+        // TODO ch05-8：规则类问题走 ragStream
         return Flux.defer(() -> {
                     ToolCallRecorder recorder = new ToolCallRecorder();
                     return answerRequest(message, intent, mallToken, recorder).stream()
@@ -168,6 +189,55 @@ public class ChatService {
                             .concatWith(Flux.defer(() -> newToolUses(recorder)));
                 })
                 .onErrorMap(ModelCallException::from);
+    }
+
+    /**
+     * RAG 的阻塞回答：检索 → 没有相关资料就短路 → 带着编了号的资料调模型 → 引用校验。
+     *
+     * <p>要求（测试按这个写）：
+     *
+     * <ul>
+     *   <li>{@code ragService.plan(message)} 检索；{@link RagPlan#shortCircuited()} 时<b>不调模型</b>，回答就是 {@code plan.fallback()}，
+     *       tools、sources 为空列表，rag 为 {@code plan.trace()}
+     *   <li>否则 {@code ragService.request(message, plan).call().content()} 调模型（内容为 null 按空串），用
+     *       {@link CitationChecker#check}（资料条数 = sources 的个数）校验并清理引用；回答用清理后的，tools 为空列表，sources 为 plan 的
+     *       sources，rag 为 {@code plan.trace().withCitations(check)}
+     *   <li>模型调用失败转成 {@link ModelCallException}
+     * </ul>
+     *
+     * <p>为什么检索不到就不调模型：见 {@link RagService} 的说明——没有资料还问模型，它就会凭常识编一个规则出来。
+     *
+     * @param message 用户原文
+     * @param intent 已识别的意图（售后或规则政策）
+     * @return 回答、意图、引用来源与调试信息
+     * @throws ModelCallException 模型调用失败
+     */
+    ChatReply ragAnswer(String message, IntentResult intent) {
+        // TODO ch05-6：plan → 短路（不调模型）→ 调模型 → 引用校验（规则见上面的 Javadoc）
+        throw new UnsupportedOperationException("TODO ch05-6");
+    }
+
+    /**
+     * RAG 的流式回答：检索 → 没有相关资料就只推一段固定话术 → 否则先把每条引用来源推出去，再流式推模型的文字。
+     *
+     * <p>要求（测试按这个写）：
+     *
+     * <ul>
+     *   <li>整段放在 {@link Flux#defer} 里（订阅时才检索）；{@link RagPlan#shortCircuited()} 时只发一个 {@link AnswerPart.Text}（fallback），不调模型
+     *   <li>否则先按编号顺序发出每条 {@link AnswerPart.Source}，再接上 {@code ragService.request(message, plan).stream().content()}
+     *       （同样套上 {@code timeout(properties.streamTimeout())}）的每段文字
+     *   <li>错误用 {@code onErrorMap(ModelCallException::from)} 转换
+     * </ul>
+     *
+     * <p>为什么来源要排在文字前面：页面拿到 source 事件就知道 [1]、[2] 是什么，文字流到 [1] 时可以立刻对上。流式回答的引用没法
+     * 事后删改（已经推给用户了），只能由页面把对不上的编号标出来。
+     *
+     * @param message 用户原文
+     * @return 引用来源与文字片段的序列
+     */
+    Flux<AnswerPart> ragStream(String message) {
+        // TODO ch05-8：Flux.defer 里 plan → 短路只推固定话术；否则先推每条来源，再推模型的文字（规则见上面的 Javadoc）
+        return Flux.error(new UnsupportedOperationException("TODO ch05-8"));
     }
 
     /** 记录器里新增的工具调用，转成 {@link AnswerPart.ToolUse}。 */

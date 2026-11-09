@@ -9,6 +9,7 @@ import io.github.clarence404.assistant.intent.IntentService;
 import io.github.clarence404.assistant.mall.MallApiClient;
 import io.github.clarence404.assistant.mall.MallApiProperties;
 import io.github.clarence404.assistant.prompt.TestPrompts;
+import io.github.clarence404.assistant.rag.RagFixtures;
 import io.github.clarence404.assistant.tool.MallTools;
 import io.github.clarence404.assistant.tool.ToolProperties;
 import java.net.ConnectException;
@@ -37,7 +38,7 @@ class ChatServiceTest {
     @BeforeEach
     void setUp() {
         ChatClient chatClient = new ChatClientConfig().chatClient(ChatClient.builder(model));
-        IntentService intentService = new IntentService(chatClient, new ClassPathResource("prompts/intent-v1.st"));
+        IntentService intentService = new IntentService(chatClient, new ClassPathResource("prompts/intent-v2.st"));
         // 流式空闲超时只给 300 毫秒，「模型一直不吭声」的测试很快就能结束；0.6 是拒答的置信度门槛，与 application.yml 一致
         // 这里只测第 1 章的 reply / stream，不会调商城，商城地址随便给一个（工具调用见第 3 章的 ToolCallingFlowTest）
         MallTools tools = new MallTools(new MallApiClient(
@@ -48,7 +49,8 @@ class ChatServiceTest {
                 TestPrompts.prompts("v2"),
                 intentService,
                 tools,
-                new ToolProperties(true, true));
+                new ToolProperties(true, true),
+                RagFixtures.disabled(chatClient));
     }
 
     @Test

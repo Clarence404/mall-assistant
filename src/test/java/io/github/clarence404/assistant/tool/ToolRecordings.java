@@ -6,6 +6,7 @@ import io.github.clarence404.assistant.intent.IntentService;
 import io.github.clarence404.assistant.mall.MallApiClient;
 import io.github.clarence404.assistant.mall.MallApiProperties;
 import io.github.clarence404.assistant.prompt.TestPrompts;
+import io.github.clarence404.assistant.rag.RagFixtures;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -145,9 +146,10 @@ final class ToolRecordings {
                 chatClient,
                 new ChatProperties(Duration.ofSeconds(60), 0.6),
                 TestPrompts.prompts("v3"),
-                new IntentService(chatClient, new ClassPathResource("prompts/intent-v1.st")),
+                new IntentService(chatClient, new ClassPathResource("prompts/intent-v2.st")),
                 tools,
-                new ToolProperties(true, false));
+                new ToolProperties(true, false),
+                RagFixtures.disabled(chatClient));
     }
 
     /** Prompt 指纹，见类注释。换行统一成 \n。 */

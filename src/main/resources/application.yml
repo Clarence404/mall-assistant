@@ -92,6 +92,21 @@ assistant:
       - match: bge-m3                      # bge-m3 不需要前缀（列在这里只是说明，不写效果一样）
         query-prefix: ""
         document-prefix: ""
+  rag:                       # 第 5 章：检索增强回答（见 RagProperties）。检索 → 把编了号的资料拼进提示词 → 模型只依据资料回答并标注 [n]
+    enabled: true            # 总开关；关掉后规则类问题按普通问答回答（模型只能凭常识，容易编）
+    intents:                 # 哪些意图走 RAG：售后、规则政策（答案在规则文档里）；查订单 / 商品仍走第 3 章的工具
+      - AFTER_SALES
+      - POLICY
+    top-k: 4                 # 最终交给模型几块资料（编号 [1]～[4]）：太少容易漏答案，太多提示词变长、小模型容易被无关内容带偏
+    candidate-k: 10          # 向量检索、关键词检索各取几块候选再融合（不超过 assistant.knowledge.search.max-top-k）
+    min-score: 0.6           # 向量检索的最低余弦相似度，低于它不算相关。按 bge-m3 实测定的（评测集正确答案 0.67～0.81，知识库里没有的问题多在 0.49～0.64），换模型要重新测（见 docs/ch05.md）
+    keyword-min-coverage: 0.6  # 关键词检索找到的块：问题里的词（去掉「的、了、吗」等）至少六成出现在块里才算相关
+    context-budget-chars: 1500 # 拼进提示词的资料最多多少字（上下文窗口预算），放不下的块不放
+    hybrid: true             # 混合检索：关键词检索（BM25）+ 向量检索，RRF 融合；false = 只用向量检索，用来对比
+    rrf-k: 60                # RRF 平滑常数：第 r 名得 1 / (60 + r) 分
+    rewrite-query: false     # 检索前先让对话模型改写问题（Spring AI RewriteQueryTransformer）；多一次模型调用，默认关
+    snippet-chars: 80        # 引用来源的片段长度（页面悬停提示用）
+    prompt: rag-v1           # RAG 回答的系统提示词：prompts/rag-v1.st
 
 server:
   port: ${SERVER_PORT:8088}    # 与 mall-evolution（8080 / 8082 / 8083 / 9000）错开，两个项目可以同时运行

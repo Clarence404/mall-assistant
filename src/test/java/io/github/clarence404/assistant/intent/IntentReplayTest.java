@@ -40,7 +40,7 @@ class IntentReplayTest {
             String model, String message, IntentRecordings.Recording recording, IntentRecordings.RecordedCase c) {
         ReplayChatModel replay = new ReplayChatModel(recording);
         IntentService service =
-                new IntentService(ChatClient.builder(replay).build(), new ClassPathResource("prompts/intent-v1.st"));
+                new IntentService(ChatClient.builder(replay).build(), new ClassPathResource("prompts/intent-v2.st"));
 
         IntentResult result = service.classify(message);
 

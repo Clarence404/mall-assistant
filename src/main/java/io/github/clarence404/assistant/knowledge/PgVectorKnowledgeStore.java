@@ -4,10 +4,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.IntFunction;
 import java.util.regex.Pattern;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * pgvector 向量库：PostgreSQL 的一张表，每行一块（id、content 文字、metadata 元数据、embedding 向量），带 HNSW 索引（第 4 章引入）。
@@ -28,6 +31,9 @@ public class PgVectorKnowledgeStore implements KnowledgeStore {
 
     /** 表名只允许小写字母、数字、下划线，以字母或下划线开头，最长 57 个字符（加上 PgVectorStore 自动拼的 {@code _index} 不超过 63）。 */
     static final Pattern SAFE_NAME = Pattern.compile("[a-z_][a-z0-9_]{0,56}");
+
+    private static final JsonMapper JSON = JsonMapper.builder().build();
+    private static final TypeReference<Map<String, Object>> METADATA = new TypeReference<>() {};
 
     private final JdbcTemplate jdbc;
     private final String schema;
@@ -119,6 +125,29 @@ public class PgVectorKnowledgeStore implements KnowledgeStore {
                             ChunkMetadata.DOC_HASH, nullToEmpty(rs.getString("doc_hash")),
                             ChunkMetadata.EMBEDDING_MODEL, nullToEmpty(rs.getString("embedding_model"))));
             return StoredDocument.summarize(metadata);
+        } catch (DataAccessException e) {
+            throw KnowledgeException.classify(e, embedding.modelName(), location());
+        }
+    }
+
+    /**
+     * 全部块（第 5 章关键词检索用）：只查 id、content、metadata 三列，不取向量列（一行 1024 个浮点数，用不上又占内存）。
+     * metadata 是 json 列，转成文字后用 Jackson 解析成 Map。表还没建时返回空列表。
+     */
+    @Override
+    public List<Document> chunks() {
+        try {
+            if (!tableExists()) {
+                return List.of();
+            }
+            List<Document> chunks = jdbc.query(
+                    "SELECT id::text AS id, content, metadata::text AS metadata FROM " + location(),
+                    (rs, i) -> Document.builder()
+                            .id(rs.getString("id"))
+                            .text(nullToEmpty(rs.getString("content")))
+                            .metadata(JSON.readValue(rs.getString("metadata"), METADATA))
+                            .build());
+            return chunks.stream().sorted(MemoryKnowledgeStore.CHUNK_ORDER).toList();
         } catch (DataAccessException e) {
             throw KnowledgeException.classify(e, embedding.modelName(), location());
         }

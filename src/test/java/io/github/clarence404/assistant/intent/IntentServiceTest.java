@@ -28,7 +28,7 @@ class IntentServiceTest {
 
     private final FakeChatModel model = new FakeChatModel();
     private final IntentService service =
-            new IntentService(ChatClient.builder(model).build(), new ClassPathResource("prompts/intent-v1.st"));
+            new IntentService(ChatClient.builder(model).build(), new ClassPathResource("prompts/intent-v2.st"));
 
     @Test
     void parsesValidJsonIntoIntentResult() {
@@ -62,7 +62,7 @@ class IntentServiceTest {
     void modelWithoutNativeSupportGetsFormatInstructionsInUserMessage() {
         FakeChatModel plain = new FakeChatModel(false);
         IntentService plainService =
-                new IntentService(ChatClient.builder(plain).build(), new ClassPathResource("prompts/intent-v1.st"));
+                new IntentService(ChatClient.builder(plain).build(), new ClassPathResource("prompts/intent-v2.st"));
         plain.willClassify("{\"intent\":\"PRODUCT_INFO\",\"confidence\":0.8,\"orderNo\":null,\"skuId\":null}");
 
         assertThat(plainService.classify("这款耳机还有货吗").intent()).isEqualTo(Intent.PRODUCT_INFO);

@@ -5,11 +5,13 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.content.Content;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -92,6 +94,28 @@ public class MemoryKnowledgeStore implements KnowledgeStore {
         return StoredDocument.summarize(metadata);
     }
 
+    /** 遍历内部 Map：键是块 ID，值里有文字和元数据（第 5 章关键词检索用）。 */
+    @Override
+    public List<Document> chunks() {
+        if (!embedding.configured()) {
+            return List.of();
+        }
+        return store().entries().entrySet().stream()
+                .map(e -> Document.builder()
+                        .id(e.getKey())
+                        .text(e.getValue().getText())
+                        .metadata(e.getValue().getMetadata())
+                        .build())
+                .sorted(CHUNK_ORDER)
+                .toList();
+    }
+
+    /** 按来源文件名、块序号排序，两种库返回的顺序一致。 */
+    static final Comparator<Document> CHUNK_ORDER = Comparator.comparing(
+                    (Document d) -> String.valueOf(d.getMetadata().get(ChunkMetadata.SOURCE)))
+            .thenComparingInt(
+                    d -> d.getMetadata().get(ChunkMetadata.CHUNK_INDEX) instanceof Number n ? n.intValue() : 0);
+
     @Override
     public void persist() {
         if (file == null || store == null) {
@@ -148,6 +172,11 @@ public class MemoryKnowledgeStore implements KnowledgeStore {
          */
         Collection<? extends Content> contents() {
             return this.store.values();
+        }
+
+        /** 块 ID → 内容（第 5 章：关键词检索要拿到全部块的 ID、文字和元数据）。 */
+        Map<String, ? extends Content> entries() {
+            return this.store;
         }
 
         /**

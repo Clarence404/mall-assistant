@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import io.github.clarence404.assistant.chat.FakeChatModel;
+import io.github.clarence404.assistant.rag.RagFixtures;
+import io.github.clarence404.assistant.rag.RagRetriever;
+import io.github.clarence404.assistant.rag.RagSource;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -17,6 +20,7 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.document.Document;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -185,6 +189,33 @@ class PgVectorStoreIT {
         for (int i = 0; i < pg.size(); i++) {
             assertThat(pg.get(i).score()).isCloseTo(mem.get(i).score(), within(0.001));
         }
+    }
+
+    /**
+     * 第 5 章：pgvector 也能列出全部块（id、文字、元数据，不取向量列），关键词检索在内存里给它们建索引；混合检索在 pgvector 上的结果
+     * 和内存版一致。
+     */
+    @Test
+    void chunksFeedKeywordIndexAndHybridRetrievalLikeMemory() throws IOException {
+        List<Document> chunks = store.chunks();
+
+        Integer rows = db.jdbc().queryForObject("SELECT count(*) FROM public." + TABLE, Integer.class);
+        assertThat(chunks).hasSize(rows);
+        assertThat(chunks.getFirst().getMetadata()).containsKeys(ChunkMetadata.SOURCE, ChunkMetadata.HEADING_PATH);
+        assertThat(chunks.getFirst().getMetadata().get(ChunkMetadata.CHUNK_INDEX))
+                .isInstanceOf(Number.class);
+        assertThat(chunks).extracting(Document::getText).doesNotContainNull();
+
+        RagRetriever pg = new RagRetriever(search, store, RagFixtures.properties());
+        RagRetriever mem = RagFixtures.retriever(RagFixtures.fakeKnowledgeBase(), RagFixtures.properties());
+        List<RagSource> fromPg = pg.retrieve("东西坏了能退吗").sources();
+        List<RagSource> fromMem = mem.retrieve("东西坏了能退吗").sources();
+
+        assertThat(fromPg).isNotEmpty();
+        assertThat(fromPg.getFirst().headingPath()).contains("质量问题退换货");
+        assertThat(fromPg)
+                .extracting(RagSource::headingPath)
+                .isEqualTo(fromMem.stream().map(RagSource::headingPath).toList());
     }
 
     /** 表已经是 256 维，换成 128 维的模型还指到同一张表：不往里写，报 INDEX_MODEL_MISMATCH 提示重建。 */

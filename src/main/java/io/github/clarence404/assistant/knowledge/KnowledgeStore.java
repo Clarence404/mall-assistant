@@ -1,6 +1,7 @@
 package io.github.clarence404.assistant.knowledge;
 
 import java.util.List;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.VectorStore;
 
 /**
@@ -50,6 +51,18 @@ public interface KnowledgeStore {
      * @throws KnowledgeException 向量库连不上
      */
     List<StoredDocument> documents();
+
+    /**
+     * 库里的全部块：ID、文字（标题路径 + 正文）和元数据，<b>不含向量</b>（第 5 章引入）。不调向量模型；库还没建时返回空列表。
+     *
+     * <p>为什么要它：第 5 章的关键词检索（{@code rag.KeywordIndex}）要在内存里给每块建「词 → 出现在哪些块」的倒排索引，
+     * 而 {@link VectorStore} 只能按向量找相似的块，列不出全部。块只有几十到几千块时，整个拿到内存里建索引最简单；
+     * 再大就该换成数据库自带的全文检索（PostgreSQL 的 tsvector、Elasticsearch 等）。
+     *
+     * @return 按 source、块序号排好的全部块
+     * @throws KnowledgeException 向量库连不上
+     */
+    List<Document> chunks();
 
     /** 写完之后持久化：内存版存成 JSON 文件（配置了目录时），pgvector 每次写入都已经落库，什么也不做。 */
     void persist();

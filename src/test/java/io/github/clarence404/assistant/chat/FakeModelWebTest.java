@@ -2,6 +2,7 @@ package io.github.clarence404.assistant.chat;
 
 import io.github.clarence404.assistant.knowledge.FakeEmbeddingModel;
 import io.github.clarence404.assistant.mall.StubMallApi;
+import io.github.clarence404.assistant.rag.RagFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -28,6 +29,9 @@ import org.springframework.test.web.servlet.MockMvc;
  *
  * <p>第 4 章起应用里还有向量模型：同样关掉 Ollama 的自动配置（{@code spring.ai.model.embedding=none}），换成不联网的
  * {@link FakeEmbeddingModel}；知识库不在启动时自动入库、不写 JSON 文件，由知识库的测试自己调用入库接口，免得测试之间互相影响。
+ *
+ * <p>第 5 章起规则类问题走 RAG：假向量模型的相似度分布和 bge-m3 完全不同（相关的块也只有 0.2～0.35），相似度门槛按它改成
+ * {@link RagFixtures#FAKE_MIN_SCORE}，否则什么问题都过不了门槛。
  */
 @SpringBootTest(
         properties = {
@@ -35,7 +39,8 @@ import org.springframework.test.web.servlet.MockMvc;
             "spring.ai.model.embedding=none",
             "assistant.knowledge.embedding-model=fake-ngram",
             "assistant.knowledge.ingest-on-startup=false",
-            "assistant.knowledge.memory.dir="
+            "assistant.knowledge.memory.dir=",
+            "assistant.rag.min-score=" + RagFixtures.FAKE_MIN_SCORE
         })
 @AutoConfigureMockMvc
 @Import(FakeModelWebTest.FakeModelConfig.class)

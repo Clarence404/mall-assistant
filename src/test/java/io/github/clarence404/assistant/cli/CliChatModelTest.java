@@ -277,7 +277,7 @@ class CliChatModelTest {
 
     /** 用指定模型构造真实的 IntentService，测结构化输出这条链路。 */
     private IntentService intentService(CliChatModel model) {
-        return new IntentService(ChatClient.builder(model).build(), new ClassPathResource("prompts/intent-v1.st"));
+        return new IntentService(ChatClient.builder(model).build(), new ClassPathResource("prompts/intent-v2.st"));
     }
 
     /** FakeCli 在 hang 模式下记下了自己和子进程的 pid：都应该已经被杀掉。 */

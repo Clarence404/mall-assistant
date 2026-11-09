@@ -87,6 +87,18 @@
   .kb-hits li { margin: 0 0 10px; }
   .kb-hits .meta { color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
   .kb-hits .text { white-space: pre-wrap; margin-top: 2px; }
+  /* 第 5 章：回答里的引用编号 [n] 与调试面板的引用来源 */
+  .cite {
+    display: inline-block; margin: 0 1px; padding: 0 4px; border-radius: 4px; font-size: 12px; line-height: 18px;
+    vertical-align: 1px; background: var(--user); color: var(--brand); cursor: pointer;
+  }
+  .cite.invalid { background: var(--code-bg); color: var(--muted); text-decoration: line-through; cursor: help; }
+  .sources { margin: 0; padding-left: 0; list-style: none; }
+  .sources li { margin: 2px 0 8px; word-break: break-all; padding: 2px 6px; border-radius: 6px; }
+  .sources li.hl { background: var(--user); }
+  .sources .meta { color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+  .rag-note { color: var(--muted); margin: 4px 0; }
+  .rag-note.warn { color: var(--err-fg); }
 </style>
 </head>
 <body>
@@ -145,9 +157,10 @@
         <h3>工具调用</h3>
         <ol class="tools" id="dbgTools"><li class="placeholder">-</li></ol>
       </section>
-      <section>
+      <section class="wide">
         <h3>引用来源</h3>
-        <p class="placeholder">第 5 章接入 RAG 后，这里显示回答引用的知识片段。</p>
+        <div class="rag-note" id="dbgRag">-</div>
+        <ol class="sources" id="dbgSources"></ol>
       </section>
       <section>
         <h3>Token 用量</h3>
@@ -181,6 +194,8 @@
 //   阻塞 —— POST /api/chat，等完整回答一次显示；流式 —— POST /api/chat/stream，按 SSE 事件逐段追加到气泡里
 // 底部「调试面板」显示接口、状态、首段 / 总耗时、片段数、错误码，以及识别出的意图（第 2 章）、调用过的工具（第 3 章）
 // 第 4 章：最下面的「知识库」调试区：入库、看概况、输入问题看相似度检索命中哪些知识块（不调对话模型）
+// 第 5 章：规则类问题走 RAG，回答里的 [1]、[2] 是引用编号，悬停看片段、点击在调试面板「引用来源」里定位；
+//   阻塞接口在响应体的 sources / rag 字段里，流式接口是文字之前的 source 事件
 // 第 3 章：右上角登录商城账号，令牌存在 sessionStorage（关掉标签页就没了），提问时放进 Authorization 请求头；
 //   令牌只给后端的工具用，后端不会把它发给模型
 (() => {
@@ -213,7 +228,7 @@
 
   // 第 2 章：先识别出的意图。阻塞接口在响应体的 intent 字段里，流式接口是最先推送的 intent 事件
   const INTENT_LABELS = {
-    ORDER_STATUS: '查订单', PRODUCT_INFO: '问商品', AFTER_SALES: '售后',
+    ORDER_STATUS: '查订单', PRODUCT_INFO: '问商品', AFTER_SALES: '售后，走 RAG', POLICY: '规则政策，走 RAG',
     CHITCHAT: '闲聊', OUT_OF_SCOPE: '超出范围，直接拒答', UNKNOWN: '未识别'
   };
 
@@ -299,6 +314,90 @@
     list.appendChild(li);
   }
 
+  // 第 5 章：RAG 的引用来源。每条：编号、标题路径、来源文件、分数、片段（完整内容放在悬停提示里）
+  const SHORT_CIRCUIT_LABELS = {
+    NO_MATCH: '没有相关资料（全部低于门槛），没调模型，直接回固定话术',
+    KNOWLEDGE_UNAVAILABLE: '知识库不可用，没调模型，直接回固定话术'
+  };
+
+  function resetSources() {
+    $('dbgSources').innerHTML = '';
+    $('dbgRag').className = 'rag-note';
+    $('dbgRag').textContent = '-';
+  }
+
+  function addSource(src) {
+    const li = document.createElement('li');
+    li.id = 'src-' + src.index;
+    const scores = [];
+    if (typeof src.score === 'number') scores.push('相似度 ' + src.score.toFixed(4));
+    if (typeof src.keywordScore === 'number') scores.push('BM25 ' + src.keywordScore.toFixed(2));
+    li.textContent = '[' + src.index + '] ' + src.headingPath;
+    li.title = src.content;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = src.source + ' #' + src.chunkIndexes.join(',') + '  ' + scores.join(' / ')
+      + '  ' + (src.foundBy || []).join('+') + '：' + src.snippet;
+    li.appendChild(meta);
+    $('dbgSources').appendChild(li);
+  }
+
+  // 调试信息：检索方式、候选数、短路原因、引用校验（阻塞接口才有引用校验；流式由页面自己把对不上的编号标灰）
+  function showRag(trace, sources) {
+    const el = $('dbgRag');
+    if (!trace) { el.textContent = '-'; return; }
+    const parts = [
+      (trace.mode === 'hybrid' ? '混合检索' : '只用向量') + '：向量 ' + trace.vectorCandidates + ' 块 / 关键词 '
+        + trace.keywordCandidates + ' 块 → 过门槛 ' + trace.passed + ' 块，资料 ' + trace.contextChars + ' 字，检索 '
+        + trace.retrievalMs + ' ms'
+    ];
+    if (trace.rewrittenQuery) parts.push('改写为「' + trace.rewrittenQuery + '」');
+    let warn = false;
+    if (trace.shortCircuit) { parts.push(SHORT_CIRCUIT_LABELS[trace.shortCircuit] || trace.shortCircuit); warn = true; }
+    if (trace.warning) parts.push(trace.warning);
+    if (trace.invalidCitations && trace.invalidCitations.length) {
+      parts.push('去掉了不存在的编号 ' + trace.invalidCitations.map((n) => '[' + n + ']').join(''));
+      warn = true;
+    }
+    if (trace.uncited === true) { parts.push('回答没有引用任何资料'); warn = true; }
+    el.className = 'rag-note' + (warn ? ' warn' : '');
+    el.textContent = parts.join('；');
+    if (!sources.length && !trace.shortCircuit) el.textContent += '；没有引用来源';
+  }
+
+  // 把回答里的 [n] 换成可悬停、可点击的引用标记；对不上来源的编号标灰（流式回答收不回来，只能标出来）。
+  // 只用 DOM 节点拼，不用 innerHTML：回答是模型生成的文字，不能当 HTML 解析
+  function renderCitations(bubble, text, sources) {
+    if (!sources.length) { bubble.textContent = text; return; }
+    const byIndex = new Map(sources.map((src) => [src.index, src]));
+    bubble.textContent = '';
+    const re = /[\[【]\s*(\d{1,6}(?:\s*[,，、]\s*\d{1,6})*)\s*[\]】]/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      bubble.appendChild(document.createTextNode(text.slice(last, m.index)));
+      for (const n of m[1].split(/[^\d]+/).filter(Boolean).map(Number)) {
+        const span = document.createElement('span');
+        const src = byIndex.get(n);
+        span.className = 'cite' + (src ? '' : ' invalid');
+        span.textContent = n;
+        span.title = src ? src.headingPath + '\n' + src.snippet : '没有编号为 ' + n + ' 的资料';
+        if (src) span.addEventListener('click', () => focusSource(n));
+        bubble.appendChild(span);
+      }
+      last = re.lastIndex;
+    }
+    bubble.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  // 点引用编号：展开调试面板，高亮对应的来源
+  function focusSource(n) {
+    $('debugPanel').open = true;
+    document.querySelectorAll('#dbgSources li').forEach((li) => li.classList.remove('hl'));
+    const li = $('src-' + n);
+    if (li) { li.classList.add('hl'); li.scrollIntoView({ block: 'nearest' }); }
+  }
+
   // 非 2xx 时尽量读出 ProblemDetail 的 detail，读不出就给通用提示
   async function problemMessage(res) {
     try {
@@ -321,7 +420,10 @@
     const body = await res.json();
     showIntent(body.intent);
     (body.tools || []).forEach(addTool);
-    bubble.textContent = body.reply;
+    const sources = body.sources || [];
+    sources.forEach(addSource);
+    showRag(body.rag, sources);
+    renderCitations(bubble, body.reply, sources);
     debug({ status: 'done', first: '-', chunks: '1', total: (performance.now() - t0).toFixed(0) + ' ms' });
   }
 
@@ -343,6 +445,8 @@
     let buffer = '';
     let chunks = 0;
     let finished = false;
+    const sources = [];
+    let answer = '';
 
     // 按事件名分发，事件定义见后端的 StreamEvents；data 都是 JSON
     const handle = (event, data) => {
@@ -350,14 +454,21 @@
         showIntent(JSON.parse(data));
       } else if (event === 'tool') {
         addTool(JSON.parse(data));
+      } else if (event === 'source') {
+        const src = JSON.parse(data);
+        sources.push(src);
+        addSource(src);
+        $('dbgRag').textContent = '已检索到 ' + sources.length + ' 条资料（流式回答不做引用校验，对不上的编号标灰）';
       } else if (event === 'token') {
         if (chunks === 0) debug({ first: (performance.now() - t0).toFixed(0) + ' ms' });
         chunks++;
-        bubble.textContent += JSON.parse(data).text;
+        answer += JSON.parse(data).text;
+        bubble.textContent = answer;
         messages.scrollTop = messages.scrollHeight;
         debug({ chunks: String(chunks), status: 'streaming' });
       } else if (event === 'done') {
         finished = true;
+        renderCitations(bubble, answer, sources);
         debug({ status: 'done' });
       } else if (event === 'error') {
         finished = true;
@@ -398,6 +509,7 @@
     send.disabled = true;
     debug({ status: 'waiting', first: '-', total: '-', chunks: '0', error: '-', intent: '-', confidence: '-', orderNo: '-', sku: '-' });
     resetTools();
+    resetSources();
     const t0 = performance.now();
     try {
       if (streamMode.checked) await askStreaming(text, bubble, t0);

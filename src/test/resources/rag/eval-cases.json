@@ -1,0 +1,22 @@
+[
+  { "question": "东西坏了能退吗", "source": "returns.md", "heading": "质量问题退换货" },
+  { "question": "七天无理由退货要什么条件", "source": "returns.md", "heading": "适用条件" },
+  { "question": "退货的运费谁出", "source": "returns.md", "heading": "退货运费" },
+  { "question": "买的水果烂了怎么办", "source": "returns.md", "heading": "质量问题退换货" },
+  { "question": "退的钱多久能到账", "source": "returns.md", "heading": "退款时效" },
+  { "question": "发票什么时候能开", "source": "payment-invoice.md", "heading": "开票时间" },
+  { "question": "下单时忘了要发票，还能补开吗", "source": "payment-invoice.md", "heading": "开票时间" },
+  { "question": "钱被扣了两次怎么办", "source": "payment-invoice.md", "heading": "重复扣款" },
+  { "question": "下单后多久不付款会被取消", "source": "payment-invoice.md", "heading": "付款时限" },
+  { "question": "积分多久过期", "source": "points-membership.md", "heading": "积分有效期" },
+  { "question": "积分能抵多少钱", "source": "points-membership.md", "heading": "积分使用" },
+  { "question": "买多少钱包邮", "source": "shipping.md", "heading": "普通商品" },
+  { "question": "寄到新疆要几天", "source": "shipping.md", "heading": "配送范围与时效" },
+  { "question": "下午五点付的款今天能发货吗", "source": "shipping.md", "heading": "发货时效" },
+  { "question": "已经发货了还能改地址吗", "source": "shipping.md", "heading": "修改地址" },
+  { "question": "有人打电话让我报验证码", "source": "account-security.md", "heading": "防诈骗提醒" },
+  { "question": "密码输错几次会被锁", "source": "account-security.md", "heading": "登录保护" },
+  { "question": "手机号不用了怎么换绑", "source": "account-security.md", "heading": "修改手机号与密码" },
+  { "question": "耳机用了两个月坏了能保修吗", "source": "after-sales.md", "heading": "保修政策" },
+  { "question": "我要投诉，找谁", "source": "after-sales.md", "heading": "投诉渠道" }
+]

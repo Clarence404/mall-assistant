@@ -64,7 +64,7 @@ class IntentRecordingIT {
     void record() throws Exception {
         RecordingChatModel recorder = new RecordingChatModel(ollama);
         IntentService service =
-                new IntentService(ChatClient.builder(recorder).build(), new ClassPathResource("prompts/intent-v1.st"));
+                new IntentService(ChatClient.builder(recorder).build(), new ClassPathResource("prompts/intent-v2.st"));
 
         List<IntentRecordings.RecordedCase> recorded = new ArrayList<>();
         for (IntentRecordings.Case c : IntentRecordings.cases()) {

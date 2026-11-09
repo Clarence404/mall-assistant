@@ -9,6 +9,7 @@ import io.github.clarence404.assistant.mall.MallApiClient;
 import io.github.clarence404.assistant.mall.MallApiProperties;
 import io.github.clarence404.assistant.mall.StubMallApi;
 import io.github.clarence404.assistant.prompt.TestPrompts;
+import io.github.clarence404.assistant.rag.RagFixtures;
 import io.github.clarence404.assistant.tool.MallTools;
 import io.github.clarence404.assistant.tool.OrderListLookup;
 import io.github.clarence404.assistant.tool.ToolInvocation;
@@ -82,14 +83,15 @@ class ToolCallingFlowTest {
     /** 组装 ChatService：系统提示词 v3、固定日期，工具开关按参数。 */
     private ChatService service(FakeChatModel chatModel, boolean nativeCalling, boolean directLookup) {
         ChatClient chatClient = new ChatClientConfig().chatClient(ChatClient.builder(chatModel));
-        IntentService intentService = new IntentService(chatClient, new ClassPathResource("prompts/intent-v1.st"));
+        IntentService intentService = new IntentService(chatClient, new ClassPathResource("prompts/intent-v2.st"));
         return new ChatService(
                 chatClient,
                 new ChatProperties(Duration.ofSeconds(5), 0.6),
                 TestPrompts.prompts("v3"),
                 intentService,
                 tools,
-                new ToolProperties(nativeCalling, directLookup));
+                new ToolProperties(nativeCalling, directLookup),
+                RagFixtures.disabled(chatClient));
     }
 
     @Test

@@ -40,6 +40,10 @@ class IndexPageTest extends FakeModelWebTest {
                 // 第 4 章：知识库调试区（入库、检索、概况）
                 .contains("/api/knowledge/search")
                 .contains("/api/knowledge/ingest")
-                .contains("/api/knowledge/stats");
+                .contains("/api/knowledge/stats")
+                // 第 5 章：调试面板的引用来源、流式的 source 事件、回答里可点的引用编号
+                .contains("dbgSources")
+                .contains("'source'")
+                .contains("renderCitations");
     }
 }

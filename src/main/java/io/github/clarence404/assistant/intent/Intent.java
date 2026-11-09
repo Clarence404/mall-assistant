@@ -7,7 +7,7 @@ import java.util.Locale;
  * 用户消息的意图。name() 就是模型要输出、接口要返回的值。
  *
  * <p>所在层：业务层的领域模型（第 2 章引入）。作为 {@link IntentResult#intent()} 的类型写进 JSON Schema（枚举值就是 Schema 里的
- * {@code enum}，模型只能从中选），{@code prompts/intent-v1.st} 里也逐个解释了每个值；{@code ChatService} 据此决定是否拒答。
+ * {@code enum}，模型只能从中选），{@code prompts/intent-v2.st}（第 5 章起，v1 没有 POLICY）里也逐个解释了每个值；{@code ChatService} 据此决定是否拒答。
  * 加减取值时，提示词里的说明和示例要一起改。
  */
 public enum Intent {
@@ -15,8 +15,17 @@ public enum Intent {
     ORDER_STATUS,
     /** 问商品价格、库存、规格。 */
     PRODUCT_INFO,
-    /** 退换货、退款、投诉。 */
+    /** 自己的订单要退换货、退款、维修、投诉（「收到的杯子碎了怎么退」）。第 5 章起和 POLICY 一样走 RAG。 */
     AFTER_SALES,
+    /**
+     * 问商城的规则和政策：退换货条件、运费与发货时效、发票、积分与会员、账户安全（「积分多久过期」）。第 5 章新增，走 RAG：
+     * 答案在规则文档里，不在商城接口里。
+     *
+     * <p>为什么和 AFTER_SALES 分开：两者现在都走 RAG，分错了也不影响回答；但「我要退这一单」是要<b>办事</b>（第 7 章的 Agent 会接手），
+     * 「七天无理由要什么条件」只是<b>问规则</b>。v1 提示词里没有规则类，「积分多久过期」「运费怎么算」只能落到 UNKNOWN，
+     * 按普通问答回答，模型只能凭常识编。
+     */
+    POLICY,
     /** 打招呼、感谢、闲聊。 */
     CHITCHAT,
     /** 与购物无关：直接拒答，不调回答模型。 */

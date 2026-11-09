@@ -95,6 +95,10 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-pgvector-store</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-rag</artifactId>
+        </dependency>
         <!-- pgvector 模式的连接池（版本由 Spring Boot 管理）；只在 PgVectorConfig 里手动创建，不触发任何数据源自动配置 -->
         <dependency>
             <groupId>com.zaxxer</groupId>
