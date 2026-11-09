@@ -202,7 +202,7 @@ public class RagService {
         return chatClient
                 .prompt()
                 .system(spec -> spec.text(systemTemplate).params(prompts.variables()))
-                // TODO ch06-2：用 .messages(history) 把历史放在系统消息和这一轮的用户消息之间
+                .messages(history)
                 .user(u -> u.text(CONTEXT_TEMPLATE).param("message", message).param("context", context(plan.sources())))
                 .options(ChatOptions.builder().temperature(TEMPERATURE));
     }

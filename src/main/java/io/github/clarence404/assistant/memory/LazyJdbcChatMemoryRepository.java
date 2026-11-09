@@ -7,7 +7,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.repository.jdbc.JdbcChatMemoryRepository;
+import org.springframework.ai.chat.memory.repository.jdbc.PostgresChatMemoryRepositoryDialect;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 
 /**
@@ -89,8 +91,23 @@ public final class LazyJdbcChatMemoryRepository implements ChatMemoryRepository,
      * @return 已初始化的 repository
      */
     JdbcChatMemoryRepository delegate() {
-        // TODO ch06-7：双重检查；initialize-schema 时执行 SCHEMA 建表脚本；用 PostgreSQL 方言创建 JdbcChatMemoryRepository
-        throw new UnsupportedOperationException("TODO ch06-7");
+        JdbcChatMemoryRepository current = delegate;
+        if (current != null) {
+            return current;
+        }
+        synchronized (this) {
+            if (delegate == null) {
+                if (initializeSchema) {
+                    new ResourceDatabasePopulator(new ClassPathResource(SCHEMA)).execute(dataSource);
+                }
+                delegate = JdbcChatMemoryRepository.builder()
+                        .dataSource(dataSource)
+                        .dialect(new PostgresChatMemoryRepositoryDialect())
+                        .build();
+                log.info("对话记忆库已就绪：PostgreSQL 表 SPRING_AI_CHAT_MEMORY");
+            }
+            return delegate;
+        }
     }
 
     @Override

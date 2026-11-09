@@ -2,6 +2,9 @@ package io.github.clarence404.assistant.memory;
 
 import io.github.clarence404.assistant.mall.MallApiClient;
 import io.github.clarence404.assistant.mall.MallFailure;
+import io.github.clarence404.assistant.mall.MallModels;
+import io.github.clarence404.assistant.mall.MallResult;
+import io.github.clarence404.assistant.mall.MallToken;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -75,9 +78,26 @@ public class ConversationOwners {
      * @throws ConversationException 令牌无效（LOGIN_EXPIRED）或商城不可用（OWNER_UNVERIFIED）
      */
     public ConversationOwner resolve(String mallToken) {
-        // TODO ch06-5：没令牌是匿名；按 fingerprint 查缓存；否则 mallApi.me(令牌)，成功放缓存，UNAUTHORIZED 抛 LOGIN_EXPIRED，其他失败抛
-        // OWNER_UNVERIFIED
-        return ConversationOwner.ANONYMOUS;
+        if (mallToken == null) {
+            return ConversationOwner.ANONYMOUS;
+        }
+        String fingerprint = fingerprint(mallToken);
+        Instant now = clock.instant();
+        Cached cached = cache.get(fingerprint);
+        if (cached != null && cached.expiresAt().isAfter(now)) {
+            return cached.owner();
+        }
+        MallResult<MallModels.UserProfile> me = mallApi.me(mallToken);
+        if (me.isOk() && me.body().userId() != null) {
+            ConversationOwner owner = ConversationOwner.user(me.body().userId());
+            cache.put(fingerprint, new Cached(owner, now.plus(properties.ownerCacheTtl())));
+            return owner;
+        }
+        log.info("确认会话归属失败（令牌 {}）：{}", MallToken.mask(mallToken), me.failure());
+        if (me.failure() == MallFailure.UNAUTHORIZED) {
+            throw new ConversationException(ConversationException.Failure.LOGIN_EXPIRED, null);
+        }
+        throw new ConversationException(ConversationException.Failure.OWNER_UNVERIFIED, null);
     }
 
     /**
@@ -94,9 +114,8 @@ public class ConversationOwners {
      * @return 记忆库里的键，36 个字符
      */
     public String memoryKey(ConversationOwner owner, String conversationId) {
-        // TODO ch06-5：用 UUID.nameUUIDFromBytes 由「owner.key() + "/" + conversationId」的 UTF-8 字节算出键；现在直接用会话 ID，谁拿到 ID
-        // 都能读写
-        return conversationId;
+        return UUID.nameUUIDFromBytes((owner.key() + "/" + conversationId).getBytes(StandardCharsets.UTF_8))
+                .toString();
     }
 
     /** 清掉过期的缓存项（由 {@link ConversationMemory#sweep} 定期调用）。 */

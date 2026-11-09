@@ -69,8 +69,28 @@ public final class HistoryWindow {
      * @return 裁剪结果
      */
     public static Window trim(List<Message> stored, int maxTurns, int budgetChars) {
-        // TODO ch06-1：摘要单独拿出来；其余按「轮」分组（turns），留最后 maxTurns 轮，再从最早一轮丢到总字数不超过 budgetChars（规则见上面的 Javadoc）
-        return Window.EMPTY;
+        String summary = null;
+        List<Message> dialogue = new ArrayList<>();
+        for (Message message : stored) {
+            if (MemoryMessages.isSummary(message)) {
+                summary = MemoryMessages.text(message);
+            } else {
+                dialogue.add(message);
+            }
+        }
+        List<List<Message>> turns = turns(dialogue);
+        int from = Math.max(0, turns.size() - maxTurns);
+        int chars = 0;
+        for (int i = from; i < turns.size(); i++) {
+            chars += chars(turns.get(i));
+        }
+        while (from < turns.size() && chars > budgetChars) {
+            chars -= chars(turns.get(from));
+            from++;
+        }
+        List<Message> kept = new ArrayList<>();
+        turns.subList(from, turns.size()).forEach(kept::addAll);
+        return new Window(summary, kept, turns.size() - from, from, chars);
     }
 
     /**

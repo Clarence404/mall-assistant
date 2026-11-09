@@ -1,5 +1,6 @@
 package io.github.clarence404.assistant.memory;
 
+import io.github.clarence404.assistant.intent.Intent;
 import io.github.clarence404.assistant.intent.IntentResult;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -72,7 +73,26 @@ public final class ConversationEntities {
      * @return 沿用结果
      */
     public static Carried carryOver(IntentResult intent, String message, List<Message> history, int maxTurns) {
-        // TODO ch06-4：先用 mentioned 核对模型给的 orderNo / skuId；查订单没号、不是要列表时用 lastMatch 沿用，问商品没 SKU 时同理
+        if (intent.orderNo() != null && !mentioned(intent.orderNo(), message, history)) {
+            intent = intent.withOrderNo(null);
+        }
+        if (intent.skuId() != null && !mentioned(intent.skuId(), message, history)) {
+            intent = intent.withSkuId(null);
+        }
+        if (intent.intent() == Intent.ORDER_STATUS
+                && intent.orderNo() == null
+                && !LIST_REQUEST.matcher(message).find()) {
+            String orderNo = lastMatch(history, maxTurns, ORDER_NO);
+            if (orderNo != null) {
+                return new Carried(intent.withOrderNo(orderNo), orderNo, null);
+            }
+        }
+        if (intent.intent() == Intent.PRODUCT_INFO && intent.skuId() == null) {
+            String skuId = lastMatch(history, maxTurns, SKU);
+            if (skuId != null) {
+                return new Carried(intent.withSkuId(skuId), null, skuId);
+            }
+        }
         return new Carried(intent, null, null);
     }
 

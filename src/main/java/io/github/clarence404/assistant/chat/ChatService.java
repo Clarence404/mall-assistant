@@ -25,6 +25,8 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -204,7 +206,7 @@ public class ChatService {
             ChatReply reply = shouldRefuse(intent)
                     ? new ChatReply(prompts.refusal(), intent, List.of())
                     : answer(message, intent, mallToken, conversation);
-            // TODO ch06-6：回答成功后把这一轮写回记忆：conversation.save(用户原话, 回答)
+            conversation.save(message, reply.reply());
             return reply.withMemory(conversation.trace());
         }
     }
@@ -317,8 +319,15 @@ public class ChatService {
         } else {
             parts = Flux.concat(memoryPart(conversation), toolStream(turn, conversation));
         }
-        // TODO ch06-6：边推边把文字片段拼起来，流正常结束后（concatWith）在 boundedElastic 上写回记忆；出错、取消不写
-        return parts.doFinally(signal -> conversation.close());
+        StringBuilder reply = new StringBuilder();
+        return parts.doOnNext(part -> {
+                    if (part instanceof AnswerPart.Text text) {
+                        reply.append(text.text());
+                    }
+                })
+                .concatWith(Mono.<AnswerPart>fromRunnable(() -> conversation.save(turn.message(), reply.toString()))
+                        .subscribeOn(Schedulers.boundedElastic()))
+                .doFinally(signal -> conversation.close());
     }
 
     /** 第 3 章的流式回答：直接查询或交给模型调工具，工具记录排在它之后的文字前面。 */
@@ -495,7 +504,7 @@ public class ChatService {
             String message, IntentResult intent, String mallToken, ToolCallRecorder recorder, List<Message> history) {
         String lookup = toolProperties.directLookup() ? directLookup(intent, mallToken, recorder) : null;
         ChatClient.ChatClientRequestSpec spec =
-                chatClient.prompt().system(prompts::applySystem); // TODO ch06-2：用 .messages(history) 把历史放进去
+                chatClient.prompt().system(prompts::applySystem).messages(history);
         if (lookup != null) {
             return spec.user(
                     u -> u.text(LOOKUP_TEMPLATE).param("message", message).param("lookup", lookup));

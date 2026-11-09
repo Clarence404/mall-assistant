@@ -14,6 +14,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
@@ -113,8 +114,37 @@ public class QuestionCondenser {
      * @return 改写后的问题；没改写时为 null（调用方就用原话）
      */
     public String condense(String message, List<Message> history) {
-        // TODO ch06-3：有历史、开关开着时调一次模型（系统提示词 + examples() + USER_TEMPLATE，温度 0），clean 之后按四种情况返回 null，失败不抛
-        return null;
+        if (!properties.condense().enabled() || history.isEmpty()) {
+            return null;
+        }
+        String transcript = transcript(history, properties.condense().historyTurns());
+        try {
+            String output = chatClient
+                    .prompt()
+                    .system(systemPrompt)
+                    .messages(examples())
+                    .user(u ->
+                            u.text(USER_TEMPLATE).param("history", transcript).param("question", message))
+                    .options(ChatOptions.builder().temperature(TEMPERATURE))
+                    .call()
+                    .content();
+            String condensed = clean(output);
+            if (condensed.isEmpty()
+                    || condensed.length() > properties.condense().maxChars()
+                    || condensed.equals(message.strip())) {
+                log.info("追问改写「{}」→「{}」：没有改写或结果太长，用原话", message, condensed);
+                return null;
+            }
+            if (!plausible(message, condensed)) {
+                log.info("追问改写「{}」→「{}」：丢了原话里的关键词（改跑题了），用原话", message, condensed);
+                return null;
+            }
+            log.info("追问改写「{}」→「{}」", message, condensed);
+            return condensed;
+        } catch (RuntimeException e) {
+            log.warn("追问改写失败，用原话：{}", e.toString());
+            return null;
+        }
     }
 
     /**
