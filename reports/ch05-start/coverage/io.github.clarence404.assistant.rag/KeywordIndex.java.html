@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>KeywordIndex.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.rag</a> &gt; <span class="el_source">KeywordIndex.java</span></div><h1>KeywordIndex.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.rag;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 内存里的关键词索引，用 BM25 给块打分（第 5 章引入）。
+ *
+ * &lt;p&gt;所在层：RAG 的检索器之一。{@link RagRetriever} 用库里的全部块建一个（块变了才重建），每次提问调 {@link #search}；它的排名再和向量检索的
+ * 排名用 RRF 融合（{@link RrfFusion}）。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么向量检索之外还要关键词检索&lt;/b&gt;：向量检索比的是「整体意思像不像」，擅长同义改写（「东西坏了」≈「质量问题」）；但它把一段话
+ * 压成一个向量，具体的字眼会被冲淡——问「发票什么时候能开」，向量可能更像「配送 &gt; 签收」那块（都在讲「什么时候」）。关键词检索正好相反：
+ * 只认字面，「发票」两个字在哪块里出现就给哪块加分，数字、专有名词（「七天无理由」「增值税专用发票」）尤其准。两者互补，合起来叫混合检索。
+ *
+ * &lt;p&gt;&lt;b&gt;BM25 是什么&lt;/b&gt;：搜索引擎用了几十年的经典打分公式。对问题里的每个词项 t，块 d 得分
+ *
+ * &lt;pre&gt;
+ *   idf(t) × tf × (k1 + 1) / (tf + k1 × (1 − b + b × 块长 / 平均块长))
+ *   idf(t) = ln(1 + (N − df + 0.5) / (df + 0.5))
+ * &lt;/pre&gt;
+ *
+ * 再把所有词项的分加起来。直观理解：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;&lt;b&gt;idf&lt;/b&gt;（逆文档频率）：词项出现的块越少越值钱。N 是总块数，df 是含有这个词项的块数；「发票」只在几块里出现，idf 高；「商品」到处都有，idf 低
+ *   &lt;li&gt;&lt;b&gt;tf&lt;/b&gt;（词频）：词项在这块里出现几次。出现多当然更相关，但有上限——{@code k1} 控制饱和速度，出现 10 次不会是 1 次的 10 倍分
+ *   &lt;li&gt;&lt;b&gt;长度归一&lt;/b&gt;：长块天然包含更多词，{@code b} 控制按块长打多少折扣，免得长块总排前面
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;另外算一个 &lt;b&gt;覆盖率&lt;/b&gt;（coverage）：问题里的词项有多大比例在这块里出现过，0～1。BM25 的分数没有固定的范围（问题越长分越高），
+ * 不好拿来定「够不够相关」的门槛；覆盖率有，{@link RagRetriever} 用它判断「只被关键词检索找到的块」算不算相关。
+ *
+ * &lt;p&gt;线程：建好以后只读，可以多个请求同时检索。
+ */
+public final class KeywordIndex {
+
+    /** 词频饱和参数，常用 1.2～2.0。 */
+    static final double K1 = 1.2;
+
+    /** 长度归一的力度，0 = 不管块长，1 = 完全按块长归一；常用 0.75。 */
+    static final double B = 0.75;
+
+    private final List&lt;RagChunk&gt; chunks;
+    private final List&lt;Map&lt;String, Integer&gt;&gt; termFrequencies;
+    private final int[] lengths;
+    private final Map&lt;String, Integer&gt; documentFrequencies;
+    private final double averageLength;
+
+    private KeywordIndex(
+            List&lt;RagChunk&gt; chunks,
+            List&lt;Map&lt;String, Integer&gt;&gt; termFrequencies,
+            int[] lengths,
+            Map&lt;String, Integer&gt; documentFrequencies,
+<span class="fc" id="L57">            double averageLength) {</span>
+<span class="fc" id="L58">        this.chunks = chunks;</span>
+<span class="fc" id="L59">        this.termFrequencies = termFrequencies;</span>
+<span class="fc" id="L60">        this.lengths = lengths;</span>
+<span class="fc" id="L61">        this.documentFrequencies = documentFrequencies;</span>
+<span class="fc" id="L62">        this.averageLength = averageLength;</span>
+<span class="fc" id="L63">    }</span>
+
+    /**
+     * 建索引：每块切词项、数词频，统计每个词项出现在几块里（df）和平均块长。
+     *
+     * @param chunks 全部块
+     * @return 索引
+     */
+    public static KeywordIndex build(List&lt;RagChunk&gt; chunks) {
+<span class="fc" id="L72">        List&lt;Map&lt;String, Integer&gt;&gt; tfs = new ArrayList&lt;&gt;(chunks.size());</span>
+<span class="fc" id="L73">        int[] lengths = new int[chunks.size()];</span>
+<span class="fc" id="L74">        Map&lt;String, Integer&gt; df = new HashMap&lt;&gt;();</span>
+<span class="fc" id="L75">        long total = 0;</span>
+<span class="fc bfc" id="L76" title="All 2 branches covered.">        for (int i = 0; i &lt; chunks.size(); i++) {</span>
+<span class="fc" id="L77">            List&lt;String&gt; terms = Terms.of(chunks.get(i).content());</span>
+<span class="fc" id="L78">            Map&lt;String, Integer&gt; tf = new HashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L79" title="All 2 branches covered.">            for (String term : terms) {</span>
+<span class="fc" id="L80">                tf.merge(term, 1, Integer::sum);</span>
+<span class="fc" id="L81">            }</span>
+<span class="fc" id="L82">            tf.keySet().forEach(term -&gt; df.merge(term, 1, Integer::sum));</span>
+<span class="fc" id="L83">            tfs.add(tf);</span>
+<span class="fc" id="L84">            lengths[i] = terms.size();</span>
+<span class="fc" id="L85">            total += terms.size();</span>
+        }
+<span class="fc bfc" id="L87" title="All 2 branches covered.">        double average = chunks.isEmpty() ? 0 : (double) total / chunks.size();</span>
+<span class="fc" id="L88">        return new KeywordIndex(List.copyOf(chunks), tfs, lengths, df, average);</span>
+    }
+
+    /**
+     * 索引里有几块。
+     *
+     * @return 块数
+     */
+    public int size() {
+<span class="fc" id="L97">        return chunks.size();</span>
+    }
+
+    /**
+     * BM25 检索。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;问题用 {@link Terms#of} 切词项后&lt;b&gt;去重&lt;/b&gt;（同一个词项问两遍不多算分）；一个词项都没有时返回空列表
+     *   &lt;li&gt;每块的分数 = 问题里每个词项按类注释里的 BM25 公式算分再相加（{@link #K1}、{@link #B}；词项在这块里没出现就是 0 分，
+     *       df 为 0 的词项跳过）
+     *   &lt;li&gt;覆盖率 = 这块里出现过的问题词项数 / 问题的词项数（都按去重后的算）
+     *   &lt;li&gt;只返回分数大于 0 的块，按分数从高到低排，分数相同时按块在索引里的顺序；最多 {@code topK} 块
+     *   &lt;li&gt;分数、覆盖率都保留 4 位小数（{@code Math.round(x * 10000) / 10000.0}）
+     * &lt;/ul&gt;
+     *
+     * @param query 问题
+     * @param topK 最多返回几块
+     * @return 命中的块，按 BM25 分数从高到低
+     */
+    public List&lt;KeywordHit&gt; search(String query, int topK) {
+        // TODO ch05-1：BM25 打分（规则见上面的 Javadoc 与类注释里的公式）
+<span class="fc" id="L120">        return List.of();</span>
+    }
+
+    private static double round(double value) {
+<span class="nc" id="L124">        return Math.round(value * 10_000) / 10_000.0;</span>
+    }
+
+    /**
+     * 关键词检索命中的一块。
+     *
+     * @param chunk 块
+     * @param score BM25 分数，没有固定上限，只能在同一个问题的结果之间比较
+     * @param coverage 问题的词项有多大比例出现在这块里，0～1
+     */
+<span class="nc" id="L134">    public record KeywordHit(RagChunk chunk, double score, double coverage) {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

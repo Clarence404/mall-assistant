@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RagChunk.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.rag</a> &gt; <span class="el_source">RagChunk.java</span></div><h1>RagChunk.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.rag;
+
+import io.github.clarence404.assistant.knowledge.ChunkMetadata;
+import io.github.clarence404.assistant.knowledge.KnowledgeHit;
+import java.util.Map;
+import org.springframework.ai.document.Document;
+
+/**
+ * RAG 里流转的一块知识：向量检索的结果（{@link KnowledgeHit}）和关键词检索的结果（库里的 {@link Document}）都先转成它，
+ * 才能按同一个键合并、去重（第 5 章引入）。
+ *
+ * &lt;p&gt;所在层：RAG 的数据。上游是 {@link RagRetriever}（两路检索结果）与 {@link KeywordIndex}（建索引）；下游是 {@link ContextPacker}
+ * （拼成编了号的引用来源）。
+ *
+ * @param key 块的唯一键：{@code 来源文件#块序号}。两路检索找到同一块时靠它认出来（向量检索的结果里没有块 ID，用来源 + 序号）
+ * @param content 块文字：标题路径 + 换行 + 正文（第 4 章入库时就是这样拼的）
+ * @param source 来源文件名，如 {@code returns.md}
+ * @param title 文档标题，如「退换货规则」
+ * @param headingPath 标题路径，如「退换货规则 &gt; 质量问题退换货 &gt; 申请时效」
+ * @param chunkIndex 块在文档里的序号，从 0 开始；同一节被切成几块时，序号相邻的块可以合并
+ */
+<span class="fc" id="L22">public record RagChunk(String key, String content, String source, String title, String headingPath, int chunkIndex) {</span>
+
+    /**
+     * 由向量检索的命中转换。
+     *
+     * @param hit 第 4 章 {@code KnowledgeSearchService} 的检索结果
+     * @return 块
+     */
+    public static RagChunk from(KnowledgeHit hit) {
+<span class="pc bpc" id="L31" title="1 of 2 branches missed.">        int index = hit.chunkIndex() == null ? 0 : hit.chunkIndex();</span>
+<span class="fc" id="L32">        return new RagChunk(</span>
+<span class="fc" id="L33">                key(hit.source(), index), hit.content(), hit.source(), hit.title(), hit.headingPath(), index);</span>
+    }
+
+    /**
+     * 由库里的块（{@code KnowledgeStore#chunks()}）转换。
+     *
+     * @param document 块
+     * @return 块
+     */
+    public static RagChunk from(Document document) {
+<span class="fc" id="L43">        Map&lt;String, Object&gt; metadata = document.getMetadata();</span>
+<span class="fc" id="L44">        String source = text(metadata, ChunkMetadata.SOURCE);</span>
+<span class="pc bpc" id="L45" title="1 of 2 branches missed.">        int index = metadata.get(ChunkMetadata.CHUNK_INDEX) instanceof Number n ? n.intValue() : 0;</span>
+<span class="fc" id="L46">        return new RagChunk(</span>
+<span class="fc" id="L47">                key(source, index),</span>
+<span class="pc bpc" id="L48" title="1 of 2 branches missed.">                document.getText() == null ? &quot;&quot; : document.getText(),</span>
+                source,
+<span class="fc" id="L50">                text(metadata, ChunkMetadata.TITLE),</span>
+<span class="fc" id="L51">                text(metadata, ChunkMetadata.HEADING_PATH),</span>
+                index);
+    }
+
+    /**
+     * 正文：块文字去掉第一行的标题路径。
+     *
+     * @return 正文；块文字没有换行时就是整段文字
+     */
+    public String body() {
+<span class="nc" id="L61">        int newline = content.indexOf('\n');</span>
+<span class="nc bnc" id="L62" title="All 2 branches missed.">        return newline &lt; 0 ? content : content.substring(newline + 1);</span>
+    }
+
+    /** 块的唯一键。 */
+    static String key(String source, int chunkIndex) {
+<span class="fc" id="L67">        return source + &quot;#&quot; + chunkIndex;</span>
+    }
+
+    private static String text(Map&lt;String, Object&gt; metadata, String key) {
+<span class="fc" id="L71">        Object value = metadata.get(key);</span>
+<span class="pc bpc" id="L72" title="1 of 2 branches missed.">        return value == null ? &quot;&quot; : value.toString();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

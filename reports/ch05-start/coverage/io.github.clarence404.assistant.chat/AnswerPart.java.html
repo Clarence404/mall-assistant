@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AnswerPart.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.chat</a> &gt; <span class="el_source">AnswerPart.java</span></div><h1>AnswerPart.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.chat;
+
+import io.github.clarence404.assistant.rag.RagSource;
+import io.github.clarence404.assistant.tool.ToolInvocation;
+
+/**
+ * 流式回答里的一个片段：一段文字、一次工具调用的记录，或一条 RAG 引用来源。
+ *
+ * &lt;p&gt;所在层：业务层与接口层之间的数据（第 3 章引入，第 5 章加 {@link Source}）。{@link ChatService#answerStream} 产出它，
+ * {@link ChatController#stream} 把 {@link Text} 写成 {@code token} 事件、把 {@link ToolUse} 写成 {@code tool} 事件、
+ * 把 {@link Source} 写成 {@code source} 事件。
+ *
+ * &lt;p&gt;{@code sealed} 表示只有这几种实现，{@code switch} 时编译器能检查有没有漏掉。
+ */
+public sealed interface AnswerPart {
+
+    /**
+     * 一段增量文字。
+     *
+     * @param text 模型新生成的文字（或拒答话术、RAG 的固定话术）
+     */
+<span class="fc" id="L22">    record Text(String text) implements AnswerPart {}</span>
+
+    /**
+     * 一次工具调用。
+     *
+     * @param invocation 调用记录
+     */
+<span class="fc" id="L29">    record ToolUse(ToolInvocation invocation) implements AnswerPart {}</span>
+
+    /**
+     * 一条 RAG 引用来源（第 5 章）：在模型的第一段文字之前推出，页面先拿到 [1][2]… 对应的资料，文字里出现编号时就能对上。
+     *
+     * @param source 引用来源
+     */
+<span class="nc" id="L36">    record Source(RagSource source) implements AnswerPart {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

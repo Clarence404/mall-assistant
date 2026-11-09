@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ContextPacker.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.rag</a> &gt; <span class="el_source">ContextPacker.java</span></div><h1>ContextPacker.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.rag;
+
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+
+/**
+ * 把选中的候选块整理成交给模型的「编了号的资料」：去重、合并同一节的相邻块、按上下文预算截断、编号（第 5 章引入）。
+ *
+ * &lt;p&gt;所在层：RAG 的「增强」一步。上游是 {@link RagRetriever}（按门槛选好的候选，已按相关性排好）；下游是 {@link RagService}（拼进提示词）
+ * 和前端（引用来源）。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么要合并相邻块&lt;/b&gt;：第 4 章切块时，超过 300 字的一节会被切成几块、相邻两块重叠 50 字。两块都被检索到时，原样放进去就有
+ * 50 字重复、还占两个编号；合成一条，模型读到的是完整的一节，引用也只有一个编号。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么要上下文预算&lt;/b&gt;：模型的上下文窗口（一次能读多少 token）有上限，而且资料越长，调用越慢、越贵，小模型还越容易被无关内容带偏
+ * （「迷失在中间」：长上下文中间的内容最容易被忽略）。所以给资料定一个总字数，按相关性从高到低放，放不下的就不放。
+ */
+public final class ContextPacker {
+
+    /** 合并相邻块时，至少重叠这么多个字才认为是切块时留的重叠，否则直接拼接。 */
+    static final int MIN_OVERLAP = 5;
+
+    private ContextPacker() {}
+
+    /**
+     * 整理成引用来源。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;&lt;b&gt;去重&lt;/b&gt;：同一个键（{@link RagChunk#key()}）只保留第一次出现的
+     *   &lt;li&gt;&lt;b&gt;合并&lt;/b&gt;：和已经保留的某条来源&lt;b&gt;同一个文件、同一个标题路径&lt;/b&gt;、块序号紧挨着（比已有的最小序号小 1 或比最大序号大 1）的块，
+     *       并进那一条，不单独占编号；合并后按块序号排列正文，相邻两块的重叠部分只保留一份（{@link #join}）。合并后的分数取各块的最大值
+     *       （没有的为 null），{@code foundBy} 取并集（vector 在前）
+     *   &lt;li&gt;&lt;b&gt;预算&lt;/b&gt;：按顺序累加每条来源的 {@code content} 长度，加上这条会超过 {@code budgetChars} 就停止，后面的都不要；
+     *       但第一条无论多长都保留，超长时截成前 {@code budgetChars} 个字再加「…」
+     *   &lt;li&gt;&lt;b&gt;编号&lt;/b&gt;：按最终顺序从 1 开始
+     *   &lt;li&gt;&lt;b&gt;片段&lt;/b&gt;：正文（不含标题路径）的前 {@code snippetChars} 个字，截断了就加「…」
+     *   &lt;li&gt;分数原样带过去，fusedScore 保留 4 位小数
+     * &lt;/ul&gt;
+     *
+     * @param selected 选中的候选，已按相关性从高到低排好
+     * @param budgetChars 资料总字数上限
+     * @param snippetChars 片段长度
+     * @return 编了号的引用来源；selected 为空时是空列表
+     */
+    public static List&lt;RagSource&gt; pack(List&lt;RagCandidate&gt; selected, int budgetChars, int snippetChars) {
+        // TODO ch05-4：去重 → 合并同一节的相邻块（重叠只留一份，可以用 join）→ 上下文预算 → 编号与片段（规则见上面的 Javadoc）
+<span class="fc" id="L51">        return List.of();</span>
+    }
+
+    /** 候选块和这一组是不是同一节里紧挨着的块。 */
+    private static boolean adjacent(List&lt;RagCandidate&gt; group, RagChunk chunk) {
+<span class="nc" id="L56">        RagChunk first = group.getFirst().chunk();</span>
+<span class="nc bnc" id="L57" title="All 4 branches missed.">        if (!first.source().equals(chunk.source()) || !first.headingPath().equals(chunk.headingPath())) {</span>
+<span class="nc" id="L58">            return false;</span>
+        }
+<span class="nc" id="L60">        int min = group.stream().mapToInt(c -&gt; c.chunk().chunkIndex()).min().orElseThrow();</span>
+<span class="nc" id="L61">        int max = group.stream().mapToInt(c -&gt; c.chunk().chunkIndex()).max().orElseThrow();</span>
+<span class="nc bnc" id="L62" title="All 4 branches missed.">        return chunk.chunkIndex() == min - 1 || chunk.chunkIndex() == max + 1;</span>
+    }
+
+    /**
+     * 拼接相邻两块的正文：前一块的结尾和后一块的开头重叠（切块时故意留的）的部分只保留一份。
+     *
+     * @param before 前一块的正文
+     * @param after 后一块的正文
+     * @return 拼好的正文；找不到至少 {@link #MIN_OVERLAP} 个字的重叠时，中间加一个换行直接拼
+     */
+    static String join(String before, String after) {
+<span class="fc bfc" id="L73" title="All 2 branches covered.">        for (int len = Math.min(before.length(), after.length()); len &gt;= MIN_OVERLAP; len--) {</span>
+<span class="fc bfc" id="L74" title="All 2 branches covered.">            if (before.endsWith(after.substring(0, len))) {</span>
+<span class="fc" id="L75">                return before + after.substring(len);</span>
+            }
+        }
+<span class="fc" id="L78">        return before + &quot;\n&quot; + after;</span>
+    }
+
+    private static Double max(List&lt;Double&gt; values) {
+<span class="nc" id="L82">        return values.stream().filter(Objects::nonNull).max(Double::compare).orElse(null);</span>
+    }
+
+    private static List&lt;String&gt; foundBy(List&lt;RagCandidate&gt; group) {
+<span class="nc" id="L86">        Set&lt;String&gt; by = new LinkedHashSet&lt;&gt;();</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">        for (String name : List.of(RagRetriever.VECTOR, RagRetriever.KEYWORD)) {</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">            if (group.stream().anyMatch(c -&gt; c.foundBy().contains(name))) {</span>
+<span class="nc" id="L89">                by.add(name);</span>
+            }
+<span class="nc" id="L91">        }</span>
+<span class="nc" id="L92">        return List.copyOf(by);</span>
+    }
+
+    private static String snippet(String body, int chars) {
+<span class="nc" id="L96">        String flat = body.replace('\n', ' ').strip();</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">        return flat.length() &lt;= chars ? flat : flat.substring(0, chars) + &quot;…&quot;;</span>
+    }
+
+    private static double round(double value) {
+<span class="nc" id="L101">        return Math.round(value * 10_000) / 10_000.0;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
