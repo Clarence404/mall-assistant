@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>KnowledgeConfig.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">KnowledgeConfig.java</span></div><h1>KnowledgeConfig.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.nio.file.Path;
+import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/**
+ * 知识库的公共装配：向量模型信息、文档读取器，以及默认的内存向量库（第 4 章引入）。pgvector 的装配见 {@link PgVectorConfig}。
+ *
+ * &lt;p&gt;所在层：知识库的配置。下游是 Spring AI 自动配置的 {@link EmbeddingModel}：哪家的模型由各 profile 的
+ * {@code spring.ai.model.embedding} 决定（ollama / openai），命令行模型的 profile 也用 Ollama 的向量模型。
+ */
+@Configuration(proxyBeanMethods = false)
+<span class="fc" id="L17">public class KnowledgeConfig {</span>
+
+    /**
+     * 当前向量模型。用 {@link ObjectProvider} 取：{@code spring.ai.model.embedding=none} 时容器里没有 EmbeddingModel，
+     * 应用照常启动，知识库接口返回 503。
+     *
+     * @param embeddingModels 容器里的向量模型（可能没有）
+     * @param properties 知识库配置
+     * @return 向量模型信息
+     */
+    @Bean
+    public KnowledgeEmbedding knowledgeEmbedding(
+            ObjectProvider&lt;EmbeddingModel&gt; embeddingModels, KnowledgeProperties properties) {
+<span class="fc" id="L30">        return new KnowledgeEmbedding(embeddingModels.getIfUnique(), properties);</span>
+    }
+
+    /**
+     * 知识文档读取器。
+     *
+     * @param properties 知识库配置（{@code location}）
+     * @return 读取器
+     */
+    @Bean
+    public MarkdownKnowledgeReader markdownKnowledgeReader(KnowledgeProperties properties) {
+<span class="fc" id="L41">        return new MarkdownKnowledgeReader(properties.location());</span>
+    }
+
+    /**
+     * 默认的内存向量库（{@code assistant.knowledge.store} 不写或写 memory 时）。JSON 文件名带模型后缀，换模型各用各的文件。
+     *
+     * @param embedding 当前向量模型
+     * @param properties 知识库配置（{@code memory.dir}）
+     * @return 内存向量库
+     */
+    @Bean
+    @ConditionalOnProperty(name = &quot;assistant.knowledge.store&quot;, havingValue = &quot;memory&quot;, matchIfMissing = true)
+    public MemoryKnowledgeStore memoryKnowledgeStore(KnowledgeEmbedding embedding, KnowledgeProperties properties) {
+<span class="fc" id="L54">        String dir = properties.memory().dir();</span>
+<span class="pc bpc" id="L55" title="1 of 4 branches missed.">        Path file = dir == null || dir.isBlank()</span>
+<span class="fc" id="L56">                ? null</span>
+<span class="fc" id="L57">                : Path.of(dir).resolve(PgVectorConfig.TABLE_PREFIX + embedding.storeSuffix() + &quot;.json&quot;);</span>
+<span class="fc" id="L58">        return new MemoryKnowledgeStore(embedding, file);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

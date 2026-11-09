@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ToolInvocation.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.tool</a> &gt; <span class="el_source">ToolInvocation.java</span></div><h1>ToolInvocation.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.tool;
+
+/**
+ * 一次工具调用的记录：调了哪个工具、参数、结果、耗时、是谁决定调的。给页面的调试面板看，也给测试断言。
+ *
+ * &lt;p&gt;所在层：工具（第 3 章引入）。由 {@link ToolCallRecorder} 生成；阻塞接口放在响应的 {@code tools} 字段，流式接口作为
+ * {@code tool} 事件推送。里面&lt;b&gt;没有&lt;/b&gt;令牌：令牌在 ToolContext 里，不是工具参数。
+ *
+ * @param name 工具名，如 queryOrderStatus
+ * @param source 谁决定调用的：模型自己（原生工具调用），还是代码按意图直接查询
+ * @param arguments 参数，JSON 字符串，如 {@code {&quot;orderNo&quot;:&quot;2118...&quot;}}；模型调用时就是模型生成的原样参数
+ * @param result 工具返回给模型的 JSON（工具结果消息的内容）；执行抛异常时为异常说明
+ * @param durationMs 执行耗时，毫秒（主要是调商城接口的时间）
+ */
+<span class="fc" id="L15">public record ToolInvocation(String name, Source source, String arguments, String result, long durationMs) {</span>
+
+    /** 谁决定调用这个工具。 */
+<span class="fc" id="L18">    public enum Source {</span>
+        /** 模型在回答过程中自己决定调用（原生工具调用）。 */
+<span class="fc" id="L20">        MODEL,</span>
+        /** 代码按意图识别的结果直接调用，再把结果放进提示词（「按意图直接查询」）。 */
+<span class="fc" id="L22">        DIRECT</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

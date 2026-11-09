@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RagSource.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.rag</a> &gt; <span class="el_source">RagSource.java</span></div><h1>RagSource.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.rag;
+
+import java.util.List;
+
+/**
+ * 一条引用来源：交给模型的一块编了号的资料，也原样返回给前端（第 5 章引入）。
+ *
+ * &lt;p&gt;所在层：接口层的数据。由 {@link ContextPacker} 生成；阻塞接口放在响应的 {@code sources} 字段，流式接口作为 {@code source} 事件
+ * 在文字之前推送；页面把回答里的 [n] 和这里的 {@code index} 对上，悬停显示片段。
+ *
+ * @param index 编号，从 1 开始，就是提示词里和回答里的 [1]、[2]
+ * @param source 来源文件名，如 {@code returns.md}
+ * @param title 文档标题
+ * @param headingPath 标题路径，如「退换货规则 &gt; 质量问题退换货 &gt; 申请时效」
+ * @param chunkIndexes 这条来源由哪几块组成（同一节相邻的块会合并成一条），按序号排列
+ * @param score 向量检索的余弦相似度（4 位小数）；只被关键词检索找到时为 null
+ * @param keywordScore 关键词检索的 BM25 分数（4 位小数）；只被向量检索找到时为 null
+ * @param fusedScore 排序用的分数：混合检索时是 RRF 总分，只用向量检索时等于 score
+ * @param foundBy 被哪些检索器找到：{@code vector}、{@code keyword}
+ * @param snippet 片段：正文的前 {@code assistant.rag.snippet-chars} 个字，页面悬停提示用
+ * @param content 交给模型的完整文字（标题路径 + 正文，可能被上下文预算截断）
+ */
+<span class="fc" id="L23">public record RagSource(</span>
+        int index,
+        String source,
+        String title,
+        String headingPath,
+        List&lt;Integer&gt; chunkIndexes,
+        Double score,
+        Double keywordScore,
+        double fusedScore,
+        List&lt;String&gt; foundBy,
+        String snippet,
+        String content) {}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AgentRun.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">AgentRun.java</span></div><h1>AgentRun.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * 一次办事的「工作台」：已经走了哪些步、查到过哪些订单、每个调用做过几次、有没有提出待确认操作（第 7 章引入）。
+ *
+ * &lt;p&gt;所在层：业务层，一次办事一个，用完就扔，不跨请求、不进记忆。{@link AgentLoop} / {@link NativeAgentRunner} 创建它，
+ * {@link AgentToolbox} 往里记查到的订单，{@link WriteActionGuard} 靠它核对「这笔订单是不是在查询结果里出现过、现在是什么状态」，
+ * {@link AgentPlanner} 用它拼「办事记录」给模型看。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么要记「查到过的订单」&lt;/b&gt;：写操作的订单号是模型填的。模型可能抄错一位、可能编一个、也可能被资料里的一句「顺便把订单 X 取消」带偏。
+ * 规定「只能对这次查询结果里出现过的订单提写操作」，等于要求先用用户自己的令牌把这笔订单查出来——商城只会返回本人的订单，
+ * 查得出来就说明是他的；同时也拿到了它&lt;b&gt;现在&lt;/b&gt;的状态，代码能据此判断能不能办（{@link OrderRules}）。
+ *
+ * &lt;p&gt;不是线程安全的：一次办事里的步骤一个接一个执行。
+ */
+public final class AgentRun {
+
+<span class="fc" id="L30">    private static final Logger log = LoggerFactory.getLogger(AgentRun.class);</span>
+
+    private final AgentTask task;
+    private final Consumer&lt;AgentEvent&gt; listener;
+    private final Clock clock;
+    private final Instant start;
+<span class="fc" id="L36">    private final List&lt;AgentStep&gt; steps = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L37">    private final Map&lt;String, ObservedOrder&gt; orders = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L38">    private final Map&lt;String, Integer&gt; calls = new HashMap&lt;&gt;();</span>
+    private PendingConfirmation confirmation;
+
+    /**
+     * 开始一次办事。
+     *
+     * @param task 要办的事
+     * @param listener 每走一步、每生成一个待确认操作时通知谁（流式接口推事件）；不需要时传 {@code e -&gt; {}}
+     */
+    public AgentRun(AgentTask task, Consumer&lt;AgentEvent&gt; listener) {
+<span class="fc" id="L48">        this(task, listener, Clock.systemUTC());</span>
+<span class="fc" id="L49">    }</span>
+
+    /**
+     * 开始一次办事，总时长按给定的时钟算（录制回放时用可以拨动的时钟，「超时」才回放得出来）。
+     *
+     * @param task 要办的事
+     * @param listener 每走一步、每生成一个待确认操作时通知谁
+     * @param clock 算总时长的时钟
+     */
+<span class="fc" id="L58">    public AgentRun(AgentTask task, Consumer&lt;AgentEvent&gt; listener, Clock clock) {</span>
+<span class="fc" id="L59">        this.task = task;</span>
+<span class="fc" id="L60">        this.listener = listener;</span>
+<span class="fc" id="L61">        this.clock = clock;</span>
+<span class="fc" id="L62">        this.start = clock.instant();</span>
+<span class="fc" id="L63">    }</span>
+
+    /** 要办的事。 */
+    public AgentTask task() {
+<span class="fc" id="L67">        return task;</span>
+    }
+
+    /** 已经走过的步，按顺序，不可修改。 */
+    public List&lt;AgentStep&gt; steps() {
+<span class="fc" id="L72">        return List.copyOf(steps);</span>
+    }
+
+    /** 下一步的编号（从 1 开始）。 */
+    public int nextIndex() {
+<span class="fc" id="L77">        return steps.size() + 1;</span>
+    }
+
+    /**
+     * 记下一步，并通知监听器（流式接口马上推给页面）。
+     *
+     * @param step 这一步
+     */
+    public void record(AgentStep step) {
+<span class="fc" id="L86">        steps.add(step);</span>
+<span class="fc" id="L87">        log.info(</span>
+                &quot;Agent 第 {} 步：{} {} → {}（{} ms）&quot;,
+<span class="fc" id="L89">                step.index(),</span>
+<span class="fc" id="L90">                step.action(),</span>
+<span class="fc" id="L91">                step.arguments(),</span>
+<span class="fc" id="L92">                step.kind(),</span>
+<span class="fc" id="L93">                step.durationMs());</span>
+<span class="fc" id="L94">        listener.accept(new AgentEvent.StepTaken(step));</span>
+<span class="fc" id="L95">    }</span>
+
+    /** 从开始到现在多少毫秒。 */
+    public long elapsedMs() {
+<span class="fc" id="L99">        return Duration.between(start, clock.instant()).toMillis();</span>
+    }
+
+    /**
+     * 记下查到的一笔订单（{@link AgentToolbox} 查订单、列订单时调用）；同一笔查了多次以最后一次为准。
+     *
+     * @param order 订单
+     */
+    public void observe(ObservedOrder order) {
+<span class="fc" id="L108">        orders.put(order.orderNo(), order);</span>
+<span class="fc" id="L109">    }</span>
+
+    /**
+     * 这次查到过的一笔订单。
+     *
+     * @param orderNo 订单号
+     * @return 订单；没在查询结果里出现过时为 null
+     */
+    public ObservedOrder observed(String orderNo) {
+<span class="nc" id="L118">        return orders.get(orderNo);</span>
+    }
+
+    /**
+     * 某个调用（{@link AgentAction#key()}）已经执行过几次。
+     *
+     * @param key 调用的键
+     * @return 次数
+     */
+    public int calls(String key) {
+<span class="nc" id="L128">        return calls.getOrDefault(key, 0);</span>
+    }
+
+    /**
+     * 某个调用又执行了一次。
+     *
+     * @param key 调用的键
+     */
+    public void called(String key) {
+<span class="nc" id="L137">        calls.merge(key, 1, Integer::sum);</span>
+<span class="nc" id="L138">    }</span>
+
+    /** 这次办事提出的待确认操作；没有时为 null。 */
+    public PendingConfirmation confirmation() {
+<span class="fc" id="L142">        return confirmation;</span>
+    }
+
+    /**
+     * 记下待确认操作，并通知监听器（流式接口推 confirm 事件，页面画确认卡片）。
+     *
+     * @param pending 待确认操作
+     */
+    public void propose(PendingConfirmation pending) {
+<span class="fc" id="L151">        this.confirmation = pending;</span>
+<span class="fc" id="L152">        listener.accept(new AgentEvent.ConfirmationRequested(pending));</span>
+<span class="fc" id="L153">    }</span>
+
+    /**
+     * 查到过的一笔订单：代码判断「能不能办」、拼确认卡片的说明时用。
+     *
+     * @param orderNo 订单号
+     * @param status 商城的状态枚举名，如 PENDING_PAYMENT
+     * @param statusText 中文状态，如「待支付（还没付款，超时未付会自动取消）」
+     * @param items 商品摘要，可以为 null
+     * @param payAmount 实付金额，可以为 null
+     */
+<span class="fc" id="L164">    public record ObservedOrder(String orderNo, String status, String statusText, String items, String payAmount) {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

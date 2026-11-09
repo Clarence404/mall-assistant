@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>JdbcAfterSalesStore.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.aftersales</a> &gt; <span class="el_source">JdbcAfterSalesStore.java</span></div><h1>JdbcAfterSalesStore.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.aftersales;
+
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.List;
+import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+/**
+ * 售后申请单存进 PostgreSQL 的 {@code after_sales_application} 表（{@code assistant.after-sales.store=jdbc}，第 7 章引入）。
+ *
+ * &lt;p&gt;所在层：售后申请的存储。由 {@link AfterSalesConfig} 创建。和第 6 章 {@code LazyJdbcChatMemoryRepository} 同一个套路：连接池启动时不连数据库，
+ * 第一次读写时才建表（{@code CREATE TABLE IF NOT EXISTS}）——数据库没启动也不影响应用启动，只是到了提交售后申请那一步执行失败（结果里写明）。
+ *
+ * &lt;p&gt;表结构：
+ *
+ * &lt;pre&gt;
+ * after_sales_application(
+ *   id              VARCHAR(40) PRIMARY KEY,   -- 申请单号
+ *   owner_key       VARCHAR(64) NOT NULL,      -- 谁的（user:10001）
+ *   order_no        VARCHAR(32) NOT NULL,
+ *   type            VARCHAR(20) NOT NULL,      -- REFUND_ONLY / RETURN_REFUND
+ *   reason          VARCHAR(400) NOT NULL,
+ *   status          VARCHAR(20) NOT NULL,      -- PENDING_REVIEW
+ *   confirmation_id VARCHAR(36) NOT NULL UNIQUE,  -- 同一个确认只能生成一张：幂等的最后一道防线
+ *   created_at      TIMESTAMPTZ NOT NULL)
+ * &lt;/pre&gt;
+ *
+ * 用的是 Spring 的 {@link JdbcTemplate}（普通 SQL），不引入 JPA：一张表、三条 SQL，够用也看得清。
+ */
+public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable {
+
+<span class="fc" id="L38">    private static final Logger log = LoggerFactory.getLogger(JdbcAfterSalesStore.class);</span>
+
+    /** 建表与索引：都是 IF NOT EXISTS，重复执行无害。 */
+<span class="fc" id="L41">    static final List&lt;String&gt; SCHEMA = List.of(</span>
+            &quot;&quot;&quot;
+            CREATE TABLE IF NOT EXISTS after_sales_application (
+                id VARCHAR(40) PRIMARY KEY,
+                owner_key VARCHAR(64) NOT NULL,
+                order_no VARCHAR(32) NOT NULL,
+                type VARCHAR(20) NOT NULL,
+                reason VARCHAR(400) NOT NULL,
+                status VARCHAR(20) NOT NULL,
+                confirmation_id VARCHAR(36) NOT NULL UNIQUE,
+                created_at TIMESTAMPTZ NOT NULL
+            )&quot;&quot;&quot;, &quot;CREATE INDEX IF NOT EXISTS idx_after_sales_owner ON after_sales_application (owner_key, created_at)&quot;);
+
+    private static final String COLUMNS = &quot;id, owner_key, order_no, type, reason, status, confirmation_id, created_at&quot;;
+
+    private final HikariDataSource dataSource;
+    private final boolean initializeSchema;
+    private volatile JdbcTemplate jdbc;
+
+    /**
+     * 创建：只建连接池（不连数据库）。
+     *
+     * @param properties 连接配置
+     */
+<span class="fc" id="L65">    public JdbcAfterSalesStore(AfterSalesProperties.Jdbc properties) {</span>
+<span class="fc" id="L66">        HikariConfig config = new HikariConfig();</span>
+<span class="fc" id="L67">        config.setPoolName(&quot;after-sales-jdbc&quot;);</span>
+<span class="fc" id="L68">        config.setJdbcUrl(properties.url());</span>
+<span class="fc" id="L69">        config.setUsername(properties.username());</span>
+<span class="fc" id="L70">        config.setPassword(properties.password());</span>
+<span class="fc" id="L71">        config.setMaximumPoolSize(properties.maxPoolSize());</span>
+<span class="fc" id="L72">        config.setMinimumIdle(0);</span>
+<span class="fc" id="L73">        config.setConnectionTimeout(3_000);</span>
+        // -1：启动时不试连接，数据库没开也能起来（同第 6 章）
+<span class="fc" id="L75">        config.setInitializationFailTimeout(-1);</span>
+<span class="fc" id="L76">        this.dataSource = new HikariDataSource(config);</span>
+<span class="fc" id="L77">        this.initializeSchema = properties.initializeSchema();</span>
+<span class="fc" id="L78">    }</span>
+
+    /**
+     * 第一次用到时（按配置）建表，再创建 {@link JdbcTemplate}（ch07-7）。
+     *
+     * &lt;p&gt;要求（测试按这个写）：双重检查（{@code volatile} 字段 + {@code synchronized}），并发的第一次只初始化一次；{@code initialize-schema=true}
+     * 时逐条执行 {@link #SCHEMA}；任何一步失败都直接抛出、不缓存失败，下次再试。
+     *
+     * @return 可以用的 JdbcTemplate
+     */
+    JdbcTemplate jdbc() {
+        // TODO ch07-7：双重检查（volatile 字段 + synchronized）；initialize-schema 时逐条执行 SCHEMA；创建 JdbcTemplate 并缓存；失败直接抛、不缓存
+<span class="nc" id="L90">        throw new UnsupportedOperationException(&quot;TODO ch07-7&quot;);</span>
+    }
+
+    /**
+     * 存一张申请单（ch07-7）。
+     *
+     * &lt;p&gt;要求：{@code INSERT ... ON CONFLICT (confirmation_id) DO NOTHING}（PostgreSQL 的「有就跳过」，并发的两次插入也只有一次生效），
+     * 然后按 confirmation_id 查回来返回（可能是之前那张）。时间存成 {@link Timestamp}。
+     */
+    @Override
+    public AfterSalesApplication create(AfterSalesApplication a) {
+        // TODO ch07-7：INSERT ... ON CONFLICT (confirmation_id) DO NOTHING，再按 confirmation_id 查回来（可能是之前那张）
+<span class="fc" id="L102">        throw new UnsupportedOperationException(&quot;TODO ch07-7&quot;);</span>
+    }
+
+    /**
+     * 某个用户的全部申请单（ch07-7）：按 created_at 从新到旧。
+     */
+    @Override
+    public List&lt;AfterSalesApplication&gt; findByOwner(String ownerKey) {
+<span class="nc" id="L110">        return jdbc().query(</span>
+                        &quot;SELECT &quot; + COLUMNS
+                                + &quot; FROM after_sales_application WHERE owner_key = ? ORDER BY created_at DESC&quot;,
+                        JdbcAfterSalesStore::map,
+                        ownerKey);
+    }
+
+    @Override
+    public Optional&lt;AfterSalesApplication&gt; findOpen(String ownerKey, String orderNo) {
+<span class="nc" id="L119">        return jdbc()</span>
+<span class="nc" id="L120">                .query(</span>
+                        &quot;SELECT &quot; + COLUMNS + &quot; FROM after_sales_application WHERE owner_key = ? AND order_no = ?&quot;
+                                + &quot; AND status = ? ORDER BY created_at DESC&quot;,
+                        JdbcAfterSalesStore::map,
+                        ownerKey,
+                        orderNo,
+<span class="nc" id="L126">                        AfterSalesApplication.Status.PENDING_REVIEW.name())</span>
+<span class="nc" id="L127">                .stream()</span>
+<span class="nc" id="L128">                .findFirst();</span>
+    }
+
+    @Override
+    public String type() {
+<span class="nc" id="L133">        return &quot;jdbc&quot;;</span>
+    }
+
+    /** 一行 → 申请单。 */
+    private static AfterSalesApplication map(ResultSet rs, int row) throws SQLException {
+<span class="nc" id="L138">        return new AfterSalesApplication(</span>
+<span class="nc" id="L139">                rs.getString(&quot;id&quot;),</span>
+<span class="nc" id="L140">                rs.getString(&quot;owner_key&quot;),</span>
+<span class="nc" id="L141">                rs.getString(&quot;order_no&quot;),</span>
+<span class="nc" id="L142">                AfterSalesApplication.Type.valueOf(rs.getString(&quot;type&quot;)),</span>
+<span class="nc" id="L143">                rs.getString(&quot;reason&quot;),</span>
+<span class="nc" id="L144">                AfterSalesApplication.Status.valueOf(rs.getString(&quot;status&quot;)),</span>
+<span class="nc" id="L145">                rs.getString(&quot;confirmation_id&quot;),</span>
+<span class="nc" id="L146">                rs.getTimestamp(&quot;created_at&quot;).toInstant());</span>
+    }
+
+    /** 应用关闭时关掉连接池。 */
+    @Override
+    public void close() {
+<span class="nc" id="L152">        dataSource.close();</span>
+<span class="nc" id="L153">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

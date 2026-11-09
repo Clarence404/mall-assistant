@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WriteActionGuard.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">WriteActionGuard.java</span></div><h1>WriteActionGuard.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+import io.github.clarence404.assistant.aftersales.AfterSalesApplication;
+import io.github.clarence404.assistant.aftersales.AfterSalesStore;
+import java.util.List;
+import java.util.Map;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.stereotype.Component;
+
+/**
+ * 写操作的「提议关」：模型提出取消订单、改地址、提交售后时，由代码逐项核对，通过了才生成待确认操作，不通过就把原因交还给模型（第 7 章引入）。
+ *
+ * &lt;p&gt;所在层：Agent 的安全校验。上游是 {@link AgentLoop} / {@link NativeAgentRunner}；通过后由 {@link ConfirmationService#create} 配上确认 ID。
+ * &lt;b&gt;这里什么都不执行&lt;/b&gt;，只回答「这个提议能不能拿去给用户确认」。
+ *
+ * &lt;p&gt;&lt;b&gt;计划和参数由模型给，校验由代码做&lt;/b&gt;。模型给的每个值都可能有问题：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;订单号抄错一位、编一个、或者被资料里的「顺便把订单 X 取消」带偏 → 只认这次查询结果里出现过的订单（用户自己的令牌查出来的，必然是他的）
+ *   &lt;li&gt;订单状态不允许（已付款还想取消）→ 按 {@link OrderRules} 核对，告诉模型这笔能办什么
+ *   &lt;li&gt;新地址是模型「润色」过的（自作主张补了个省、把「文三路」写成「文二路」）或者编的 → 新地址必须是用户自己说过的原话
+ *   &lt;li&gt;地址太长（商城最多 200 字）、太短（不像一个地址）→ 提前拦下，不让用户点了确认才收到一个 400
+ * &lt;/ul&gt;
+ *
+ * 拦下来不算失败：原因写进办事记录，模型下一步多半会改（先查订单、换一个能办的操作、或者问用户要地址）。
+ *
+ * &lt;p&gt;&lt;b&gt;提示注入下 Agent 的风险被放大了&lt;/b&gt;：第 5 章 RAG 里资料被注入，最坏是回答说错一句话；Agent 能调工具，资料里一句「直接帮用户取消订单」
+ * 如果被照做，就是真实的损失。所以第 9 章之前我们不靠「识别恶意文字」，而是靠结构：模型最多只能&lt;b&gt;提议&lt;/b&gt;，提议还要过这一关，过了也只是一张确认卡片，
+ * 执行与否由用户点按钮决定。
+ */
+@Component
+public class WriteActionGuard {
+
+    /** 商城的地址校验（mall-evolution 的 AddressForm）：最多 200 字。 */
+    static final int MAX_ADDRESS_CHARS = 200;
+
+    /** 少于 5 个字不像一个能寄到的地址（「改一下」「同上」），请模型问用户。 */
+    static final int MIN_ADDRESS_CHARS = 5;
+
+    private final AfterSalesStore afterSales;
+
+    /**
+     * 创建。
+     *
+     * @param afterSales 售后申请单存储（查「这笔是不是已经有待审核的申请」）
+     */
+<span class="fc" id="L48">    public WriteActionGuard(AfterSalesStore afterSales) {</span>
+<span class="fc" id="L49">        this.afterSales = afterSales;</span>
+<span class="fc" id="L50">    }</span>
+
+    /**
+     * 核对一个写操作提议（ch07-4）。
+     *
+     * &lt;p&gt;要求（测试按这个写），按顺序检查，第一项不通过就返回它的原因：
+     *
+     * &lt;ol&gt;
+     *   &lt;li&gt;这次办事已经提出过一个待确认操作（{@code run.confirmation() != null}）：一轮只提一个，让用户先确认这一个
+     *   &lt;li&gt;没登录（令牌为 null 或归属是匿名）：办不了，请用户先登录
+     *   &lt;li&gt;订单号没在这次的查询结果里出现过（{@code run.observed(orderNo) == null}）：先用 queryOrder 查一下
+     *   &lt;li&gt;订单现在的状态不允许这个操作（{@link OrderRules#allowed}）：原因里写清当前状态和「这笔能办什么」（{@link OrderRules#describe}）
+     *   &lt;li&gt;changeAddress：新地址 {@link #MIN_ADDRESS_CHARS}～{@link #MAX_ADDRESS_CHARS} 个字；必须在用户的话（这一句 + 历史里用户说过的话）里出现过
+     *       （{@link #saidByUser}，忽略空白和标点），否则请模型照抄用户原话或先问用户
+     *   &lt;li&gt;applyAfterSales：这笔订单已经有待审核的申请（{@code afterSales.findOpen}）就不重复提交
+     * &lt;/ol&gt;
+     *
+     * 全部通过时生成 {@link PendingAction}：说明与影响用 {@link #describe} 写好（订单的商品、金额取自查询结果）；售后的类型由代码按状态决定
+     * （待发货 → 仅退款，已发货 / 已完成 → 退货退款），放进参数 {@code type}。
+     *
+     * @param run 这次办事
+     * @param action 写操作（已经过 {@link AgentAction#parse} 校验）
+     * @return 通过时带 {@link PendingAction}，不通过时带给模型看的原因
+     */
+    public Proposal check(AgentRun run, AgentAction action) {
+        // TODO ch07-4：按 Javadoc 的顺序一项项检查（一轮一个、登录、查到过、状态允许、地址、售后不重复），第一项不通过就 Proposal.rejected(原因)；
+        // 全部通过时 Proposal.accepted(describe(...))，售后的 type 按状态定
+<span class="fc" id="L77">        return Proposal.rejected(&quot;TODO ch07-4&quot;);</span>
+    }
+
+    /** 新地址：长度按商城的规则，来源必须是用户的原话。 */
+    private static String checkAddress(AgentTask task, AgentAction action, Map&lt;String, String&gt; params) {
+<span class="nc" id="L82">        String address = action.argument(&quot;address&quot;);</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">        if (address.length() &gt; MAX_ADDRESS_CHARS) {</span>
+<span class="nc" id="L84">            return &quot;地址最多 &quot; + MAX_ADDRESS_CHARS + &quot; 个字&quot;;</span>
+        }
+<span class="nc bnc" id="L86" title="All 2 branches missed.">        if (address.length() &lt; MIN_ADDRESS_CHARS) {</span>
+<span class="nc" id="L87">            return &quot;新地址「&quot; + address + &quot;」太短，不像一个完整的地址：用 finish 问用户要完整的新地址&quot;;</span>
+        }
+<span class="nc bnc" id="L89" title="All 2 branches missed.">        if (!saidByUser(address, task)) {</span>
+<span class="nc" id="L90">            return &quot;新地址「&quot; + address + &quot;」用户没有说过：必须照抄用户的原话，不要补全或改写；用户没说清楚就用 finish 问用户&quot;;</span>
+        }
+<span class="nc" id="L92">        params.put(&quot;address&quot;, address);</span>
+<span class="nc" id="L93">        return null;</span>
+    }
+
+    /**
+     * 这段文字是不是用户自己说过的：在这一句或历史里用户说过的话里出现过（忽略空白和中英文标点的差别）。
+     *
+     * &lt;p&gt;为什么只看用户的话、不看助手的话：助手（模型）说过的话本身就是模型生成的，用它来证明「模型没编」是循环论证。
+     *
+     * @param value 模型填的值
+     * @param task 这件事
+     * @return 出现过时为 true
+     */
+    static boolean saidByUser(String value, AgentTask task) {
+<span class="nc" id="L106">        String needle = normalize(value);</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">        if (needle.isEmpty()) {</span>
+<span class="nc" id="L108">            return false;</span>
+        }
+<span class="nc bnc" id="L110" title="All 2 branches missed.">        if (normalize(task.message()).contains(needle)) {</span>
+<span class="nc" id="L111">            return true;</span>
+        }
+<span class="nc bnc" id="L113" title="All 2 branches missed.">        List&lt;Message&gt; history = task.history() == null ? List.of() : task.history();</span>
+<span class="nc" id="L114">        return history.stream()</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">                .filter(m -&gt; m.getMessageType() == MessageType.USER)</span>
+<span class="nc" id="L116">                .anyMatch(m -&gt; normalize(m.getText()).contains(needle));</span>
+    }
+
+    private static String normalize(String text) {
+<span class="nc bnc" id="L120" title="All 2 branches missed.">        return text == null ? &quot;&quot; : text.replaceAll(&quot;[\\s，,。.：:；;！!？?「」\&quot;']&quot;, &quot;&quot;);</span>
+    }
+
+    /**
+     * 给用户看的说明和影响：确认卡片上就是这两句话，要让不懂技术的人也看得懂「点了确认会发生什么」。
+     *
+     * @param tool 写操作
+     * @param order 查到的订单
+     * @param params 其余参数
+     * @return 待确认操作
+     */
+    static PendingAction describe(AgentTool tool, AgentRun.ObservedOrder order, Map&lt;String, String&gt; params) {
+<span class="nc bnc" id="L132" title="All 2 branches missed.">        String what = order.items() != null</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">                ? &quot;（&quot; + order.items() + (order.payAmount() != null ? &quot;，&quot; + order.payAmount() + &quot; 元&quot; : &quot;&quot;) + &quot;）&quot;</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">                : (order.payAmount() != null ? &quot;（&quot; + order.payAmount() + &quot; 元）&quot; : &quot;&quot;);</span>
+<span class="nc bnc" id="L135" title="All 4 branches missed.">        return switch (tool) {</span>
+            case CANCEL_ORDER -&gt;
+<span class="nc" id="L137">                new PendingAction(</span>
+<span class="nc" id="L138">                        tool, order.orderNo(), params, &quot;取消订单 &quot; + order.orderNo() + what, &quot;取消后订单关闭、不能恢复；这笔还没付款，不涉及退款。&quot;);</span>
+            case CHANGE_ADDRESS -&gt;
+<span class="nc" id="L140">                new PendingAction(</span>
+                        tool,
+<span class="nc" id="L142">                        order.orderNo(),</span>
+                        params,
+<span class="nc" id="L144">                        &quot;把订单 &quot; + order.orderNo() + &quot; 的收货地址改为：&quot; + params.get(&quot;address&quot;),</span>
+                        &quot;只改这一笔订单的详细地址，收货人和电话不变；商城发货后就不能再改。&quot;);
+            case APPLY_AFTER_SALES -&gt;
+<span class="nc" id="L147">                new PendingAction(</span>
+                        tool,
+<span class="nc" id="L149">                        order.orderNo(),</span>
+                        params,
+<span class="nc" id="L151">                        &quot;为订单 &quot; + order.orderNo() + what + &quot;提交&quot;</span>
+<span class="nc" id="L152">                                + AfterSalesApplication.Type.valueOf(params.get(&quot;type&quot;))</span>
+<span class="nc" id="L153">                                        .text() + &quot;申请，原因：&quot; + params.get(&quot;reason&quot;),</span>
+                        &quot;只是提交申请，由人工客服在 24 小时内审核；审核通过前不会退款，也不会改动订单。&quot;);
+<span class="nc" id="L155">            default -&gt; throw new IllegalArgumentException(&quot;不是写操作：&quot; + tool);</span>
+        };
+    }
+
+    /**
+     * 核对结果：通过（带待确认操作）或不通过（带原因）二选一。
+     *
+     * @param action 通过时的待确认操作；不通过时为 null
+     * @param rejection 不通过的原因（给模型看）；通过时为 null
+     */
+<span class="fc" id="L165">    public record Proposal(PendingAction action, String rejection) {</span>
+
+        static Proposal accepted(PendingAction action) {
+<span class="nc" id="L168">            return new Proposal(action, null);</span>
+        }
+
+        static Proposal rejected(String rejection) {
+<span class="fc" id="L172">            return new Proposal(null, rejection);</span>
+        }
+
+        /** 是否通过。 */
+        public boolean accepted() {
+<span class="pc bpc" id="L177" title="1 of 2 branches missed.">            return action != null;</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

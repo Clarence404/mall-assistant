@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RagPlan.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.rag</a> &gt; <span class="el_source">RagPlan.java</span></div><h1>RagPlan.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.rag;
+
+import java.util.List;
+
+/**
+ * 检索做完、还没调模型时的「回答计划」：有资料就带着资料去问模型，没有就直接回固定话术（第 5 章引入）。
+ *
+ * &lt;p&gt;所在层：业务层的中间结果。{@link RagService#plan} 生成，{@code ChatService} 据它决定调不调模型。
+ *
+ * @param sources 编了号的引用来源；为空表示没有相关资料（或知识库不可用），这时&lt;b&gt;不调模型&lt;/b&gt;
+ * @param trace 调试信息
+ * @param fallback 不调模型时直接回给用户的话术：没找到相关规定（{@code rag-not-found.st}），或知识库暂时不可用（{@code rag-unavailable.st}）
+ */
+<span class="fc" id="L14">public record RagPlan(List&lt;RagSource&gt; sources, RagTrace trace, String fallback) {</span>
+
+    /**
+     * 是否短路（不调模型）。
+     *
+     * @return sources 为空时为 true
+     */
+    public boolean shortCircuited() {
+<span class="fc" id="L22">        return sources.isEmpty();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
