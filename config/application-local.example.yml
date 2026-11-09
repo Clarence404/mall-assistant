@@ -1,7 +1,7 @@
-# 本地覆盖配置模板：复制为项目根目录下的 application-local.yml（已被 .gitignore 忽略，不会提交），按需修改
-#   cp application-local.example.yml application-local.yml
+# 本地覆盖配置模板：复制为同目录（config/）下的 application-local.yml（已被 .gitignore 忽略，不会提交），按需修改
+#   cp config/application-local.example.yml config/application-local.yml
 # 以 local profile 启动时生效（IDEA 运行配置已带上：ollama,local / openai,local；命令行加 --spring.profiles.active=ollama,local）
-# Spring Boot 默认会加载工作目录下的 application-{profile}.yml，所以无需额外配置；工作目录须是仓库根目录
+# Spring Boot 默认会加载工作目录下 ./config/ 里的 application-{profile}.yml，所以无需额外配置；工作目录须是仓库根目录
 # 这里的内部地址、密钥都只留在你本机，不要写进 src/main/resources
 
 spring:

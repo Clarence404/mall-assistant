@@ -89,7 +89,7 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 
 注意：这些配置存放在入库的 `.run/*.run.xml` 里，在里面填的值会出现在 `git diff` 中。密钥和内部地址不要填进运行配置，改用下面的本地配置文件。
 
-第 4 章：知识库用 pgvector 时，把 `assistant.knowledge.store: pgvector` 和连接信息写进 `application-local.yml`（见 `application-local.example.yml` 最后一段），不要写进运行配置；两个命令行模型的运行配置也列了 `OLLAMA_EMBEDDING_MODEL`（命令行工具没有向量模型，知识库用 Ollama 的）。
+第 4 章：知识库用 pgvector 时，把 `assistant.knowledge.store: pgvector` 和连接信息写进 `config/application-local.yml`（见 `config/application-local.example.yml` 最后一段），不要写进运行配置；两个命令行模型的运行配置也列了 `OLLAMA_EMBEDDING_MODEL`（命令行工具没有向量模型，知识库用 Ollama 的）。
 
 第 5 章：想对比只用向量检索的效果，在 Program arguments 里加 `--assistant.rag.hybrid=false`；整个关掉 RAG 用 `--assistant.rag.enabled=false`。
 
@@ -100,11 +100,11 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 所有外部地址都是带默认值的占位符（如 `${OLLAMA_BASE_URL:http://localhost:11434}`），默认指向本机。要连共享开发机上的 Ollama、或者用云端 OpenAI 兼容接口时：
 
 ```bash
-cp application-local.example.yml application-local.yml   # 已被 .gitignore 忽略
-# 编辑 application-local.yml：填远程 Ollama 的 base-url，或取消注释 openai 一段填 base-url / api-key / 模型名
+cp config/application-local.example.yml config/application-local.yml   # 已被 .gitignore 忽略
+# 编辑 config/application-local.yml：填远程 Ollama 的 base-url，或取消注释 openai 一段填 base-url / api-key / 模型名
 ```
 
-以 `local` profile 启动时生效：IDEA 的两个运行配置已经带上 `local`；命令行用 `./mvnw spring-boot:run -Dspring-boot.run.profiles=ollama,local`（或 `openai,local`）。Spring Boot 会自动加载工作目录下的 `application-{profile}.yml`，所以要在仓库根目录启动；没有这个文件也能正常启动。
+以 `local` profile 启动时生效：IDEA 的两个运行配置已经带上 `local`；命令行用 `./mvnw spring-boot:run -Dspring-boot.run.profiles=ollama,local`（或 `openai,local`）。Spring Boot 会自动加载工作目录下 `./config/` 里的 `application-{profile}.yml`，所以要在仓库根目录启动；没有这个文件也能正常启动。
 
 不想建文件时，`openai` profile 也可以只用环境变量：`OPENAI_BASE_URL`（含 `/v1`，如 `https://api.deepseek.com/v1`）、`OPENAI_API_KEY`、`OPENAI_MODEL`，然后 `--spring.profiles.active=openai`。
 
@@ -223,9 +223,8 @@ mall-assistant/
 ├── src/test/resources/recordings/   真实模型的录制输出（录制回放用）
 ├── src/test/resources/rag/          检索评测集（口语化问题 → 应命中的一节）
 ├── docs/chNN.md              每章的练习说明
-├── application-local.example.yml   本地覆盖配置模板（复制为 application-local.yml，不入库）
 ├── .run/                     IntelliJ IDEA 共享运行配置
-├── config/checkstyle/
+├── config/                   Checkstyle 规则（checkstyle/）、本地覆盖配置模板 application-local.example.yml（复制为同目录的 application-local.yml，不入库）
 └── .github/                  verify 工作流与报告脚本
 ```
 

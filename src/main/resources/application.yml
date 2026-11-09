@@ -77,7 +77,7 @@ assistant:
       max-top-k: 10          # topK 上限
     memory:                  # store=memory 时
       dir: target/knowledge  # 入库后把向量存成 JSON（knowledge_chunk_<模型>.json），重启后读回来、没变的文档直接跳过；留空 = 不持久化
-    pgvector:                # store=pgvector 时（见 PgVectorConfig）；真实地址和密码写进不入库的 application-local.yml 或环境变量
+    pgvector:                # store=pgvector 时（见 PgVectorConfig）；真实地址和密码写进不入库的 config/application-local.yml 或环境变量
       url: ${PGVECTOR_URL:jdbc:postgresql://localhost:5432/mall_assistant}
       username: ${PGVECTOR_USERNAME:mall}
       password: ${PGVECTOR_PASSWORD:}
