@@ -42,6 +42,9 @@ import reactor.core.publisher.Flux;
  * <p>第 6 章多了两种「辅助调用」，按用户消息里的标签区分：带 {@code <对话历史>} 的是追问改写（{@code QuestionCondenser}），返回
  * {@link #willCondense} 的预设；带 {@code <要压缩的对话>} 的是摘要记忆（{@code ConversationSummarizer}），返回 {@link #willSummarize}
  * 的预设。它们不算「回答调用」（{@link #answerPrompts()} 里没有），分别记在 {@link #condensePrompts()} / {@link #summaryPrompts()}。
+ *
+ * <p>第 7 章多了 Agent 的「下一步」调用：用户消息里有 {@code <办事记录>} 标签（{@code AgentPlanner#STEP_TEMPLATE}），它也是结构化输出，但不算意图识别，
+ * 依次返回 {@link #willAct} 预设的原始输出（用完后重复最后一个，正好用来模拟「小模型一直在做同一件事」），记在 {@link #agentPrompts()}。
  */
 public class FakeChatModel implements ChatModel {
 
@@ -64,6 +67,13 @@ public class FakeChatModel implements ChatModel {
     private volatile String condensed = "（没有预设改写结果）";
     private volatile RuntimeException condenseFailure;
     private volatile String summary = "（没有预设摘要）";
+    private volatile List<String> actions = List.of(FINISH_JSON);
+    private volatile int actionCalls;
+    private volatile RuntimeException actionFailure;
+
+    /** 第 7 章：Agent 默认的下一步：直接回答。 */
+    public static final String FINISH_JSON =
+            "{\"action\":\"finish\",\"input\":\"请问要办什么？\",\"orderNo\":\"\",\"thought\":\"没有可办的\"}";
 
     /** 默认声明支持原生结构化输出与原生工具调用，与 Ollama 的行为一致。 */
     public FakeChatModel() {
@@ -114,6 +124,34 @@ public class FakeChatModel implements ChatModel {
         condensed = "（没有预设改写结果）";
         condenseFailure = null;
         summary = "（没有预设摘要）";
+        actions = List.of(FINISH_JSON);
+        actionCalls = 0;
+        actionFailure = null;
+    }
+
+    /** 第 7 章：Agent 的每一步都直接抛出该异常（模拟模型在办事中途挂了）。 */
+    public void willFailAct(RuntimeException error) {
+        this.actionFailure = error;
+    }
+
+    /**
+     * 第 7 章：Agent 每一步依次返回这些原始输出（一般是 {@code AgentDecision} 的 JSON，也可以是乱码），用完后重复最后一个。
+     *
+     * @param rawOutputs 每一步模型的原样输出
+     */
+    public void willAct(String... rawOutputs) {
+        this.actions = List.of(rawOutputs);
+        this.actionCalls = 0;
+    }
+
+    /** 第 7 章：Agent 每一步收到的 Prompt。 */
+    public List<Prompt> agentPrompts() {
+        return prompts.stream().filter(FakeChatModel::isAgentStep).toList();
+    }
+
+    /** Agent 的一步：用户消息里有 {@code <办事记录>} 标签。 */
+    public static boolean isAgentStep(Prompt prompt) {
+        return prompt.getUserMessage().getText().contains("<办事记录>");
     }
 
     /** 第 6 章：追问改写调用返回这段文本（模型「改写后的问题」的原样输出）。 */
@@ -205,13 +243,13 @@ public class FakeChatModel implements ChatModel {
 
     /** 意图识别（结构化输出）调用收到的 Prompt。 */
     public List<Prompt> classificationPrompts() {
-        return prompts.stream().filter(FakeChatModel::isStructured).toList();
+        return prompts.stream().filter(p -> isStructured(p) && !isAgentStep(p)).toList();
     }
 
     /** 回答调用收到的 Prompt（第 6 章起不含追问改写和摘要）。 */
     public List<Prompt> answerPrompts() {
         return prompts.stream()
-                .filter(p -> !isStructured(p) && !isCondense(p) && !isSummary(p))
+                .filter(p -> !isStructured(p) && !isCondense(p) && !isSummary(p) && !isAgentStep(p))
                 .toList();
     }
 
@@ -259,6 +297,13 @@ public class FakeChatModel implements ChatModel {
     @Override
     public ChatResponse call(Prompt prompt) {
         prompts.add(prompt);
+        if (isAgentStep(prompt)) {
+            if (actionFailure != null) {
+                throw actionFailure;
+            }
+            List<String> outputs = actions;
+            return response(outputs.get(Math.min(actionCalls++, outputs.size() - 1)));
+        }
         if (isStructured(prompt)) {
             if (classificationFailure != null) {
                 throw classificationFailure;

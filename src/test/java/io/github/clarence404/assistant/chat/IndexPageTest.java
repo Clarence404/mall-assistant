@@ -53,6 +53,13 @@ class IndexPageTest extends FakeModelWebTest {
                 .contains("/api/conversations/")
                 .contains("新对话")
                 .contains("dbgMemory")
-                .contains("'memory'");
+                .contains("'memory'")
+                // 第 7 章：调试面板的 Agent 步骤（step 事件）、确认卡片（confirm 事件与 confirmation 字段）、点按钮调确认接口
+                .contains("dbgAgent")
+                .contains("'step'")
+                .contains("'confirm'")
+                .contains("body.confirmation")
+                .contains("/api/agent/confirmations/")
+                .contains("confirm-card");
     }
 }

@@ -1,5 +1,6 @@
 package io.github.clarence404.assistant.error;
 
+import io.github.clarence404.assistant.agent.ConfirmationException;
 import io.github.clarence404.assistant.knowledge.KnowledgeException;
 import io.github.clarence404.assistant.knowledge.KnowledgeFailure;
 import io.github.clarence404.assistant.memory.ConversationException;
@@ -27,6 +28,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * <p>第 4 章起还处理知识库的 {@link KnowledgeException}：向量模型 / 向量库不可用 503，库里是别的模型生成的向量 409，同样带 code。
  *
  * <p>第 6 章起还处理会话的 {@link ConversationException}：会话不存在 404、正在回答 409、登录失效 401、商城或记忆库不可用 503。
+ *
+ * <p>第 7 章起还处理确认接口的 {@link ConfirmationException}：确认不存在或不是你的 404、过期 410、已经做过相反的决定 409。
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -94,5 +97,21 @@ public class ApiExceptionHandler {
             response.header(HttpHeaders.RETRY_AFTER, "5");
         }
         return response.body(problem);
+    }
+
+    /**
+     * 确认接口失败 → ProblemDetail（第 7 章）：不存在或不是你的 404、过期 410、决定冲突 409。
+     *
+     * @param e 确认异常
+     * @return 对应状态码的响应
+     */
+    @ExceptionHandler(ConfirmationException.class)
+    public ResponseEntity<ProblemDetail> handleConfirmationFailure(ConfirmationException e) {
+        ConfirmationException.Failure failure = e.failure();
+        log.info("确认失败：{}", failure);
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(failure.status(), failure.message());
+        problem.setTitle(failure.title());
+        problem.setProperty("code", failure.name());
+        return ResponseEntity.status(failure.status()).body(problem);
     }
 }

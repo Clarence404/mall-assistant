@@ -136,6 +136,25 @@ assistant:
       password: ${MEMORY_JDBC_PASSWORD:${assistant.knowledge.pgvector.password}}
       initialize-schema: true   # 第一次用到时执行 Spring AI 自带的建表脚本（CREATE TABLE IF NOT EXISTS，已存在不动）
       max-pool-size: 4       # 连接池大小
+  agent:                     # 第 7 章：售后 Agent（见 AgentProperties）。登录用户要办售后的事（取消订单、改地址、退款）时多步办理：查订单 → 查规则 → 提出写操作 → 用户点确认才执行
+    enabled: true            # 总开关；关掉后办事请求和第 6 章一样走 RAG，只回答规则
+    mode: loop               # loop：自己写的循环（方案 B，每一步一次结构化输出，所有模型都能用，默认）；native：Spring AI 原生工具调用循环（方案 A，只有 ollama / openai 能用，命令行模型自动退回 loop）
+    max-steps: 6             # 一次办事最多几步（想 + 执行算一步）：正常 2～4 步，到了还没办完就停下、告诉用户没办完
+    max-same-calls: 2        # 同一个工具、同样的参数最多执行几次：结果不会变，再查是在兜圈子
+    timeout: 120s            # 一次办事最长多久（所有步骤加起来），每一步开始前检查；本地 1.5b 一步 3～15 秒
+    observation-max-chars: 1200   # 每一步的结果最多给模型看多少字，太长会挤占上下文
+    max-output-tokens: 400   # 每一步模型最多输出多少 token：一步的 JSON 正常一两百个；不限的话小模型偶尔在结构化输出里无限吐空白，等到读超时
+    confirmation-ttl: 5m     # 确认卡片的有效期：过期再点返回 410，要重新说一次（订单状态可能已经变了）
+    prompt: agent-v1         # 方案 B 的系统提示词：prompts/agent-v1.st
+    native-prompt: agent-native-v1   # 方案 A 的系统提示词：prompts/agent-native-v1.st
+  after-sales:               # 第 7 章：售后申请单（mall-evolution 没有用户侧的售后接口，智能客服只记一张「待人工审核」的单，不动钱）
+    store: ${ASSISTANT_AFTER_SALES_STORE:memory}   # memory（默认，重启就没了）或 jdbc（PostgreSQL 的 after_sales_application 表，第一次用到时自动建）
+    jdbc:                    # store=jdbc 时：默认沿用第 6 章记忆的连接（也就是第 4 章 pgvector 的那个库），真实地址和密码写进 config/application-local.yml
+      url: ${AFTER_SALES_JDBC_URL:${assistant.memory.jdbc.url}}
+      username: ${AFTER_SALES_JDBC_USERNAME:${assistant.memory.jdbc.username}}
+      password: ${AFTER_SALES_JDBC_PASSWORD:${assistant.memory.jdbc.password}}
+      initialize-schema: true   # 第一次用到时建表（CREATE TABLE IF NOT EXISTS）
+      max-pool-size: 2       # 只有提交售后申请时才用，两个连接够了
 
 server:
   port: ${SERVER_PORT:8088}    # 与 mall-evolution（8080 / 8082 / 8083 / 9000）错开，两个项目可以同时运行

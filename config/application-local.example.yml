@@ -45,3 +45,9 @@ spring:
 # assistant:
 #   memory:
 #     store: jdbc
+
+# —— 第 7 章：售后申请单存进 PostgreSQL（默认 memory，重启就没了）——
+# 连接默认沿用第 6 章记忆的（也就是上面第 4 章 pgvector 的那个库），表 after_sales_application 第一次用到时自动建
+# assistant:
+#   after-sales:
+#     store: jdbc

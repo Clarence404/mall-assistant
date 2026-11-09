@@ -12,7 +12,8 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 /**
- * 调商城（mall-evolution）网关的 HTTP 客户端：登录、查自己的订单、列出自己最近的订单、查商品、查当前用户（第 6 章）。每个方法都返回 {@link MallResult}，不抛异常。
+ * 调商城（mall-evolution）网关的 HTTP 客户端：登录、查自己的订单、列出自己最近的订单、查商品、查当前用户（第 6 章），以及第 7 章 Agent 用的
+ * 查支付单、取消订单、改收货地址。每个方法都返回 {@link MallResult}，不抛异常。
  *
  * <p>所在层：外部系统接入（第 3 章引入）。上游是 {@code tool.MallTools}（模型调用的工具）和 {@link MallLoginController}
  * （页面登录）；下游是商城网关 {@code assistant.mall.base-url}（默认 {@code http://localhost:9000}）。
@@ -112,6 +113,61 @@ public class MallApiClient {
                 "查当前用户",
                 rest.get().uri("/api/users/me").headers(h -> h.setBearerAuth(accessToken)),
                 MallModels.UserProfile.class);
+    }
+
+    /**
+     * 查一笔订单的支付状态：{@code GET /api/orders/{orderNo}/payment}，带令牌。第 7 章引入（Agent 的只读工具）。
+     *
+     * @param accessToken 用户的访问令牌
+     * @param orderNo 订单号，已校验过格式
+     * @return 成功时是支付状态；不是本人的订单 {@link MallFailure#NOT_FOUND}；令牌无效 {@link MallFailure#UNAUTHORIZED}
+     */
+    public MallResult<MallModels.Payment> getPayment(String accessToken, String orderNo) {
+        return exchange(
+                "查支付单",
+                rest.get().uri("/api/orders/{orderNo}/payment", orderNo).headers(h -> h.setBearerAuth(accessToken)),
+                MallModels.Payment.class);
+    }
+
+    /**
+     * 取消自己的订单：{@code POST /api/orders/{orderNo}/cancel}，带令牌。第 7 章引入，<b>写操作</b>：只在用户点了确认按钮之后由
+     * {@code agent.ConfirmationService} 调用，模型的任何输出都不会直接走到这里。
+     *
+     * <p>商城的规则：只有待支付的订单能取消，否则 409 + {@code ORDER_STATUS_CONFLICT}（detail 如「订单 xxx 已支付，不能取消」），归为
+     * {@link MallFailure#REJECTED}；别人的订单 404。商城自己会校验归属与状态，智能客服这边的校验只是「提前拦住、说清原因」，不能代替它。
+     *
+     * @param accessToken 用户的访问令牌
+     * @param orderNo 订单号，已校验过格式
+     * @return 成功时是取消后的订单；状态不允许是 REJECTED（code=ORDER_STATUS_CONFLICT）
+     */
+    public MallResult<MallModels.Order> cancelOrder(String accessToken, String orderNo) {
+        return exchange(
+                "取消订单",
+                rest.post().uri("/api/orders/{orderNo}/cancel", orderNo).headers(h -> h.setBearerAuth(accessToken)),
+                MallModels.Order.class);
+    }
+
+    /**
+     * 改收货地址：{@code PATCH /api/orders/{orderNo}/address}，带令牌。第 7 章引入，<b>写操作</b>，同 {@link #cancelOrder} 只在用户确认后调用。
+     *
+     * <p>商城的规则：只传要改的字段；只有待支付、待发货的订单能改（已发货 409 {@code ORDER_STATUS_CONFLICT}）；格式不对 400
+     * {@code VALIDATION_FAILED}（归为 {@link MallFailure#REJECTED}）。
+     *
+     * @param accessToken 用户的访问令牌
+     * @param orderNo 订单号，已校验过格式
+     * @param patch 要改的字段
+     * @return 成功时是改完的订单
+     */
+    public MallResult<MallModels.Order> changeAddress(
+            String accessToken, String orderNo, MallModels.AddressPatch patch) {
+        return exchange(
+                "改收货地址",
+                rest.patch()
+                        .uri("/api/orders/{orderNo}/address", orderNo)
+                        .headers(h -> h.setBearerAuth(accessToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(patch),
+                MallModels.Order.class);
     }
 
     /**

@@ -166,6 +166,34 @@ public class ConversationMemory {
     }
 
     /**
+     * 在一轮对话之外补记一轮（第 7 章：用户点了确认卡片上的按钮，执行结果要写回会话，下一轮 Agent 才知道「那单已经取消了」）。
+     *
+     * <p>和正常的一轮走同一套：确认归属 → 占住会话 → 写入 → 放开。会话正忙、归属确认不了、记忆库挂了都不抛，返回 false（结果已经给用户了，记不下来不该让
+     * 确认失败）。
+     *
+     * @param conversationId 会话 ID，为 null 时什么都不做
+     * @param mallToken 商城令牌，可以为 null
+     * @param userMessage 这一轮「用户」那句（如「（点了确认）取消订单 …」）
+     * @param assistantReply 这一轮助手那句（执行结果）
+     * @return 写进去了为 true
+     */
+    public boolean record(String conversationId, String mallToken, String userMessage, String assistantReply) {
+        if (conversationId == null || !properties.enabled()) {
+            return false;
+        }
+        try (Conversation conversation = open(conversationId, mallToken)) {
+            if (!conversation.active()) {
+                return false;
+            }
+            conversation.save(userMessage, assistantReply);
+            return true;
+        } catch (ConversationException e) {
+            log.info("补记会话 {} 失败：{}", conversationId, e.failure());
+            return false;
+        }
+    }
+
+    /**
      * 查看会话的全部消息（{@code GET /api/conversations/{id}/messages}，页面刷新后恢复、调试用）。
      *
      * @param conversationId 会话 ID

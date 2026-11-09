@@ -1,6 +1,7 @@
 package io.github.clarence404.assistant.mall;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -51,6 +52,7 @@ public final class MallModels {
      * @param items 订单里的商品
      * @param createdAt 下单时间
      * @param paidAt 支付时间，未支付为 null
+     * @param receiver 收货信息（第 7 章：改地址前后给 Agent 看）；老接口或测试数据里没有时为 null
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Order(
@@ -60,7 +62,41 @@ public final class MallModels {
             String payAmount,
             List<OrderItem> items,
             LocalDateTime createdAt,
-            LocalDateTime paidAt) {}
+            LocalDateTime paidAt,
+            Receiver receiver) {}
+
+    /**
+     * 订单的收货信息（商城 OrderView 里的 receiver）。第 7 章引入。
+     *
+     * @param name 收货人
+     * @param phone 手机号
+     * @param address 详细地址
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Receiver(String name, String phone, String address) {}
+
+    /**
+     * {@code PATCH /api/orders/{orderNo}/address} 的请求体（商城的 AddressForm，按「只传要改的字段」校验）。第 7 章引入。
+     *
+     * <p>{@code null} 的字段不输出（{@link JsonInclude}）：商城那边用 {@code COALESCE(新值, 旧值)} 更新，不传就是不改。
+     * 商城的校验：收货人最多 20 个字、手机号 {@code 1} 开头 11 位、地址最多 200 个字；只有待支付、待发货的订单能改（否则 409）。
+     *
+     * @param receiver 新的收货人，不改为 null
+     * @param phone 新的手机号，不改为 null
+     * @param detail 新的详细地址，不改为 null
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record AddressPatch(String receiver, String phone, String detail) {}
+
+    /**
+     * {@code GET /api/orders/{orderNo}/payment} 的响应（商城的 PaymentStatusView）。第 7 章引入，Agent 的只读工具「查支付单」用。
+     *
+     * @param orderNo 订单号
+     * @param status 支付状态：NONE 未发起、PENDING 待支付、PAID 已支付、REFUNDING 退款中、REFUNDED 已退款
+     * @param paidAt 支付时间，没付为 null
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Payment(String orderNo, String status, LocalDateTime paidAt) {}
 
     /**
      * {@code GET /api/orders} 的响应：「我的订单」列表的一页（商城的 {@code CursorResult<OrderListItemView>}）。第 3 章补充。

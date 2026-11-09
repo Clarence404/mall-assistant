@@ -1,5 +1,8 @@
 package io.github.clarence404.assistant.chat;
 
+import io.github.clarence404.assistant.agent.AgentEvent;
+import io.github.clarence404.assistant.agent.AgentResult;
+import io.github.clarence404.assistant.agent.AgentService;
 import io.github.clarence404.assistant.error.ModelCallException;
 import io.github.clarence404.assistant.intent.Intent;
 import io.github.clarence404.assistant.intent.IntentResult;
@@ -35,9 +38,9 @@ import tools.jackson.databind.json.JsonMapper;
  * 调用失败统一转成 {@link ModelCallException}。
  *
  * <p>所在层：业务层（第 1 章引入 {@link #reply} / {@link #stream}，第 2 章加上意图识别与拒答，第 3 章加上工具调用，第 5 章加上 RAG，
- * 第 6 章加上多轮对话与记忆）。上游是 {@link ChatController}；下游是 {@link IntentService}（识别意图）、{@link AssistantPrompts}（系统提示词与拒答话术）、
+ * 第 6 章加上多轮对话与记忆，第 7 章加上售后 Agent）。上游是 {@link ChatController}；下游是 {@link IntentService}（识别意图）、{@link AssistantPrompts}（系统提示词与拒答话术）、
  * {@link MallTools}（查订单、查商品）、{@link RagService}（检索知识库、拼带资料的提示词）、{@link ConversationMemory}（会话历史）、
- * {@link QuestionCondenser}（追问改写）和 {@link ChatClient}（真正调模型）。
+ * {@link QuestionCondenser}（追问改写）、{@link AgentService}（第 7 章：办售后的事）和 {@link ChatClient}（真正调模型）。
  *
  * <p>第 6 章的一轮多轮对话（请求带了会话 ID 时）：
  *
@@ -52,9 +55,11 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * 模型本身没有记忆：第 2 轮的请求里如果不带第 1 轮，模型根本不知道第 1 轮发生过。所以「多轮对话」本质上就是「每次都把挑选过的历史一起发过去」。
  *
- * <p>按意图分三条路（第 5 章）：
+ * <p>按意图分几条路（第 5 章；第 7 章在最前面多了两条）：
  *
  * <ul>
+ *   <li>登录了、有待确认操作、却在聊天里回「确认」：固定话术提醒去点按钮，什么都不执行（第 7 章，{@link AgentService#chatConfirmationReply}）
+ *   <li>登录了、要办售后的事（意图 AFTER_SALES，或话里明说「帮我取消」「地址填错了」）：交给 Agent 多步办理，写操作只生成确认卡片（第 7 章，{@link #agentAnswer}）
  *   <li>超出范围（把握够大）：拒答话术，不调回答模型（第 2 章）
  *   <li>售后、规则政策（{@code assistant.rag.intents}）：RAG——检索知识库，有相关资料就带着编了号的资料问模型、要求标注引用；
  *       一块相关资料都没有就直接回「没找到相关规定」，<b>不调模型</b>（{@link #ragAnswer}）
@@ -111,6 +116,7 @@ public class ChatService {
     private final RagService ragService;
     private final ConversationMemory memory;
     private final QuestionCondenser condenser;
+    private final AgentService agent;
 
     /**
      * 创建对话服务（Spring 注入）。
@@ -124,6 +130,7 @@ public class ChatService {
      * @param ragService 规则类问题的检索增强回答（第 5 章）
      * @param memory 会话记忆（第 6 章）
      * @param condenser 追问改写（第 6 章）
+     * @param agent 售后 Agent（第 7 章）
      */
     @Autowired
     public ChatService(
@@ -135,7 +142,8 @@ public class ChatService {
             ToolProperties toolProperties,
             RagService ragService,
             ConversationMemory memory,
-            QuestionCondenser condenser) {
+            QuestionCondenser condenser,
+            AgentService agent) {
         this.chatClient = chatClient;
         this.properties = properties;
         this.prompts = prompts;
@@ -145,6 +153,43 @@ public class ChatService {
         this.ragService = ragService;
         this.memory = memory;
         this.condenser = condenser;
+        this.agent = agent;
+    }
+
+    /**
+     * 带记忆、不带 Agent 的对话服务（第 6 章的测试手工 new 它）：办事请求和第 6 章一样走 RAG。
+     *
+     * @param chatClient 共享的 ChatClient
+     * @param properties {@code assistant.chat.*}
+     * @param prompts 系统提示词与拒答话术
+     * @param intentService 意图识别
+     * @param mallTools 查订单、查商品的工具
+     * @param toolProperties {@code assistant.tools.*}
+     * @param ragService 检索增强回答
+     * @param memory 会话记忆
+     * @param condenser 追问改写
+     */
+    public ChatService(
+            ChatClient chatClient,
+            ChatProperties properties,
+            AssistantPrompts prompts,
+            IntentService intentService,
+            MallTools mallTools,
+            ToolProperties toolProperties,
+            RagService ragService,
+            ConversationMemory memory,
+            QuestionCondenser condenser) {
+        this(
+                chatClient,
+                properties,
+                prompts,
+                intentService,
+                mallTools,
+                toolProperties,
+                ragService,
+                memory,
+                condenser,
+                null);
     }
 
     /**
@@ -166,7 +211,7 @@ public class ChatService {
             MallTools mallTools,
             ToolProperties toolProperties,
             RagService ragService) {
-        this(chatClient, properties, prompts, intentService, mallTools, toolProperties, ragService, null, null);
+        this(chatClient, properties, prompts, intentService, mallTools, toolProperties, ragService, null, null, null);
     }
 
     /**
@@ -264,8 +309,19 @@ public class ChatService {
      * @throws ModelCallException 模型调用失败
      */
     ChatReply answer(String message, IntentResult intent, String mallToken, Conversation conversation) {
+        if (agent != null) {
+            String guard = agent.chatConfirmationReply(message, mallToken, conversation.conversationId());
+            if (guard != null) {
+                return new ChatReply(guard, intent, List.of());
+            }
+            if (agent.handles(intent, message, mallToken)) {
+                return agentAnswer(message, intent, mallToken, conversation);
+            }
+        }
         if (ragService.handles(intent)) {
-            return ragAnswer(message, intent, conversation);
+            ChatReply reply = ragAnswer(message, intent, conversation);
+            String hint = agent == null ? null : agent.loginHint(intent, message, mallToken);
+            return hint == null ? reply : reply.withReply(reply.reply() + "\n\n" + hint);
         }
         ToolCallRecorder recorder = new ToolCallRecorder();
         try {
@@ -312,10 +368,20 @@ public class ChatService {
     public Flux<AnswerPart> answerStream(ChatTurn turn) {
         Conversation conversation = turn.conversation();
         Flux<AnswerPart> parts;
-        if (shouldRefuse(turn.intent())) {
+        String guard = agent == null
+                ? null
+                : agent.chatConfirmationReply(turn.message(), turn.mallToken(), conversation.conversationId());
+        if (guard != null) {
+            parts = Flux.concat(memoryPart(conversation), Flux.just(new AnswerPart.Text(guard)));
+        } else if (agent != null && agent.handles(turn.intent(), turn.message(), turn.mallToken())) {
+            parts = Flux.concat(memoryPart(conversation), agentStream(turn, conversation));
+        } else if (shouldRefuse(turn.intent())) {
             parts = Flux.concat(memoryPart(conversation), Flux.just(new AnswerPart.Text(prompts.refusal())));
         } else if (ragService.handles(turn.intent())) {
-            parts = ragStream(turn.message(), conversation);
+            String hint = agent == null ? null : agent.loginHint(turn.intent(), turn.message(), turn.mallToken());
+            parts = hint == null
+                    ? ragStream(turn.message(), conversation)
+                    : ragStream(turn.message(), conversation).concatWith(Flux.just(new AnswerPart.Text("\n\n" + hint)));
         } else {
             parts = Flux.concat(memoryPart(conversation), toolStream(turn, conversation));
         }
@@ -328,6 +394,62 @@ public class ChatService {
                 .concatWith(Mono.<AnswerPart>fromRunnable(() -> conversation.save(turn.message(), reply.toString()))
                         .subscribeOn(Schedulers.boundedElastic()))
                 .doFinally(signal -> conversation.close());
+    }
+
+    /**
+     * 交给 Agent 办事的阻塞回答（第 7 章）：Agent 一步步走完（或停在待确认），回答、每一步、待确认操作一起返回。
+     *
+     * <p>历史用第 6 章的 {@link Conversation#history()}：上一轮「（点了确认）取消订单 …」→「已取消 …」也在里面，Agent 知道刚才办过什么。
+     * 这一轮写回记忆的仍然只有用户原话和最终回答（由 {@link #chat} 负责），每一步的查询结果不进记忆（同第 6 章：会过期、体积大、是注入的入口）。
+     *
+     * @param message 用户原话
+     * @param intent 意图
+     * @param mallToken 商城令牌（不为 null）
+     * @param conversation 会话句柄
+     * @return 回答，带 agent 与 confirmation 字段
+     * @throws ModelCallException 某一步调模型失败
+     */
+    ChatReply agentAnswer(String message, IntentResult intent, String mallToken, Conversation conversation) {
+        AgentResult result = agent.run(
+                message, conversation.history(), mallToken, conversation.conversationId(), event -> {}, () -> false);
+        return new ChatReply(
+                result.reply(), intent, List.of(), List.of(), null, null, result.trace(), result.confirmation());
+    }
+
+    /**
+     * 交给 Agent 办事的流式回答（ch07-8）：每走一步推一个 {@link AnswerPart.Step}，提出写操作时推一个 {@link AnswerPart.Confirm}，最后把回答作为一段文字推出。
+     *
+     * <p>要求（测试按这个写）：
+     *
+     * <ul>
+     *   <li>用 {@link Flux#create}：订阅时才开始跑；交给 Agent 的监听器把 {@link AgentEvent.StepTaken} 转成 Step、
+     *       {@link AgentEvent.ConfirmationRequested} 转成 Confirm，{@code sink.next} 推出去；跑完 {@code sink.next(new AnswerPart.Text(回答))}，
+     *       再 {@code sink.complete()}
+     *   <li>「页面关了没有」用 {@code sink.isCancelled()} 告诉 Agent，它在下一步开始前停下
+     *   <li>Agent 是一串阻塞调用（每一步一次模型调用、几次商城请求），放到 {@code Schedulers.boundedElastic()} 上跑（{@code subscribeOn}），
+     *       不占 Reactor / 网络 IO 的线程
+     *   <li>出错时 {@code onErrorMap(ModelCallException::from)}（{@code Flux.create} 里抛出的异常会自动变成错误信号）
+     *   <li>不加第 1 章的空闲超时 {@code streamTimeout}：Agent 两步之间可能就要十几秒（一次模型调用），总时长由 {@code assistant.agent.timeout} 管
+     * </ul>
+     *
+     * @param turn 这一轮
+     * @param conversation 会话句柄
+     * @return Agent 的步骤、待确认操作与回答
+     */
+    Flux<AnswerPart> agentStream(ChatTurn turn, Conversation conversation) {
+        // TODO ch07-8：用 Flux.create 把 Agent 的每一步（Step）、待确认操作（Confirm）边走边推出去，最后推回答；在 boundedElastic 上跑，页面关了告诉 Agent 停。
+        // 现在只是阻塞地办完、推一段回答，页面看不到步骤和确认卡片
+        return Flux.defer(() ->
+                Flux.just(new AnswerPart.Text(agentAnswer(turn.message(), turn.intent(), turn.mallToken(), conversation)
+                        .reply())));
+    }
+
+    /** Agent 的事件 → 流式片段。 */
+    private static AnswerPart toPart(AgentEvent event) {
+        return switch (event) {
+            case AgentEvent.StepTaken step -> new AnswerPart.Step(step.step());
+            case AgentEvent.ConfirmationRequested confirm -> new AnswerPart.Confirm(confirm.confirmation());
+        };
     }
 
     /** 第 3 章的流式回答：直接查询或交给模型调工具，工具记录排在它之后的文字前面。 */

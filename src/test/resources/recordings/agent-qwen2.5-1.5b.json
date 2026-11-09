@@ -1,0 +1,171 @@
+{
+  "model" : "qwen2.5:1.5b",
+  "embeddingModel" : "bge-m3",
+  "recordedAt" : "2026-11-09",
+  "cases" : [ {
+    "name" : "取消待支付订单",
+    "message" : "订单 21182516707889029130785 买错了，帮我取消",
+    "intent" : {
+      "intent" : "AFTER_SALES",
+      "confidence" : 0.9,
+      "orderNo" : "21182516707889029130785",
+      "skuId" : null
+    },
+    "steps" : [ {
+      "action" : "listMyOrders",
+      "kind" : "READ",
+      "arguments" : "{}",
+      "observation" : "{\"found\":true,\"orders\":[{\"orderNo\":\"21182516707889029120785\",\"status\":\"待发货（已付款，商家还没发货）\",\"statusCode\":\"PENDING_SHIPMENT\",\"payAmount\":\"39.90\",\"createdAt\":\"2026-11-05 15:58\",\"allowedActions\":[\"changeAddress\",\"applyAfterSales\"]},{\"orderNo\":\"21180000000000000010785\",\"status\":\"已完成（已确认收货）\",\"statusCode\":\"COMPLETED\",\"payAmount\":\"59.80\",\"createdAt\":\"2026-11-01 10:00\",\"allowedActions\":[\"applyAfterSales\"]}],\"note\":\"用户要办的是哪一笔不清楚时，用 finish 把订单列给用户、问是哪一笔；清楚时再用 queryOrder 查那一笔\"}"
+    }, {
+      "action" : "queryOrder",
+      "kind" : "READ",
+      "arguments" : "{\"orderNo\":\"21182516707889029130785\"}",
+      "observation" : "{\"found\":true,\"orderNo\":\"21182516707889029130785\",\"status\":\"待支付（还没付款，超时未付会自动取消）\",\"statusCode\":\"PENDING_PAYMENT\",\"payAmount\":\"39.90\",\"items\":\"青柚 · 红心柚 2 只装 ×1\",\"receiver\":\"张三 138****0000 杭州市西湖区\",\"createdAt\":\"2026-11-08 09:30\",\"allowedActions\":[\"cancelOrder\",\"changeAddress\"],\"note\":\"用户要办的事如果在 allowedActions 里，下一步直接用它提出（不用再查商品和规则，系统会让用户确认）；不在里面就用 finish 告诉用户办不了\"}"
+    }, {
+      "action" : "cancelOrder",
+      "kind" : "PROPOSE",
+      "arguments" : "{\"orderNo\":\"21182516707889029130785\"}",
+      "observation" : "已生成待确认操作（取消订单 21182516707889029130785（青柚 · 红心柚 2 只装 ×1，39.90 元）），等用户在页面上点确认，这一轮到此结束"
+    } ],
+    "stopReason" : "AWAITING_CONFIRMATION",
+    "proposal" : {
+      "action" : "cancelOrder",
+      "orderNo" : "21182516707889029130785",
+      "params" : { },
+      "summary" : "取消订单 21182516707889029130785（青柚 · 红心柚 2 只装 ×1，39.90 元）"
+    },
+    "reply" : "我准备取消订单 21182516707889029130785（青柚 · 红心柚 2 只装 ×1，39.90 元）。取消后订单关闭、不能恢复；这笔还没付款，不涉及退款。请在下面的确认卡片上点「确认」后才会办理（5 分钟内有效）；不需要的话点「取消」。",
+    "elapsedMs" : 26157,
+    "retrievals" : { },
+    "calls" : [ {
+      "promptHash" : "f5c549578ffeb6a3",
+      "output" : "{\"confidence\":0.9,\"intent\":\"AFTER_SALES\",\"orderNo\":\"21182516707889029130785\",\"skuId\":\"}\"}"
+    }, {
+      "promptHash" : "9e87868a002c0906",
+      "output" : "{\n  \"action\": \"listMyOrders\",\n  \"input\": \"\",\n  \"orderNo\": \"21182516707889029130785\",\n  \"thought\": \"列出用户最近的订单，以便查询订单状态。\"\n}"
+    }, {
+      "promptHash" : "919085ddc9d7bf5b",
+      "output" : "{\n  \"action\": \"queryOrder\",\n  \"input\": \"21182516707889029130785\",\n  \"orderNo\": \"21182516707889029130785\",\n  \"thought\": \"查询订单状态，确认用户要取消的订单\"\n}"
+    }, {
+      "promptHash" : "a55f86e486296cef",
+      "output" : "{\n  \"action\": \"cancelOrder\",\n  \"input\": \"21182516707889029130785\",\n  \"orderNo\": \"21182516707889029130785\",\n  \"thought\": \"用户要取消订单 21182516707889029130785\"\n}"
+    } ]
+  }, {
+    "name" : "改收货地址",
+    "message" : "订单 21182516707889029130785 收货地址填错了，改成杭州市西湖区文三路 100 号",
+    "intent" : {
+      "intent" : "AFTER_SALES",
+      "confidence" : 0.95,
+      "orderNo" : "21182516707889029130785",
+      "skuId" : null
+    },
+    "steps" : [ {
+      "action" : "changeAddress",
+      "kind" : "REJECTED",
+      "arguments" : "{\"orderNo\":\"21182516707889029130785\",\"address\":\"杭州市西湖区文三路 100 号\"}",
+      "observation" : "没有生成确认：订单 21182516707889029130785 还没有在这次的查询结果里出现过：先用 queryOrder 查一下这笔订单，确认是用户自己的、现在是什么状态"
+    }, {
+      "action" : "queryOrder",
+      "kind" : "READ",
+      "arguments" : "{\"orderNo\":\"21182516707889029130785\"}",
+      "observation" : "{\"found\":true,\"orderNo\":\"21182516707889029130785\",\"status\":\"待支付（还没付款，超时未付会自动取消）\",\"statusCode\":\"PENDING_PAYMENT\",\"payAmount\":\"39.90\",\"items\":\"青柚 · 红心柚 2 只装 ×1\",\"receiver\":\"张三 138****0000 杭州市西湖区\",\"createdAt\":\"2026-11-08 09:30\",\"allowedActions\":[\"cancelOrder\",\"changeAddress\"],\"note\":\"用户要办的事如果在 allowedActions 里，下一步直接用它提出（不用再查商品和规则，系统会让用户确认）；不在里面就用 finish 告诉用户办不了\"}"
+    }, {
+      "action" : "changeAddress",
+      "kind" : "PROPOSE",
+      "arguments" : "{\"orderNo\":\"21182516707889029130785\",\"address\":\"杭州市西湖区文三路 100 号\"}",
+      "observation" : "已生成待确认操作（把订单 21182516707889029130785 的收货地址改为：杭州市西湖区文三路 100 号），等用户在页面上点确认，这一轮到此结束"
+    } ],
+    "stopReason" : "AWAITING_CONFIRMATION",
+    "proposal" : {
+      "action" : "changeAddress",
+      "orderNo" : "21182516707889029130785",
+      "params" : {
+        "address" : "杭州市西湖区文三路 100 号"
+      },
+      "summary" : "把订单 21182516707889029130785 的收货地址改为：杭州市西湖区文三路 100 号"
+    },
+    "reply" : "我准备把订单 21182516707889029130785 的收货地址改为：杭州市西湖区文三路 100 号。只改这一笔订单的详细地址，收货人和电话不变；商城发货后就不能再改。请在下面的确认卡片上点「确认」后才会办理（5 分钟内有效）；不需要的话点「取消」。",
+    "elapsedMs" : 26005,
+    "retrievals" : { },
+    "calls" : [ {
+      "promptHash" : "ba017b6fa02e0141",
+      "output" : "{\"confidence\":0.95,\"intent\":\"AFTER_SALES\",\"orderNo\":\"21182516707889029130785\",\"skuId\":\"}\"}"
+    }, {
+      "promptHash" : "d4590105ce217358",
+      "output" : "{\n  \"action\": \"changeAddress\",\n  \"input\": \"杭州市西湖区文三路 100 号\",\n  \"orderNo\": \"21182516707889029130785\",\n  \"thought\": \"用户要求修改收货地址，我需要帮助用户完成这个操作。\"\n}"
+    }, {
+      "promptHash" : "80827fbef5160254",
+      "output" : "{\n  \"action\": \"queryOrder\",\n  \"input\": \"21182516707889029130785\",\n  \"orderNo\": \"21182516707889029130785\",\n  \"thought\": \"查询订单以确认用户订单的状态和允许的操作。\"\n}"
+    }, {
+      "promptHash" : "9ca00cee9119351b",
+      "output" : "{\n  \"action\": \"changeAddress\",\n  \"input\": \"杭州市西湖区文三路 100 号\",\n  \"orderNo\": \"21182516707889029130785\",\n  \"thought\": \"用户要求修改收货地址，我需要帮助用户完成这个操作。\"\n}"
+    } ]
+  }, {
+    "name" : "已发货申请退款",
+    "message" : "订单 21182516707889029140785 东西坏了要退款",
+    "intent" : {
+      "intent" : "AFTER_SALES",
+      "confidence" : 0.9,
+      "orderNo" : "21182516707889029140785",
+      "skuId" : null
+    },
+    "steps" : [ {
+      "action" : "listMyOrders",
+      "kind" : "READ",
+      "arguments" : "{}",
+      "observation" : "{\"found\":true,\"orders\":[{\"orderNo\":\"21182516707889029120785\",\"status\":\"待发货（已付款，商家还没发货）\",\"statusCode\":\"PENDING_SHIPMENT\",\"payAmount\":\"39.90\",\"createdAt\":\"2026-11-05 15:58\",\"allowedActions\":[\"changeAddress\",\"applyAfterSales\"]},{\"orderNo\":\"21180000000000000010785\",\"status\":\"已完成（已确认收货）\",\"statusCode\":\"COMPLETED\",\"payAmount\":\"59.80\",\"createdAt\":\"2026-11-01 10:00\",\"allowedActions\":[\"applyAfterSales\"]}],\"note\":\"用户要办的是哪一笔不清楚时，用 finish 把订单列给用户、问是哪一笔；清楚时再用 queryOrder 查那一笔\"}"
+    }, {
+      "action" : "queryOrder",
+      "kind" : "READ",
+      "arguments" : "{\"orderNo\":\"21182516707889029140785\"}",
+      "observation" : "{\"found\":true,\"orderNo\":\"21182516707889029140785\",\"status\":\"已发货（商家已发货）\",\"statusCode\":\"SHIPPED\",\"payAmount\":\"39.90\",\"items\":\"青柚 · 红心柚 2 只装 ×1\",\"receiver\":\"张三 138****0000 杭州市西湖区\",\"createdAt\":\"2026-11-08 09:30\",\"allowedActions\":[\"applyAfterSales\"],\"note\":\"用户要办的事如果在 allowedActions 里，下一步直接用它提出（不用再查商品和规则，系统会让用户确认）；不在里面就用 finish 告诉用户办不了\"}"
+    }, {
+      "action" : "queryProduct",
+      "kind" : "REJECTED",
+      "arguments" : "{}",
+      "observation" : "queryProduct 需要 input：商品编号，一串数字，照抄用户的话；办售后不用查商品，要查售后规则用 searchPolicy"
+    }, {
+      "action" : "queryProduct",
+      "kind" : "REJECTED",
+      "arguments" : "{}",
+      "observation" : "queryProduct 需要 input：商品编号，一串数字，照抄用户的话；办售后不用查商品，要查售后规则用 searchPolicy"
+    }, {
+      "action" : "queryProduct",
+      "kind" : "REJECTED",
+      "arguments" : "{}",
+      "observation" : "queryProduct 需要 input：商品编号，一串数字，照抄用户的话；办售后不用查商品，要查售后规则用 searchPolicy"
+    }, {
+      "action" : "queryProduct",
+      "kind" : "REJECTED",
+      "arguments" : "{}",
+      "observation" : "queryProduct 需要 input：商品编号，一串数字，照抄用户的话；办售后不用查商品，要查售后规则用 searchPolicy"
+    } ],
+    "stopReason" : "STEP_LIMIT",
+    "proposal" : null,
+    "reply" : "这件事我没能在 6 步内办完，没有执行任何操作。可以换个说法再说一次（比如带上订单号），或者联系人工客服。",
+    "elapsedMs" : 50947,
+    "retrievals" : { },
+    "calls" : [ {
+      "promptHash" : "4e495e698a7d59e2",
+      "output" : "{\"confidence\":0.9,\"intent\":\"AFTER_SALES\",\"orderNo\":\"21182516707889029140785\",\"skuId\":\"}\"}"
+    }, {
+      "promptHash" : "13f671c0acf1a910",
+      "output" : "{\n    \"action\": \"listMyOrders\",\n    \"input\": \"\",\n    \"orderNo\": \"21182516707889029140785\",\n    \"thought\": \"列出用户最近的订单，以便查询订单状态。\"\n}"
+    }, {
+      "promptHash" : "b0165c34ed5af2ff",
+      "output" : "{\n  \"action\": \"queryOrder\",\n  \"input\": \"21182516707889029140785\",\n  \"orderNo\": \"21182516707889029140785\",\n  \"thought\": \"查询订单状态，确认用户要退款的订单\"\n}"
+    }, {
+      "promptHash" : "949687f254de6951",
+      "output" : "{\n  \"action\": \"queryProduct\",\n  \"input\": \"青柚 · 红心柚 2 只装 ×1\",\n  \"orderNo\": \"21182516707889029140785\",\n  \"thought\": \"查询商品信息，确认用户要退款的商品\"\n}"
+    }, {
+      "promptHash" : "d69c358d8f8ac025",
+      "output" : "{\n  \"action\": \"queryProduct\",\n  \"input\": \"商品编号\",\n  \"orderNo\": \"21182516707889029140785\",\n  \"thought\": \"用户要退款的商品是青柚 · 红心柚 2 只装 ×1，我需要查询商品信息。\"\n}"
+    }, {
+      "promptHash" : "247c42f644df04ff",
+      "output" : "{\n  \"action\": \"queryProduct\",\n  \"input\": \"21182516707889029140785\",\n  \"orderNo\": \"21182516707889029140785\",\n  \"thought\": \"用户要退款的商品是青柚 · 红心柚 2 只装 ×1，我需要查询商品信息。\"\n}"
+    }, {
+      "promptHash" : "4889e9bfb062e295",
+      "output" : "{\n  \"action\": \"queryProduct\",\n  \"input\": \"21182516707889029140785\",\n  \"orderNo\": \"21182516707889029140785\",\n  \"thought\": \"用户要退款的商品是青柚 · 红心柚 2 只装 ×1，我需要查询商品信息。\"\n}"
+    } ]
+  } ]
+}

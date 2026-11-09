@@ -191,4 +191,76 @@ class MallApiClientTest {
 
         assertThat(offline.getProduct("20001").failure()).isEqualTo(MallFailure.UNAVAILABLE);
     }
+
+    /** 第 7 章：取消待支付的订单成功，返回取消后的订单；POST 带令牌。 */
+    @Test
+    void cancelPendingPaymentOrder() {
+        MallResult<MallModels.Order> result =
+                client.cancelOrder(StubMallApi.TOKEN, StubMallApi.PENDING_PAYMENT_ORDER_NO);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.body().status()).isEqualTo("CANCELLED");
+        assertThat(mall.writes()).singleElement().satisfies(r -> {
+            assertThat(r.method()).isEqualTo("POST");
+            assertThat(r.path()).isEqualTo("/api/orders/" + StubMallApi.PENDING_PAYMENT_ORDER_NO + "/cancel");
+            assertThat(r.authorization()).isEqualTo("Bearer " + StubMallApi.TOKEN);
+        });
+    }
+
+    /** 第 7 章：已付款的订单不能取消：409 归为 REJECTED，带商城的业务码和说明（说明可以直接给用户看）。 */
+    @Test
+    void cancelPaidOrderIsRejectedWithConflict() {
+        MallResult<MallModels.Order> result = client.cancelOrder(StubMallApi.TOKEN, StubMallApi.ORDER_NO);
+
+        assertThat(result.failure()).isEqualTo(MallFailure.REJECTED);
+        assertThat(result.code()).isEqualTo("ORDER_STATUS_CONFLICT");
+        assertThat(result.detail()).contains("已支付，不能取消");
+        assertThat(client.cancelOrder(StubMallApi.TOKEN, StubMallApi.OTHER_USERS_ORDER_NO)
+                        .failure())
+                .isEqualTo(MallFailure.NOT_FOUND);
+    }
+
+    /** 第 7 章：改地址只传要改的字段（null 不输出），返回改完的订单（带收货信息）。 */
+    @Test
+    void changeAddressSendsOnlyGivenFields() {
+        MallResult<MallModels.Order> result = client.changeAddress(
+                StubMallApi.TOKEN,
+                StubMallApi.PENDING_PAYMENT_ORDER_NO,
+                new MallModels.AddressPatch(null, "13900000000", null));
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.body().receiver().phone()).isEqualTo("13900000000");
+        assertThat(result.body().receiver().address()).isEqualTo("杭州市西湖区");
+        assertThat(mall.writes().getFirst().body()).isEqualTo("{\"phone\":\"13900000000\"}");
+    }
+
+    /** 第 7 章：已发货不能改地址（409）；手机号格式不对（400）；两者都归为 REJECTED。 */
+    @Test
+    void changeAddressConflictAndValidation() {
+        MallResult<MallModels.Order> shipped = client.changeAddress(
+                StubMallApi.TOKEN, StubMallApi.SHIPPED_ORDER_NO, new MallModels.AddressPatch("李四", null, null));
+        MallResult<MallModels.Order> badPhone = client.changeAddress(
+                StubMallApi.TOKEN,
+                StubMallApi.PENDING_PAYMENT_ORDER_NO,
+                new MallModels.AddressPatch(null, "123", null));
+
+        assertThat(shipped.failure()).isEqualTo(MallFailure.REJECTED);
+        assertThat(shipped.code()).isEqualTo("ORDER_STATUS_CONFLICT");
+        assertThat(badPhone.failure()).isEqualTo(MallFailure.REJECTED);
+        assertThat(badPhone.code()).isEqualTo("VALIDATION_FAILED");
+    }
+
+    /** 第 7 章：查支付单。 */
+    @Test
+    void paymentStatus() {
+        assertThat(client.getPayment(StubMallApi.TOKEN, StubMallApi.SHIPPED_ORDER_NO)
+                        .body()
+                        .status())
+                .isEqualTo("PAID");
+        assertThat(client.getPayment(StubMallApi.TOKEN, StubMallApi.PENDING_PAYMENT_ORDER_NO)
+                        .body()
+                        .paidAt())
+                .isNull();
+        assertThat(client.getPayment("forged", StubMallApi.ORDER_NO).failure()).isEqualTo(MallFailure.UNAUTHORIZED);
+    }
 }

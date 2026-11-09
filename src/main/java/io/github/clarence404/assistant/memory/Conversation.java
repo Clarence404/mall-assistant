@@ -88,6 +88,15 @@ public final class Conversation implements AutoCloseable {
         return new Conversation(conversationId, store, HistoryWindow.Window.EMPTY, false, 0, warning, null, null);
     }
 
+    /**
+     * 页面传来的会话 ID（第 7 章：待确认操作绑定到会话，确认后的结果写回这个会话）。
+     *
+     * @return 会话 ID；没带时为 null
+     */
+    public String conversationId() {
+        return conversationId;
+    }
+
     /** 是否带了会话 ID（无论用没用上记忆）；为 false 时调试信息为 null。 */
     public boolean present() {
         return conversationId != null;

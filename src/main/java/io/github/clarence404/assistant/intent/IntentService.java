@@ -43,6 +43,13 @@ public class IntentService {
     static final double TEMPERATURE = 0.0;
 
     /**
+     * 意图识别最多输出多少个 token（第 7 章补充）：一个意图 JSON 只有四十来个 token。结构化输出约束得住 JSON 的形状、约束不住长度，
+     * 第 7 章录制时 qwen2.5:0.5b 识别「订单 … 买错了，帮我取消」时在某个字段里一直写下去，60 秒读超时、整轮对话失败；限住之后最多是这次解析失败，
+     * 走原来的「重试一次、再不行按 UNKNOWN」。只限长度，不改提示词和消息，前几章的录制照样能回放。
+     */
+    static final int MAX_TOKENS = 200;
+
+    /**
      * 用户消息模板：用标签把用户原文圈起来，模型更不容易把里面的话当成给它的指令。
      *
      * <p>{@code {message}} 是模板变量，由 Spring AI 的模板引擎（StringTemplate）在发请求前替换成用户原文。用户原文里即使有
@@ -116,7 +123,7 @@ public class IntentService {
                     .prompt()
                     .system(intentPrompt)
                     .user(u -> u.text(template).param("message", message))
-                    .options(ChatOptions.builder().temperature(TEMPERATURE))
+                    .options(ChatOptions.builder().temperature(TEMPERATURE).maxTokens(MAX_TOKENS))
                     .call()
                     .entity(IntentResult.class, spec -> spec.useProviderStructuredOutput());
         } catch (JacksonException e) {

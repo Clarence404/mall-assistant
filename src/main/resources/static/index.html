@@ -107,6 +107,26 @@
   .msg.summary { align-self: stretch; max-width: none; color: var(--muted); font-size: 13px; border: 1px dashed var(--border); }
   .rag-note { color: var(--muted); margin: 4px 0; }
   .rag-note.warn { color: var(--err-fg); }
+  /* 第 7 章：Agent 的确认卡片（写操作要用户点按钮）与调试面板的 Agent 步骤 */
+  .confirm-card {
+    align-self: flex-start; max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 14px;
+    background: var(--card); border: 1px solid var(--brand); border-left-width: 4px;
+  }
+  .confirm-card .title { font-weight: 600; margin-bottom: 4px; }
+  .confirm-card .impact { color: var(--muted); margin: 4px 0 8px; }
+  .confirm-card .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .confirm-card .actions button { height: 32px; padding: 0 16px; border-radius: 8px; font-size: 13px; }
+  .confirm-card .actions button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--border); }
+  .confirm-card .meta { color: var(--muted); font-size: 12px; }
+  .confirm-card.done { border-color: var(--border); }
+  .confirm-card .result { margin-top: 6px; }
+  .confirm-card .result.err { color: var(--err-fg); }
+  .steps { margin: 0; padding-left: 18px; font-family: ui-monospace, Consolas, monospace; }
+  .steps li { margin: 2px 0 8px; word-break: break-all; }
+  .steps .thought { color: var(--fg); font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .steps .meta { color: var(--muted); }
+  .steps li.kind-REJECTED { color: var(--err-fg); }
+  .steps li.kind-PROPOSE { color: var(--brand); }
 </style>
 </head>
 <body>
@@ -185,6 +205,11 @@
         <ol class="tools" id="dbgTools"><li class="placeholder">-</li></ol>
       </section>
       <section class="wide">
+        <h3>Agent 步骤</h3>
+        <div class="rag-note" id="dbgAgentNote">-</div>
+        <ol class="steps" id="dbgAgent"></ol>
+      </section>
+      <section class="wide">
         <h3>引用来源</h3>
         <div class="rag-note" id="dbgRag">-</div>
         <ol class="sources" id="dbgSources"></ol>
@@ -228,6 +253,9 @@
 // 第 6 章：多轮对话。页面生成会话 ID（crypto.randomUUID，存在 localStorage，刷新后还是同一个），每次提问放在请求体的 conversationId 里；
 //   打开页面时用 GET /api/conversations/{id}/messages 把历史画回来；「新对话」换一个 ID，「清空」DELETE 服务端的记录；
 //   登录、退出时自动换新对话（服务端按登录身份隔离会话，匿名时聊的内容登录后本来就看不到）；调试面板「记忆」一栏显示带了几轮历史、裁掉几轮、改写后的问题
+// 第 7 章：售后 Agent。办事请求（取消订单、改地址、退款）由 Agent 多步办理，每一步作为 step 事件推来，显示在调试面板「Agent 步骤」；
+//   提出写操作时推一个 confirm 事件（阻塞接口在 confirmation 字段），页面画一张确认卡片。只有点卡片上的「确认」才会调
+//   POST /api/agent/confirmations/{id} 真正执行；在聊天里打「确认」不算（服务端会提醒你点按钮）
 (() => {
   const $ = (id) => document.getElementById(id);
   const messages = $('messages');
@@ -258,7 +286,7 @@
 
   // 第 2 章：先识别出的意图。阻塞接口在响应体的 intent 字段里，流式接口是最先推送的 intent 事件
   const INTENT_LABELS = {
-    ORDER_STATUS: '查订单', PRODUCT_INFO: '问商品', AFTER_SALES: '售后，走 RAG', POLICY: '规则政策，走 RAG',
+    ORDER_STATUS: '查订单', PRODUCT_INFO: '问商品', AFTER_SALES: '售后，登录后交给 Agent 办理', POLICY: '规则政策，走 RAG',
     CHITCHAT: '闲聊', OUT_OF_SCOPE: '超出范围，直接拒答', UNKNOWN: '未识别'
   };
 
@@ -511,6 +539,107 @@
     if (li) { li.classList.add('hl'); li.scrollIntoView({ block: 'nearest' }); }
   }
 
+  // 第 7 章：调试面板「Agent 步骤」。每一步：编号、想法、工具与参数、结果、耗时；被代码拦下的标红，提出写操作的标蓝
+  const STEP_KINDS = { READ: '只读，已执行', PROPOSE: '写操作，已生成确认卡片（未执行）', REJECTED: '被代码拦下', FINISH: '回答' };
+  const STOP_REASONS = {
+    FINISHED: '模型说办完了', AWAITING_CONFIRMATION: '提出了写操作，等你点确认', STEP_LIMIT: '到了步数上限',
+    REPEATED: '一直在重复同一个调用', TIMEOUT: '超时', CANCELLED: '已取消', LOGIN_EXPIRED: '登录失效'
+  };
+
+  function resetSteps() {
+    $('dbgAgent').innerHTML = '';
+    $('dbgAgentNote').textContent = '-';
+  }
+
+  function addStep(s) {
+    const li = document.createElement('li');
+    li.className = 'kind-' + s.kind;
+    const result = s.observation && s.observation.length > 300 ? s.observation.slice(0, 300) + '…' : (s.observation || '');
+    if (s.thought) {
+      const thought = document.createElement('div');
+      thought.className = 'thought';
+      thought.textContent = '想：' + s.thought;
+      li.appendChild(thought);
+    }
+    li.appendChild(document.createTextNode((s.action || '?') + ' ' + (s.arguments || '') + ' → ' + result));
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = '第 ' + s.index + ' 步，' + (STEP_KINDS[s.kind] || s.kind) + '，' + s.durationMs + ' ms';
+    li.appendChild(meta);
+    $('dbgAgent').appendChild(li);
+    $('dbgAgentNote').textContent = '已走 ' + s.index + ' 步';
+  }
+
+  function showAgent(trace) {
+    if (!trace) return;
+    resetSteps();
+    (trace.steps || []).forEach(addStep);
+    $('dbgAgentNote').textContent = (trace.mode === 'native' ? '方案 A（原生工具调用）' : '方案 B（自己写的循环）') + '：'
+      + (trace.steps || []).length + ' 步，' + (STOP_REASONS[trace.stopReason] || trace.stopReason) + '，共 ' + trace.elapsedMs + ' ms';
+  }
+
+  // 第 7 章：确认卡片。卡片上的说明与影响由服务端写好（不是模型说的），过期后按钮点了会提示已过期；
+  // 点按钮只发「同意 / 拒绝」和会话 ID，订单号等参数在服务端定死了，页面改不了
+  function addConfirmCard(c, after) {
+    const card = document.createElement('div');
+    card.className = 'confirm-card';
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = '请确认：' + c.title;
+    const summary = document.createElement('div');
+    summary.textContent = c.summary;
+    const impact = document.createElement('div');
+    impact.className = 'impact';
+    impact.textContent = c.impact;
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const ok = document.createElement('button');
+    ok.type = 'button';
+    ok.textContent = '确认';
+    const no = document.createElement('button');
+    no.type = 'button';
+    no.className = 'ghost';
+    no.textContent = '取消';
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = Math.round(c.ttlSeconds / 60) + ' 分钟内有效（至 ' + new Date(c.expiresAt).toLocaleTimeString() + '）';
+    const result = document.createElement('div');
+    result.className = 'result';
+    actions.append(ok, no, meta);
+    card.append(title, summary, impact, actions, result);
+    if (after && after.parentNode === messages) after.after(card); else messages.appendChild(card);
+    messages.scrollTop = messages.scrollHeight;
+    const decide = async (decision) => {
+      ok.disabled = no.disabled = true;
+      try {
+        const res = await fetch('/api/agent/confirmations/' + c.id, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ decision, conversationId })
+        });
+        if (!res.ok) {
+          const p = await problemMessage(res);
+          result.className = 'result err';
+          result.textContent = p.message;
+          // 404 / 409 / 410 是最终结果（不存在、已处理、已过期），按钮保持不可点；其他错误（如商城或网络问题）可以再点
+          if (![404, 409, 410].includes(res.status)) ok.disabled = no.disabled = false;
+          return;
+        }
+        const outcome = await res.json();
+        card.classList.add('done');
+        result.className = 'result' + (outcome.status === 'FAILED' ? ' err' : '');
+        result.textContent = { EXECUTED: '已执行', FAILED: '执行失败', REJECTED: '已取消' }[outcome.status] || outcome.status;
+        addMessage('bot', outcome.message);
+      } catch {
+        result.className = 'result err';
+        result.textContent = '网络异常，请重试';
+        ok.disabled = no.disabled = false;
+      }
+    };
+    ok.addEventListener('click', () => decide('approve'));
+    no.addEventListener('click', () => decide('reject'));
+  }
+
   // 非 2xx 时尽量读出 ProblemDetail 的 detail，读不出就给通用提示
   async function problemMessage(res) {
     try {
@@ -537,7 +666,9 @@
     const sources = body.sources || [];
     sources.forEach(addSource);
     showRag(body.rag, sources);
+    showAgent(body.agent);
     renderCitations(bubble, body.reply, sources);
+    if (body.confirmation) addConfirmCard(body.confirmation, bubble);
     debug({ status: 'done', first: '-', chunks: '1', total: (performance.now() - t0).toFixed(0) + ' ms' });
   }
 
@@ -570,6 +701,10 @@
         showMemory(JSON.parse(data));
       } else if (event === 'tool') {
         addTool(JSON.parse(data));
+      } else if (event === 'step') {
+        addStep(JSON.parse(data));
+      } else if (event === 'confirm') {
+        addConfirmCard(JSON.parse(data), bubble);
       } else if (event === 'source') {
         const src = JSON.parse(data);
         sources.push(src);
@@ -627,6 +762,7 @@
     resetTools();
     resetSources();
     resetMemory();
+    resetSteps();
     const t0 = performance.now();
     try {
       if (streamMode.checked) await askStreaming(text, bubble, t0);

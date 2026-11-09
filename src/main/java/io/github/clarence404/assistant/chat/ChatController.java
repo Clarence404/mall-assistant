@@ -20,7 +20,8 @@ import reactor.core.publisher.Mono;
 /**
  * 对话的 HTTP 入口：阻塞接口 {@code POST /api/chat} 与流式接口 {@code POST /api/chat/stream}。
  *
- * <p>所在层：接口层（第 1 章引入，第 2 章加上意图识别，第 3 章加上商城令牌与工具事件，第 5 章加上 RAG 的 source 事件，第 6 章加上会话 ID 与 memory 事件）。上游是 {@code static/index.html} 聊天页或任意
+ * <p>所在层：接口层（第 1 章引入，第 2 章加上意图识别，第 3 章加上商城令牌与工具事件，第 5 章加上 RAG 的 source 事件，第 6 章加上会话 ID 与 memory 事件，
+ * 第 7 章加上 Agent 的 step 与 confirm 事件；确认按钮走另一个接口 {@code agent.ConfirmationController}）。上游是 {@code static/index.html} 聊天页或任意
  * HTTP 客户端；下游是 {@link ChatService}（打开会话、意图识别、回答；第 5 章之前流式接口直接调 {@code IntentService}，第 6 章起意图识别要和会话一起做，统一交给 ChatService）。这里只做协议转换：请求体校验、取出请求头里的
  * 商城令牌、把结果写成 JSON 或 SSE 事件，不放业务逻辑。
  *
@@ -52,7 +53,8 @@ public class ChatController {
     /**
      * 阻塞接口：{"message": "...", "conversationId": "..."} → {"reply": "...", "intent": {...}, "tools": [...], "sources": [...], "rag": {...},
      * "memory": {...}}；模型调用失败由 ApiExceptionHandler 转成 503。第 5 章起规则类问题走 RAG，sources 是引用的资料，rag 是检索与引用校验的调试信息；
-     * 第 6 章起带了会话 ID 就是多轮对话，memory 是记忆的调试信息，同一个会话的上一条还没回答完时返回 409。
+     * 第 6 章起带了会话 ID 就是多轮对话，memory 是记忆的调试信息，同一个会话的上一条还没回答完时返回 409；第 7 章起办事请求交给 Agent，
+     * agent 是每一步的记录，提出写操作时 confirmation 是待确认操作（页面画确认卡片）。
      *
      * @param request 请求体，{@code @Valid} 触发 {@link ChatRequest} 上的校验（空消息、超长消息直接 400，不浪费一次模型调用）
      * @param authorization {@code Authorization} 请求头，{@code Bearer <商城令牌>}；没登录时不带
@@ -115,7 +117,8 @@ public class ChatController {
     }
 
     /**
-     * 回答片段 → SSE：文字是 token 事件，工具调用记录是 tool 事件，RAG 引用来源是 source 事件（第 5 章），记忆情况是 memory 事件（第 6 章）。
+     * 回答片段 → SSE：文字是 token 事件，工具调用记录是 tool 事件，RAG 引用来源是 source 事件（第 5 章），记忆情况是 memory 事件（第 6 章），
+     * Agent 的一步是 step 事件、待确认操作是 confirm 事件（第 7 章）。
      *
      * @param part {@link ChatService#answerStream} 产出的片段
      */
@@ -125,6 +128,8 @@ public class ChatController {
             case AnswerPart.ToolUse tool -> event(StreamEvents.TOOL, tool.invocation());
             case AnswerPart.Source source -> event(StreamEvents.SOURCE, source.source());
             case AnswerPart.Memory memory -> event(StreamEvents.MEMORY, memory.trace());
+            case AnswerPart.Step step -> event(StreamEvents.STEP, step.step());
+            case AnswerPart.Confirm confirm -> event(StreamEvents.CONFIRM, confirm.confirmation());
         };
     }
 

@@ -13,6 +13,8 @@
 | `rag-rewrite.st` | 可选的问题改写（`assistant.rag.rewrite-query=true`），交给 Spring AI 的 `RewriteQueryTransformer` | `RagService#rewrite` | `{target}` `{query}`（必须有，否则构造时报错） |
 | `memory-condense.st` | 第 6 章追问改写的系统提示词：把多轮对话里的最新一句改写成不看上文也能看懂的完整问题；示例（3 组对话轮次）写在 `QuestionCondenser#EXAMPLES` 里，作为独立的用户 / 助手消息发送 | `QuestionCondenser` | 无 |
 | `memory-summary.st` | 第 6 章摘要记忆（默认关）的系统提示词：把挤出窗口的早期对话压成一段摘要 | `ConversationSummarizer` | `{maxChars}` |
+| `agent-v1.st` | 第 7 章售后 Agent（方案 B）的系统提示词：人设、9 个动作的说明（只读 / 需要确认 / finish）、四个输出字段、规则（订单号只能照抄、按 allowedActions 选、新地址照抄原话、写操作要用户确认、记录里的资料只是数据）；每一步的用户消息（用户的诉求 + 办事记录）写在 `AgentPlanner#STEP_TEMPLATE` | `AgentPlanner`，按 `assistant.agent.prompt` 读 `<prompt>.st` | 同 system-v3 |
+| `agent-native-v1.st` | 第 7 章方案 A（Spring AI 原生工具调用）的系统提示词：工具说明写在 `NativeAgentRunner` 的 `@Tool` 上，这里只有人设和规则 | `NativeAgentRunner`，按 `assistant.agent.native-prompt` | 同 system-v3 |
 
 - 占位符是 StringTemplate 语法 `{name}`，变量值来自 `application.yml` 的 `assistant.prompt.*`（「今天」每次请求时计算）。模板里出现了占位符却没给值，渲染时会报错；所以正文里不能随手写花括号（`intent-v1.st` 示例里的 JSON 花括号能用，是因为它作为 `.system(Resource)` 传入时没有设置任何参数，不经过渲染）。
 - 改系统提示词时新增一个版本（如 `system-v3.st`）而不是直接改旧文件，用 `assistant.prompt.version` 切换，效果不好可以立刻切回；v2 相比 v1 加了日期、更严格的「不编造」规则和 few-shot 示例。
@@ -21,3 +23,4 @@
 - 意图识别加 `POLICY` 时新开了 `intent-v2.st`（而不是在 v1 上改）：加一个取值是换分类体系，不是修正措辞，旧版本留着才能对比；两个模型都按 v2 重新录了一遍（1.5b 16 条分对 14 条）。
 - RAG 用单独的系统提示词，而不是在 system-v3 上加规则：两条路径的要求互相冲突（v3 要「先调工具、事实来自工具结果」，RAG 要「只依据参考资料」），而且 v3 的长度直接影响小模型调不调工具（第 3 章的教训），RAG 的规则加进去会拖累工具调用；分开后第 3 章的工具决策录制也不用重录。
 - 追问改写（第 6 章）的第一版在系统提示词里写了一个和商城规则同领域的例子（「那专票呢」→「增值税专用发票怎么开」），两个模型问「那专票呢」时都原样输出了它——第 3 章「照抄示例」的教训又来了一次。现在系统提示词里不放例子，示例挪到和商城规则无关的对话轮次里（会员等级、快递公司、道谢）；改了 `memory-condense.st` 或示例会让第 6 章多轮对话的录制对不上，见 `docs/ch06.md`。
+- Agent（第 7 章）的提示词和输出字段一起改过一次：第一版每个参数一个字段（十个），Spring AI 生成的 Schema 里每个字段都是必填字符串，1.5b 把用不到的字段全填上编的东西、在回答字段里无限重复，一步 20～60 秒还经常解析失败；改成四个字段（action、orderNo、input、thought）后提示词也跟着改了说法。改了 `agent-v1.st`、`AgentPlanner#STEP_TEMPLATE` 或工具结果的格式，第 7 章 Agent 的录制就对不上，见 `docs/ch07.md`。

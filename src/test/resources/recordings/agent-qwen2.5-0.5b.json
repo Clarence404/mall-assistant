@@ -1,0 +1,79 @@
+{
+  "model" : "qwen2.5:0.5b",
+  "embeddingModel" : "bge-m3",
+  "recordedAt" : "2026-11-09",
+  "cases" : [ {
+    "name" : "取消待支付订单",
+    "message" : "订单 21182516707889029130785 买错了，帮我取消",
+    "intent" : {
+      "intent" : "CHITCHAT",
+      "confidence" : 0.9,
+      "orderNo" : "21182516707889029130785",
+      "skuId" : null
+    },
+    "steps" : [ {
+      "action" : "cancelOrder",
+      "kind" : "REJECTED",
+      "arguments" : "{\"orderNo\":\"21182516707889029130785\"}",
+      "observation" : "没有生成确认：订单 21182516707889029130785 还没有在这次的查询结果里出现过：先用 queryOrder 查一下这笔订单，确认是用户自己的、现在是什么状态"
+    } ],
+    "stopReason" : "TIMEOUT",
+    "proposal" : null,
+    "reply" : "办理超时了（超过 120 秒），没有执行任何操作，请稍后再试。",
+    "elapsedMs" : 354012,
+    "retrievals" : { },
+    "calls" : [ {
+      "promptHash" : "f5c549578ffeb6a3",
+      "output" : "{\"confidence\":0.9,\"intent\":\"CHITCHAT\",\"orderNo\":\"21182516707889029130785\",\"skuId\":\"\"}"
+    }, {
+      "promptHash" : "9e87868a002c0906",
+      "output" : "{\"action\": \"cancelOrder\", \"input\": \"21182516707889029130785\", \"orderNo\": \"21182516707889029130785\", \"thought\": \"用户订单21182516707889029130785已取消。\"}"
+    } ]
+  }, {
+    "name" : "改收货地址",
+    "message" : "订单 21182516707889029130785 收货地址填错了，改成杭州市西湖区文三路 100 号",
+    "intent" : {
+      "intent" : "CHITCHAT",
+      "confidence" : 0.9,
+      "orderNo" : "21182516707889029130785",
+      "skuId" : null
+    },
+    "steps" : [ {
+      "action" : "queryOrder",
+      "kind" : "READ",
+      "arguments" : "{\"orderNo\":\"21182516707889029130785\"}",
+      "observation" : "{\"found\":true,\"orderNo\":\"21182516707889029130785\",\"status\":\"待支付（还没付款，超时未付会自动取消）\",\"statusCode\":\"PENDING_PAYMENT\",\"payAmount\":\"39.90\",\"items\":\"青柚 · 红心柚 2 只装 ×1\",\"receiver\":\"张三 138****0000 杭州市西湖区\",\"createdAt\":\"2026-11-08 09:30\",\"allowedActions\":[\"cancelOrder\",\"changeAddress\"],\"note\":\"用户要办的事如果在 allowedActions 里，下一步直接用它提出（不用再查商品和规则，系统会让用户确认）；不在里面就用 finish 告诉用户办不了\"}"
+    } ],
+    "stopReason" : "TIMEOUT",
+    "proposal" : null,
+    "reply" : "办理超时了（超过 120 秒），没有执行任何操作，请稍后再试。",
+    "elapsedMs" : 298421,
+    "retrievals" : { },
+    "calls" : [ {
+      "promptHash" : "ba017b6fa02e0141",
+      "output" : "{\"confidence\":0.9,\"intent\":\"CHITCHAT\",\"orderNo\":\"21182516707889029130785\",\"skuId\":\"\"}"
+    }, {
+      "promptHash" : "d4590105ce217358",
+      "output" : "{\"action\":\"queryOrder\",\"input\":\"订单号21182516707889029130785\",\"orderNo\":\"21182516707889029130785\",\"thought\":\"用户需要修改收货地址，但订单号没有提供。\"}"
+    } ]
+  }, {
+    "name" : "已发货申请退款",
+    "message" : "订单 21182516707889029140785 东西坏了要退款",
+    "intent" : {
+      "intent" : "OUT_OF_SCOPE",
+      "confidence" : 0.9,
+      "orderNo" : "21182516707889029140785",
+      "skuId" : null
+    },
+    "steps" : [ ],
+    "stopReason" : null,
+    "proposal" : null,
+    "reply" : "抱歉，我是示例商城的客服小示，只能解答购物相关的问题，比如商品、下单、支付、物流、退换货与售后、账户与积分。有这方面的问题随时问我～",
+    "elapsedMs" : 104061,
+    "retrievals" : { },
+    "calls" : [ {
+      "promptHash" : "4e495e698a7d59e2",
+      "output" : "{\"confidence\":0.9,\"intent\":\"OUT_OF_SCOPE\",\"orderNo\":\"21182516707889029140785\",\"skuId\":\"\"}"
+    } ]
+  } ]
+}
