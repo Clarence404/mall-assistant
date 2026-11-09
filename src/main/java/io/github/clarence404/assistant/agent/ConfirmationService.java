@@ -165,9 +165,42 @@ public class ConfirmationService {
      */
     public ConfirmationOutcome decide(
             String id, ConfirmationOutcome.Decision decision, String conversationId, String mallToken) {
-        // TODO ch07-5：owners.resolve 确认是谁；ID、归属、会话对不上抛 CONFIRMATION_NOT_FOUND；拿到 entry.lock 之后：已有结果（同样的决定原样返回、
-        // 相反的抛 CONFIRMATION_ALREADY_DECIDED）、过期抛 CONFIRMATION_EXPIRED、拒绝或 execute；记下结果，remember
-        throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_NOT_FOUND);
+        ConversationOwner owner = owners.resolve(mallToken);
+        Entry entry = entries.get(id);
+        if (entry == null
+                || !entry.ownerKey.equals(owner.key())
+                || !Objects.equals(entry.conversationId, conversationId)) {
+            throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_NOT_FOUND);
+        }
+        entry.lock.lock();
+        try {
+            if (entry.outcome != null) {
+                if (entry.outcome.decision() == decision) {
+                    log.info("确认 {} 重复提交（{}），返回原来的结果", id, decision);
+                    return entry.outcome;
+                }
+                throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_ALREADY_DECIDED);
+            }
+            Instant now = clock.instant();
+            if (!now.isBefore(entry.expiresAt)) {
+                throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_EXPIRED);
+            }
+            ConfirmationOutcome outcome = decision == ConfirmationOutcome.Decision.REJECT
+                    ? new ConfirmationOutcome(
+                            id,
+                            decision,
+                            ConfirmationOutcome.Status.REJECTED,
+                            "好的，没有执行：" + entry.action.summary() + "。订单没有任何变化。",
+                            null,
+                            now)
+                    : execute(entry, owner, mallToken, now);
+            entry.outcome = outcome;
+            log.info("确认 {}：{} → {}", id, decision, outcome.status());
+            remember(entry, outcome, mallToken);
+            return outcome;
+        } finally {
+            entry.lock.unlock();
+        }
     }
 
     /**
@@ -193,9 +226,36 @@ public class ConfirmationService {
      * @return 结果
      */
     ConfirmationOutcome execute(Entry entry, ConversationOwner owner, String token, Instant now) {
-        // TODO ch07-6：cancelOrder / changeAddress 调商城（改地址只传 address），applyAfterSales 交给 applyAfterSales(...)；
-        // 成功时 EXECUTED + 固定话术，商城失败用 failure(...) 翻成 FAILED，不重试
-        return outcome(entry, ConfirmationOutcome.Status.FAILED, "TODO ch07-6", null, now);
+        PendingAction action = entry.action;
+        String orderNo = action.orderNo();
+        return switch (action.tool()) {
+            case CANCEL_ORDER -> {
+                MallResult<MallModels.Order> result = mallApi.cancelOrder(token, orderNo);
+                yield result.isOk()
+                        ? outcome(
+                                entry,
+                                ConfirmationOutcome.Status.EXECUTED,
+                                "已取消订单 " + orderNo + "，订单现在是「" + statusText(result.body()) + "」。这笔没有付款，不涉及退款。",
+                                null,
+                                now)
+                        : outcome(entry, ConfirmationOutcome.Status.FAILED, failure(orderNo, result), null, now);
+            }
+            case CHANGE_ADDRESS -> {
+                Map<String, String> p = action.params();
+                MallResult<MallModels.Order> result = mallApi.changeAddress(
+                        token, orderNo, new MallModels.AddressPatch(null, null, p.get("address")));
+                yield result.isOk()
+                        ? outcome(
+                                entry,
+                                ConfirmationOutcome.Status.EXECUTED,
+                                "已把订单 " + orderNo + " 的收货地址改为：" + p.get("address") + "。",
+                                null,
+                                now)
+                        : outcome(entry, ConfirmationOutcome.Status.FAILED, failure(orderNo, result), null, now);
+            }
+            case APPLY_AFTER_SALES -> applyAfterSales(entry, owner, token, now);
+            default -> throw new IllegalStateException("不是写操作：" + action.tool());
+        };
     }
 
     /** 提交售后申请：执行前再查一次订单，再记一张待人工审核的申请单。 */
@@ -257,7 +317,14 @@ public class ConfirmationService {
      * 单轮对话（没有会话 ID）不写；写失败只记日志，不影响结果。
      */
     private void remember(Entry entry, ConfirmationOutcome outcome, String mallToken) {
-        // TODO ch07-6：有会话 ID 时，把「（点了确认）/（点了取消）+ 说明」和结果作为一轮写回记忆（memory.record），写不进只记日志
+        if (entry.conversationId == null) {
+            return;
+        }
+        String user = (outcome.decision() == ConfirmationOutcome.Decision.APPROVE ? "（点了确认）" : "（点了取消）")
+                + entry.action.summary();
+        if (!memory.record(entry.conversationId, mallToken, user, outcome.message())) {
+            log.info("确认 {} 的结果没能写回会话 {} 的记忆", entry.id, entry.conversationId);
+        }
     }
 
     /** 后台清理：过期超过 {@link #RETENTION} 的确认删掉。 */

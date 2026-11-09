@@ -89,8 +89,70 @@ public class AgentLoop {
      * @throws ModelCallException 某一步调模型失败：整次办事失败，接口返回 503 / error 事件（这时一定没有执行任何写操作）
      */
     public AgentResult run(AgentRun run, BooleanSupplier cancelled) {
-        // TODO ch07-2：每一轮先查三道刹车（步数、总时长、页面关了）；想 → 看懂 → finish / 重复检查 / 只读执行 / 写操作核对后登记待确认并停下（规则见上面的 Javadoc）
-        return stop(run, AgentReplies.stepLimit(properties.maxSteps()), AgentTrace.StopReason.STEP_LIMIT);
+        int repeatedRejections = 0;
+        while (true) {
+            if (run.steps().size() >= properties.maxSteps()) {
+                return stop(run, AgentReplies.stepLimit(properties.maxSteps()), AgentTrace.StopReason.STEP_LIMIT);
+            }
+            if (run.elapsedMs() > properties.timeout().toMillis()) {
+                return stop(run, AgentReplies.timeout(properties.timeout().toSeconds()), AgentTrace.StopReason.TIMEOUT);
+            }
+            if (cancelled.getAsBoolean()) {
+                return stop(run, AgentReplies.cancelled(), AgentTrace.StopReason.CANCELLED);
+            }
+            long start = System.nanoTime();
+            AgentDecision decision = planner.decide(run);
+            AgentAction.Parsed parsed = AgentAction.parse(decision);
+            if (!parsed.valid()) {
+                run.record(step(
+                        run,
+                        parsed.thought(),
+                        decision == null ? null : decision.action(),
+                        AgentStep.Kind.REJECTED,
+                        "{}",
+                        parsed.error(),
+                        start));
+                continue;
+            }
+            AgentAction action = parsed.action();
+            if (action.tool() == AgentTool.FINISH) {
+                String answer = action.argument("answer");
+                run.record(step(run, action, AgentStep.Kind.FINISH, answer, start));
+                return stop(run, AgentReplies.checkFinish(answer), AgentTrace.StopReason.FINISHED);
+            }
+            if (run.calls(action.key()) >= properties.maxSameCalls()) {
+                run.record(step(
+                        run,
+                        action,
+                        AgentStep.Kind.REJECTED,
+                        "这个调用已经做过 " + run.calls(action.key()) + " 次，结果见上面的记录，不会变了；不要再重复，换一步或者用 finish 回答用户",
+                        start));
+                if (++repeatedRejections >= 2) {
+                    return stop(run, AgentReplies.repeated(), AgentTrace.StopReason.REPEATED);
+                }
+                continue;
+            }
+            run.called(action.key());
+            if (action.tool().kind() == AgentTool.Kind.READ) {
+                run.record(step(run, action, AgentStep.Kind.READ, toolbox.read(run, action), start));
+                continue;
+            }
+            WriteActionGuard.Proposal proposal = guard.check(run, action);
+            if (!proposal.accepted()) {
+                run.record(step(run, action, AgentStep.Kind.REJECTED, "没有生成确认：" + proposal.rejection(), start));
+                continue;
+            }
+            PendingConfirmation pending = confirmations.create(
+                    proposal.action(), run.task().owner(), run.task().conversationId());
+            run.record(step(
+                    run,
+                    action,
+                    AgentStep.Kind.PROPOSE,
+                    "已生成待确认操作（" + pending.summary() + "），等用户在页面上点确认，这一轮到此结束",
+                    start));
+            run.propose(pending);
+            return stop(run, AgentReplies.awaitingConfirmation(pending), AgentTrace.StopReason.AWAITING_CONFIRMATION);
+        }
     }
 
     /** 停下：生成结果（调试信息里带上全部步骤）。 */

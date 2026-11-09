@@ -88,16 +88,47 @@ public class AgentToolbox {
      * @throws IllegalArgumentException 传进来的不是只读工具（调用方的 bug）
      */
     public String read(AgentRun run, AgentAction action) {
-        // TODO ch07-3：令牌为 null 时查订单类工具直接返回 NOT_LOGGED_IN、不发请求；按工具分到下面的私有方法（查商品用 mallTools.queryProduct）；结果转 JSON 再
-        // limit
-        return limit("{\"found\":false,\"reason\":\"TODO ch07-3\"}");
+        String token = run.task().mallToken();
+        Object result = switch (action.tool()) {
+            case QUERY_ORDER ->
+                token == null
+                        ? Observations.Order.notFound(action.argument("orderNo"), NOT_LOGGED_IN)
+                        : queryOrder(run, token, action.argument("orderNo"));
+            case LIST_MY_ORDERS ->
+                token == null ? new Observations.OrderList(false, NOT_LOGGED_IN, null, null) : listOrders(run, token);
+            case QUERY_PAYMENT ->
+                token == null
+                        ? new Observations.Payment(false, NOT_LOGGED_IN, action.argument("orderNo"), null, null)
+                        : queryPayment(token, action.argument("orderNo"));
+            case QUERY_PRODUCT -> mallTools.queryProduct(action.argument("skuId"));
+            case SEARCH_POLICY -> searchPolicy(action.argument("query"));
+            default -> throw new IllegalArgumentException("不是只读工具：" + action.tool());
+        };
+        return limit(JSON.writeValueAsString(result));
     }
 
     /** 查一笔订单，并记进这次办事。 */
     private Observations.Order queryOrder(AgentRun run, String token, String orderNo) {
-        // TODO ch07-3：mallApi.getOrder；失败时 notFound(订单号, failure(...))；成功时 run.observe(...) 记下这笔，再转成 Observations.Order
-        // （中文状态、状态码、实付金额、商品摘要、手机号打码的收货信息、下单时间、OrderRules.allowedNames）
-        return Observations.Order.notFound(orderNo, "TODO ch07-3");
+        MallResult<MallModels.Order> result = mallApi.getOrder(token, orderNo);
+        if (!result.isOk()) {
+            return Observations.Order.notFound(orderNo, failure(orderNo, result));
+        }
+        MallModels.Order order = result.body();
+        String status = OrderStatusText.describe(order.status());
+        String items = summarize(order.items());
+        run.observe(new AgentRun.ObservedOrder(order.orderNo(), order.status(), status, items, order.payAmount()));
+        return new Observations.Order(
+                true,
+                null,
+                order.orderNo(),
+                status,
+                order.status(),
+                order.payAmount(),
+                items,
+                receiver(order.receiver()),
+                time(order.createdAt()),
+                OrderRules.allowedNames(order.status()),
+                nextStep(order.status()));
     }
 
     /**

@@ -2,8 +2,11 @@ package io.github.clarence404.assistant.agent;
 
 import io.github.clarence404.assistant.aftersales.AfterSalesApplication;
 import io.github.clarence404.assistant.aftersales.AfterSalesStore;
+import io.github.clarence404.assistant.memory.ConversationOwner;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.stereotype.Component;
@@ -72,9 +75,45 @@ public class WriteActionGuard {
      * @return 通过时带 {@link PendingAction}，不通过时带给模型看的原因
      */
     public Proposal check(AgentRun run, AgentAction action) {
-        // TODO ch07-4：按 Javadoc 的顺序一项项检查（一轮一个、登录、查到过、状态允许、地址、售后不重复），第一项不通过就 Proposal.rejected(原因)；
-        // 全部通过时 Proposal.accepted(describe(...))，售后的 type 按状态定
-        return Proposal.rejected("TODO ch07-4");
+        if (run.confirmation() != null) {
+            return Proposal.rejected("这一轮已经提出了一个待确认操作，等用户确认后再办下一件；现在用 finish 告诉用户去点确认");
+        }
+        AgentTask task = run.task();
+        if (task.mallToken() == null
+                || task.owner() == null
+                || task.owner().kind() == ConversationOwner.Kind.ANONYMOUS) {
+            return Proposal.rejected("用户还没有登录，办不了：用 finish 请用户先在页面右上角登录");
+        }
+        String orderNo = action.argument("orderNo");
+        AgentRun.ObservedOrder order = run.observed(orderNo);
+        if (order == null) {
+            return Proposal.rejected("订单 " + orderNo + " 还没有在这次的查询结果里出现过：先用 queryOrder 查一下这笔订单，确认是用户自己的、现在是什么状态");
+        }
+        if (!OrderRules.allowed(order.status()).contains(action.tool())) {
+            return Proposal.rejected("订单 " + orderNo + " 现在是「" + order.statusText() + "」，不能"
+                    + action.tool().title() + "；这笔订单可以办：" + OrderRules.describe(order.status()));
+        }
+        Map<String, String> params = new LinkedHashMap<>();
+        if (action.tool() == AgentTool.CHANGE_ADDRESS) {
+            String error = checkAddress(task, action, params);
+            if (error != null) {
+                return Proposal.rejected(error);
+            }
+        }
+        if (action.tool() == AgentTool.APPLY_AFTER_SALES) {
+            Optional<AfterSalesApplication> open =
+                    afterSales.findOpen(task.owner().key(), orderNo);
+            if (open.isPresent()) {
+                return Proposal.rejected(
+                        "订单 " + orderNo + " 已经有待审核的售后申请 " + open.get().id() + "，不用重复提交：用 finish 告诉用户");
+            }
+            AfterSalesApplication.Type type = "PENDING_SHIPMENT".equals(order.status())
+                    ? AfterSalesApplication.Type.REFUND_ONLY
+                    : AfterSalesApplication.Type.RETURN_REFUND;
+            params.put("type", type.name());
+            params.put("reason", action.argument("reason"));
+        }
+        return Proposal.accepted(describe(action.tool(), order, params));
     }
 
     /** 新地址：长度按商城的规则，来源必须是用户的原话。 */

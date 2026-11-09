@@ -91,8 +91,68 @@ public record AgentAction(AgentTool tool, Map<String, String> arguments, String 
      * @return 解析结果：要么是动作，要么是给模型看的错误原因
      */
     public static Parsed parse(AgentDecision decision) {
-        // TODO ch07-1：decision 为 null、认不出工具时无效；每个值先 clean；按工具检查必填参数，把通用的 input 按工具起名字放进参数（规则见上面的 Javadoc）
-        return Parsed.invalid(decision == null ? null : decision.thought(), "TODO ch07-1");
+        if (decision == null) {
+            return Parsed.invalid(null, "这一步的输出看不懂（不是约定的 JSON），请按格式重新输出下一步");
+        }
+        String thought = truncate(clean(decision.thought()), MAX_THOUGHT_CHARS);
+        AgentTool tool = AgentTool.from(clean(decision.action()));
+        if (tool == null) {
+            return Parsed.invalid(thought, "没有叫「" + decision.action() + "」的工具，action 只能是：" + AgentTool.names());
+        }
+        Map<String, String> args = new LinkedHashMap<>();
+        String error = switch (tool) {
+            case LIST_MY_ORDERS -> null;
+            case QUERY_ORDER, QUERY_PAYMENT, CANCEL_ORDER -> orderNo(decision, args);
+            case QUERY_PRODUCT -> {
+                String sku = clean(decision.input());
+                if (sku == null || !SKU_ID.matcher(sku).matches()) {
+                    yield "queryProduct 需要 input：商品编号，一串数字，照抄用户的话；办售后不用查商品，要查售后规则用 searchPolicy";
+                }
+                args.put("skuId", sku);
+                yield null;
+            }
+            case SEARCH_POLICY -> {
+                String query = clean(decision.input());
+                if (query == null) {
+                    yield "searchPolicy 需要 input：要查的规则，一句话";
+                }
+                args.put("query", truncate(query, MAX_QUERY_CHARS));
+                yield null;
+            }
+            case CHANGE_ADDRESS -> {
+                String orderError = orderNo(decision, args);
+                if (orderError != null) {
+                    yield orderError;
+                }
+                String address = clean(decision.input());
+                if (address == null) {
+                    yield "changeAddress 需要 input：新的详细地址，照抄用户的原话";
+                }
+                args.put("address", address);
+                yield null;
+            }
+            case APPLY_AFTER_SALES -> {
+                String orderError = orderNo(decision, args);
+                if (orderError != null) {
+                    yield orderError;
+                }
+                String reason = clean(decision.input());
+                if (reason == null) {
+                    yield "applyAfterSales 需要 input：用户说的售后原因";
+                }
+                args.put("reason", truncate(reason, MAX_REASON_CHARS));
+                yield null;
+            }
+            case FINISH -> {
+                String answer = clean(decision.input());
+                if (answer == null) {
+                    yield "finish 需要 input：给用户的回答";
+                }
+                args.put("answer", truncate(answer, MAX_ANSWER_CHARS));
+                yield null;
+            }
+        };
+        return error != null ? Parsed.invalid(thought, error) : Parsed.ok(new AgentAction(tool, args, thought));
     }
 
     /** 订单号：去掉中间的空格后校验格式，放进参数；不对时返回原因。 */

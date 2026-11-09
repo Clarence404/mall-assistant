@@ -437,11 +437,19 @@ public class ChatService {
      * @return Agent 的步骤、待确认操作与回答
      */
     Flux<AnswerPart> agentStream(ChatTurn turn, Conversation conversation) {
-        // TODO ch07-8：用 Flux.create 把 Agent 的每一步（Step）、待确认操作（Confirm）边走边推出去，最后推回答；在 boundedElastic 上跑，页面关了告诉 Agent 停。
-        // 现在只是阻塞地办完、推一段回答，页面看不到步骤和确认卡片
-        return Flux.defer(() ->
-                Flux.just(new AnswerPart.Text(agentAnswer(turn.message(), turn.intent(), turn.mallToken(), conversation)
-                        .reply())));
+        return Flux.<AnswerPart>create(sink -> {
+                    AgentResult result = agent.run(
+                            turn.message(),
+                            conversation.history(),
+                            turn.mallToken(),
+                            conversation.conversationId(),
+                            event -> sink.next(toPart(event)),
+                            sink::isCancelled);
+                    sink.next(new AnswerPart.Text(result.reply()));
+                    sink.complete();
+                })
+                .subscribeOn(Schedulers.boundedElastic())
+                .onErrorMap(ModelCallException::from);
     }
 
     /** Agent 的事件 → 流式片段。 */

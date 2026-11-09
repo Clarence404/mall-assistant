@@ -86,8 +86,21 @@ public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable
      * @return 可以用的 JdbcTemplate
      */
     JdbcTemplate jdbc() {
-        // TODO ch07-7：双重检查（volatile 字段 + synchronized）；initialize-schema 时逐条执行 SCHEMA；创建 JdbcTemplate 并缓存；失败直接抛、不缓存
-        throw new UnsupportedOperationException("TODO ch07-7");
+        JdbcTemplate current = jdbc;
+        if (current != null) {
+            return current;
+        }
+        synchronized (this) {
+            if (jdbc == null) {
+                JdbcTemplate template = new JdbcTemplate(dataSource);
+                if (initializeSchema) {
+                    SCHEMA.forEach(template::execute);
+                }
+                jdbc = template;
+                log.info("售后申请单库已就绪：PostgreSQL 表 after_sales_application");
+            }
+            return jdbc;
+        }
     }
 
     /**
@@ -98,8 +111,23 @@ public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable
      */
     @Override
     public AfterSalesApplication create(AfterSalesApplication a) {
-        // TODO ch07-7：INSERT ... ON CONFLICT (confirmation_id) DO NOTHING，再按 confirmation_id 查回来（可能是之前那张）
-        throw new UnsupportedOperationException("TODO ch07-7");
+        JdbcTemplate template = jdbc();
+        template.update(
+                "INSERT INTO after_sales_application (" + COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                        + " ON CONFLICT (confirmation_id) DO NOTHING",
+                a.id(),
+                a.ownerKey(),
+                a.orderNo(),
+                a.type().name(),
+                a.reason(),
+                a.status().name(),
+                a.confirmationId(),
+                Timestamp.from(a.createdAt()));
+        return template.query(
+                        "SELECT " + COLUMNS + " FROM after_sales_application WHERE confirmation_id = ?",
+                        JdbcAfterSalesStore::map,
+                        a.confirmationId())
+                .getFirst();
     }
 
     /**
