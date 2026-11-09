@@ -3,6 +3,7 @@ target/
 
 # IDE：.idea/ 不入库；.run/ 是共享的运行配置，要入库
 .idea/
+.openidea/
 *.iml
 .vscode/
 .classpath
