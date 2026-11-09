@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PgVectorConfig.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">PgVectorConfig.java</span></div><h1>PgVectorConfig.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
+import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgDistanceType;
+import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgIdType;
+import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgIndexType;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+/**
+ * pgvector 向量库的装配：自己建连接池和 {@link PgVectorStore}，只在 {@code assistant.knowledge.store=pgvector} 时生效（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：知识库的配置。产出 {@link PgVectorKnowledgeStore}（{@link KnowledgeStore} 的实现）。
+ *
+ * &lt;p&gt;为什么不用 {@code spring-ai-starter-vector-store-pgvector}：Starter 依赖 Spring Boot 的 JDBC 自动配置，类路径上一有它，应用启动就要求
+ * 配好 {@code spring.datasource.*}，默认的 memory 模式（不装数据库）也会因为没有数据源而起不来。这里只引入不带自动配置的
+ * {@code spring-ai-pgvector-store}，在选了 pgvector 时才自己建数据源，其余时候类路径上有这些类也不会生效。
+ *
+ * &lt;p&gt;数据库要求：PostgreSQL 装了 pgvector 扩展（Docker 镜像 {@code pgvector/pgvector:0.8.1-pg17} 自带）。{@code initialize-schema=true}
+ * 时 PgVectorStore 会执行 {@code CREATE EXTENSION IF NOT EXISTS vector / hstore / &quot;uuid-ossp&quot;}，用户要有建扩展的权限（镜像里用
+ * {@code POSTGRES_USER} 建的用户是超级用户，没问题）。
+ */
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnProperty(name = &quot;assistant.knowledge.store&quot;, havingValue = &quot;pgvector&quot;)
+<span class="fc" id="L29">public class PgVectorConfig {</span>
+
+    /** 自动生成的表名前缀，后面接模型后缀，如 {@code knowledge_chunk_bge_m3}。 */
+    static final String TABLE_PREFIX = &quot;knowledge_chunk_&quot;;
+
+    /**
+     * 知识库专用的连接池（HikariCP，和 Spring Boot 默认用的是同一个连接池）。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;url / username / password / 最大连接数取自 {@code assistant.knowledge.pgvector.*}，连接池名 {@code knowledge-pgvector}
+     *   &lt;li&gt;连接超时 3 秒：数据库没启动时快速失败，接口返回 VECTOR_STORE_UNAVAILABLE，而不是卡 30 秒（Hikari 默认）
+     *   &lt;li&gt;{@code initializationFailTimeout = -1}：&lt;b&gt;启动时不连数据库&lt;/b&gt;。Hikari 默认在创建连接池时就连一次，连不上直接抛异常，
+     *       数据库没启动整个应用就起不来；设成 -1 后第一次真正用到时才连，对话照常可用
+     *   &lt;li&gt;{@code minimumIdle = 0}：不常驻空闲连接，入库和检索都是偶尔调用
+     * &lt;/ul&gt;
+     *
+     * @param properties 知识库配置
+     * @return 连接池；应用关闭时由 Spring 调用 {@code close()} 关掉
+     */
+    @Bean(destroyMethod = &quot;close&quot;)
+    public HikariDataSource knowledgeDataSource(KnowledgeProperties properties) {
+<span class="fc" id="L52">        KnowledgeProperties.PgVector pg = properties.pgvector();</span>
+<span class="fc" id="L53">        HikariConfig config = new HikariConfig();</span>
+<span class="fc" id="L54">        config.setPoolName(&quot;knowledge-pgvector&quot;);</span>
+<span class="fc" id="L55">        config.setJdbcUrl(pg.url());</span>
+<span class="fc" id="L56">        config.setUsername(pg.username());</span>
+<span class="fc" id="L57">        config.setPassword(pg.password());</span>
+<span class="fc" id="L58">        config.setMaximumPoolSize(pg.maxPoolSize());</span>
+<span class="fc" id="L59">        config.setMinimumIdle(0);</span>
+<span class="fc" id="L60">        config.setConnectionTimeout(3_000);</span>
+<span class="fc" id="L61">        config.setInitializationFailTimeout(-1);</span>
+<span class="fc" id="L62">        return new HikariDataSource(config);</span>
+    }
+
+    /**
+     * pgvector 知识库：表名按模型生成，PgVectorStore 在第一次用到时才由 {@link #createStore} 创建。
+     *
+     * @param dataSource 上面的连接池
+     * @param embedding 当前向量模型
+     * @param properties 知识库配置
+     * @return 知识库存储
+     */
+    @Bean
+    public PgVectorKnowledgeStore pgVectorKnowledgeStore(
+            HikariDataSource dataSource, KnowledgeEmbedding embedding, KnowledgeProperties properties) {
+<span class="fc" id="L76">        JdbcTemplate jdbc = new JdbcTemplate(dataSource);</span>
+<span class="fc" id="L77">        KnowledgeProperties.PgVector pg = properties.pgvector();</span>
+<span class="fc" id="L78">        String table = tableName(pg, embedding);</span>
+<span class="fc" id="L79">        return new PgVectorKnowledgeStore(</span>
+<span class="fc" id="L80">                jdbc, pg.schema(), table, embedding, dimensions -&gt; createStore(jdbc, embedding, pg, table, dimensions));</span>
+    }
+
+    /**
+     * 表名：配置了 {@code assistant.knowledge.pgvector.table} 就用它，否则 {@code knowledge_chunk_&lt;模型后缀&gt;}。
+     *
+     * @param pg pgvector 配置
+     * @param embedding 当前向量模型
+     * @return 表名
+     */
+    static String tableName(KnowledgeProperties.PgVector pg, KnowledgeEmbedding embedding) {
+<span class="pc bpc" id="L91" title="1 of 4 branches missed.">        return pg.table() == null || pg.table().isBlank()</span>
+<span class="fc" id="L92">                ? TABLE_PREFIX + embedding.storeSuffix()</span>
+<span class="fc" id="L93">                : pg.table().strip();</span>
+    }
+
+    /**
+     * 创建并初始化 PgVectorStore。
+     *
+     * &lt;p&gt;要求（测试按这个写），用 {@code PgVectorStore.builder(jdbc, embedding.model())}：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;{@code schemaName} / {@code vectorTableName}：传进来的 schema 与表名（默认表名是 {@code vector_store}，所有模型挤一张表）
+     *   &lt;li&gt;{@code dimensions}：传进来的维度。不传时 PgVectorStore 会自己调模型探测，失败就悄悄按 1536 建表
+     *   &lt;li&gt;{@code distanceType(COSINE_DISTANCE)}：&lt;b&gt;余弦距离&lt;/b&gt;（pgvector 运算符 {@code &lt;=&gt;}）= 1 − 余弦相似度，只看方向不看长度，
+     *       文本向量最常用；检索结果的 score 由 PgVectorStore 换算成 1 − 距离，和内存版的余弦相似度口径一致
+     *   &lt;li&gt;{@code indexType(HNSW)}：&lt;b&gt;HNSW&lt;/b&gt;（分层可导航小世界图）是近似最近邻索引：把向量连成多层的「邻居图」，检索时从顶层
+     *       粗跳到底层细找，不用和每一行都算一遍距离，百万行也是毫秒级；代价是建索引慢、占内存，结果是「近似」最近（召回率通常 95% 以上）。
+     *       另一个选项 IVFFLAT 建得快但查得慢，而且要先有数据再建索引才准
+     *   &lt;li&gt;{@code idType(UUID)}：id 列用 uuid 类型，和 {@link ChunkDocumentFactory} 生成的确定性 UUID 对应
+     *   &lt;li&gt;{@code initializeSchema}：取配置。true 时建扩展、建表、建索引（都带 IF NOT EXISTS，已存在不动）
+     * &lt;/ul&gt;
+     *
+     * 最后调 {@code afterPropertiesSet()}：PgVectorStore 是在这个方法里建表的，它不是 Spring Bean，没人替我们调。
+     *
+     * @param jdbc JdbcTemplate
+     * @param embedding 当前向量模型（用包好前缀的 {@code embedding.model()}）
+     * @param pg pgvector 配置
+     * @param table 表名
+     * @param dimensions 向量维度
+     * @return 已初始化的 PgVectorStore
+     */
+    static PgVectorStore createStore(
+            JdbcTemplate jdbc,
+            KnowledgeEmbedding embedding,
+            KnowledgeProperties.PgVector pg,
+            String table,
+            int dimensions) {
+<span class="fc" id="L128">        PgVectorStore store = PgVectorStore.builder(jdbc, embedding.model())</span>
+<span class="fc" id="L129">                .schemaName(pg.schema())</span>
+<span class="fc" id="L130">                .vectorTableName(table)</span>
+<span class="fc" id="L131">                .dimensions(dimensions)</span>
+<span class="fc" id="L132">                .distanceType(PgDistanceType.COSINE_DISTANCE)</span>
+<span class="fc" id="L133">                .indexType(PgIndexType.HNSW)</span>
+<span class="fc" id="L134">                .idType(PgIdType.UUID)</span>
+<span class="fc" id="L135">                .initializeSchema(pg.initializeSchema())</span>
+<span class="fc" id="L136">                .build();</span>
+<span class="fc" id="L137">        store.afterPropertiesSet();</span>
+<span class="fc" id="L138">        return store;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

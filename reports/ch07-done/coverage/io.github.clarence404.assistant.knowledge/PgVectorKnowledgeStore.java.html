@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PgVectorKnowledgeStore.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">PgVectorKnowledgeStore.java</span></div><h1>PgVectorKnowledgeStore.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.util.List;
+import java.util.Map;
+import java.util.function.IntFunction;
+import java.util.regex.Pattern;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * pgvector 向量库：PostgreSQL 的一张表，每行一块（id、content 文字、metadata 元数据、embedding 向量），带 HNSW 索引（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：知识库的存储层，{@link KnowledgeStore} 的 pgvector 实现。由 {@link PgVectorConfig} 在 {@code store=pgvector} 时创建；
+ * 真正的 {@link PgVectorStore} 由传进来的工厂函数在第一次用到时创建（要先知道维度）。
+ *
+ * &lt;p&gt;为什么懒创建：PgVectorStore 初始化时要建表 {@code embedding vector(维度)}，维度要调向量模型探测。Spring AI 2.0.2 的 PgVectorStore
+ * 在探测失败时&lt;b&gt;不报错&lt;/b&gt;，而是打一行警告、按 OpenAI 的 1536 维建表——模型临时连不上，就会建出一张维度错误的表。所以这里自己先探测
+ * 维度，失败就报 EMBEDDING_UNAVAILABLE，成功了再把维度明确传给 PgVectorStore，并且不在启动时做这件事。
+ *
+ * &lt;p&gt;表名按模型区分（{@code knowledge_chunk_bge_m3}、{@code knowledge_chunk_nomic_embed_text}），换模型各用各的表。手动把表名指到了
+ * 一张别的模型建的表时，建表前会读出已有表的维度，对不上就报 INDEX_MODEL_MISMATCH。
+ *
+ * &lt;p&gt;只读写自己这一张表（和它的索引），不碰库里的其他表。
+ */
+public class PgVectorKnowledgeStore implements KnowledgeStore {
+
+    /** 表名只允许小写字母、数字、下划线，以字母或下划线开头，最长 57 个字符（加上 PgVectorStore 自动拼的 {@code _index} 不超过 63）。 */
+<span class="fc" id="L33">    static final Pattern SAFE_NAME = Pattern.compile(&quot;[a-z_][a-z0-9_]{0,56}&quot;);</span>
+
+<span class="fc" id="L35">    private static final JsonMapper JSON = JsonMapper.builder().build();</span>
+<span class="fc" id="L36">    private static final TypeReference&lt;Map&lt;String, Object&gt;&gt; METADATA = new TypeReference&lt;&gt;() {};</span>
+
+    private final JdbcTemplate jdbc;
+    private final String schema;
+    private final String table;
+    private final KnowledgeEmbedding embedding;
+    private final IntFunction&lt;PgVectorStore&gt; storeFactory;
+    private volatile PgVectorStore store;
+
+    /**
+     * 创建。
+     *
+     * @param jdbc 连到知识库数据库的 JdbcTemplate
+     * @param schema schema 名
+     * @param table 表名
+     * @param embedding 当前向量模型
+     * @param storeFactory 按维度创建（并初始化）PgVectorStore 的函数，见 {@link PgVectorConfig#createStore}
+     * @throws IllegalArgumentException schema 或表名含有不安全的字符（它们会被拼进 SQL）
+     */
+    public PgVectorKnowledgeStore(
+            JdbcTemplate jdbc,
+            String schema,
+            String table,
+            KnowledgeEmbedding embedding,
+<span class="fc" id="L60">            IntFunction&lt;PgVectorStore&gt; storeFactory) {</span>
+<span class="pc bpc" id="L61" title="2 of 4 branches missed.">        if (!SAFE_NAME.matcher(schema).matches() || !SAFE_NAME.matcher(table).matches()) {</span>
+<span class="nc" id="L62">            throw new IllegalArgumentException(&quot;pgvector 的 schema / 表名只能用小写字母、数字和下划线：&quot; + schema + &quot;.&quot; + table);</span>
+        }
+<span class="fc" id="L64">        this.jdbc = jdbc;</span>
+<span class="fc" id="L65">        this.schema = schema;</span>
+<span class="fc" id="L66">        this.table = table;</span>
+<span class="fc" id="L67">        this.embedding = embedding;</span>
+<span class="fc" id="L68">        this.storeFactory = storeFactory;</span>
+<span class="fc" id="L69">    }</span>
+
+    @Override
+    public String type() {
+<span class="fc" id="L73">        return &quot;pgvector&quot;;</span>
+    }
+
+    @Override
+    public String location() {
+<span class="fc" id="L78">        return schema + &quot;.&quot; + table;</span>
+    }
+
+    /** 表名（测试与日志用）。 */
+    public String table() {
+<span class="fc" id="L83">        return table;</span>
+    }
+
+    @Override
+    public synchronized VectorStore vectorStore() {
+<span class="fc bfc" id="L88" title="All 2 branches covered.">        if (store == null) {</span>
+<span class="fc" id="L89">            int dimensions = embedding.dimensions();</span>
+<span class="fc" id="L90">            Integer existing = existingDimensions();</span>
+<span class="pc bpc" id="L91" title="1 of 4 branches missed.">            if (existing != null &amp;&amp; existing != dimensions) {</span>
+<span class="fc" id="L92">                throw new KnowledgeException(</span>
+                        KnowledgeFailure.INDEX_MODEL_MISMATCH,
+<span class="fc" id="L94">                        &quot;表 &quot; + location() + &quot; 的向量列是 &quot; + existing + &quot; 维，当前向量模型 &quot; + embedding.modelName() + &quot; 输出 &quot;</span>
+                                + dimensions + &quot; 维：不同模型的向量不能存进同一张表，请换表名或重建&quot;
+                                + &quot;（POST /api/knowledge/ingest?rebuild=true 会删表重建）。&quot;,
+                        null);
+            }
+            try {
+<span class="fc" id="L100">                store = storeFactory.apply(dimensions);</span>
+<span class="nc" id="L101">            } catch (RuntimeException e) {</span>
+<span class="nc" id="L102">                throw KnowledgeException.classify(e, embedding.modelName(), location());</span>
+<span class="fc" id="L103">            }</span>
+        }
+<span class="fc" id="L105">        return store;</span>
+    }
+
+    /**
+     * 按 source 汇总：metadata 列是 json 类型，{@code -&gt;&gt;} 取出字段的文字值。表还没建时返回空列表，不触发建表（也就不用探测维度）。
+     */
+    @Override
+    public List&lt;StoredDocument&gt; documents() {
+        try {
+<span class="fc bfc" id="L114" title="All 2 branches covered.">            if (!tableExists()) {</span>
+<span class="fc" id="L115">                return List.of();</span>
+            }
+<span class="fc" id="L117">            List&lt;Map&lt;String, Object&gt;&gt; metadata = jdbc.query(</span>
+                    &quot;SELECT metadata-&gt;&gt;'source' AS source, metadata-&gt;&gt;'title' AS title,&quot;
+                            + &quot; metadata-&gt;&gt;'docVersion' AS doc_version, metadata-&gt;&gt;'docHash' AS doc_hash,&quot;
+<span class="fc" id="L120">                            + &quot; metadata-&gt;&gt;'embeddingModel' AS embedding_model FROM &quot; + location(),</span>
+<span class="fc" id="L121">                    (rs, i) -&gt; Map.of(</span>
+<span class="fc" id="L122">                            ChunkMetadata.SOURCE, nullToEmpty(rs.getString(&quot;source&quot;)),</span>
+<span class="fc" id="L123">                            ChunkMetadata.TITLE, nullToEmpty(rs.getString(&quot;title&quot;)),</span>
+<span class="fc" id="L124">                            ChunkMetadata.DOC_VERSION, nullToEmpty(rs.getString(&quot;doc_version&quot;)),</span>
+<span class="fc" id="L125">                            ChunkMetadata.DOC_HASH, nullToEmpty(rs.getString(&quot;doc_hash&quot;)),</span>
+<span class="fc" id="L126">                            ChunkMetadata.EMBEDDING_MODEL, nullToEmpty(rs.getString(&quot;embedding_model&quot;))));</span>
+<span class="fc" id="L127">            return StoredDocument.summarize(metadata);</span>
+<span class="nc" id="L128">        } catch (DataAccessException e) {</span>
+<span class="nc" id="L129">            throw KnowledgeException.classify(e, embedding.modelName(), location());</span>
+        }
+    }
+
+    /**
+     * 全部块（第 5 章关键词检索用）：只查 id、content、metadata 三列，不取向量列（一行 1024 个浮点数，用不上又占内存）。
+     * metadata 是 json 列，转成文字后用 Jackson 解析成 Map。表还没建时返回空列表。
+     */
+    @Override
+    public List&lt;Document&gt; chunks() {
+        try {
+<span class="pc bpc" id="L140" title="1 of 2 branches missed.">            if (!tableExists()) {</span>
+<span class="nc" id="L141">                return List.of();</span>
+            }
+<span class="fc" id="L143">            List&lt;Document&gt; chunks = jdbc.query(</span>
+<span class="fc" id="L144">                    &quot;SELECT id::text AS id, content, metadata::text AS metadata FROM &quot; + location(),</span>
+<span class="fc" id="L145">                    (rs, i) -&gt; Document.builder()</span>
+<span class="fc" id="L146">                            .id(rs.getString(&quot;id&quot;))</span>
+<span class="fc" id="L147">                            .text(nullToEmpty(rs.getString(&quot;content&quot;)))</span>
+<span class="fc" id="L148">                            .metadata(JSON.readValue(rs.getString(&quot;metadata&quot;), METADATA))</span>
+<span class="fc" id="L149">                            .build());</span>
+<span class="fc" id="L150">            return chunks.stream().sorted(MemoryKnowledgeStore.CHUNK_ORDER).toList();</span>
+<span class="nc" id="L151">        } catch (DataAccessException e) {</span>
+<span class="nc" id="L152">            throw KnowledgeException.classify(e, embedding.modelName(), location());</span>
+        }
+    }
+
+    /** 每次写入都已经提交到数据库，不需要额外持久化。 */
+    @Override
+    public void persist() {
+        // 无事可做
+<span class="fc" id="L160">    }</span>
+
+    /** 删表（索引随表一起删除），下次 {@link #vectorStore()} 时按当前模型的维度重新建。 */
+    @Override
+    public synchronized void reset() {
+        try {
+<span class="fc" id="L166">            jdbc.execute(&quot;DROP TABLE IF EXISTS &quot; + location());</span>
+<span class="fc" id="L167">            store = null;</span>
+<span class="nc" id="L168">        } catch (DataAccessException e) {</span>
+<span class="nc" id="L169">            throw KnowledgeException.classify(e, embedding.modelName(), location());</span>
+<span class="fc" id="L170">        }</span>
+<span class="fc" id="L171">    }</span>
+
+    /** {@code to_regclass} 在表不存在时返回 NULL，不会报错。 */
+    private boolean tableExists() {
+<span class="fc" id="L175">        return jdbc.queryForObject(&quot;SELECT to_regclass(?) IS NOT NULL&quot;, Boolean.class, location());</span>
+    }
+
+    /**
+     * 已有表的向量维度：pgvector 把 {@code vector(1024)} 的 1024 存在列的类型修饰符 atttypmod 里。
+     *
+     * @return 维度；表不存在时为 null
+     */
+    Integer existingDimensions() {
+        try {
+<span class="fc bfc" id="L185" title="All 2 branches covered.">            if (!tableExists()) {</span>
+<span class="fc" id="L186">                return null;</span>
+            }
+<span class="fc" id="L188">            List&lt;Integer&gt; dims = jdbc.queryForList(</span>
+                    &quot;SELECT atttypmod FROM pg_attribute WHERE attrelid = to_regclass(?) AND attname = 'embedding'&quot;,
+                    Integer.class,
+<span class="fc" id="L191">                    location());</span>
+<span class="pc bpc" id="L192" title="2 of 4 branches missed.">            return dims.isEmpty() || dims.getFirst() &lt;= 0 ? null : dims.getFirst();</span>
+<span class="nc" id="L193">        } catch (DataAccessException e) {</span>
+<span class="nc" id="L194">            throw KnowledgeException.classify(e, embedding.modelName(), location());</span>
+        }
+    }
+
+    private static String nullToEmpty(String value) {
+<span class="pc bpc" id="L199" title="1 of 2 branches missed.">        return value == null ? &quot;&quot; : value;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,262 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CliChatModel.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.cli</a> &gt; <span class="el_source">CliChatModel.java</span></div><h1>CliChatModel.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.cli;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.StructuredOutputChatOptions;
+import reactor.core.publisher.Flux;
+
+/**
+ * 把本机已安装、已登录的 AI 编程命令行工具（Claude Code / Codex CLI）当作对话模型：每次调用起一个进程，内容走 stdin，结果从 stdout 解析。
+ *
+ * &lt;p&gt;只当纯文本模型用：工具、MCP、本地设置与会话持久化都关掉，工作目录是每次新建的空临时目录（具体参数见各 {@link CliDialect}）。
+ *
+ * &lt;p&gt;结构化输出：默认声明支持原生结构化输出（选项是 {@link StructuredOutputChatOptions}），{@code entity(..., useProviderStructuredOutput())}
+ * 时 Spring AI 把 JSON Schema 放进 {@code outputSchema} 选项，这里转成 claude 的 {@code --json-schema} / codex 的
+ * {@code --output-schema}；{@code assistant.cli.native-structured-output=false} 时退回到把格式说明拼进用户消息。
+ *
+ * &lt;p&gt;温度等采样参数命令行工具不支持，忽略；模型名取请求选项里的 model，没有就用 {@code assistant.cli.model}。
+ *
+ * &lt;p&gt;架构层：命令行模型。不属于某一章的练习，是第 2 章之后加的可选扩展（{@code claude-cli} / {@code codex-cli} profile 才启用）。
+ *
+ * &lt;p&gt;ChatModel 是什么：Spring AI 对「一个能对话的模型」的抽象，核心就两个方法——{@link #call(Prompt)} 阻塞地拿到完整回答，
+ * {@link #stream(Prompt)} 以 {@code Flux} 逐段拿到回答。OllamaChatModel、OpenAiChatModel 都是它的实现，内部发 HTTP 请求；
+ * 这个类也实现它，只是内部改成起一个本机进程。业务代码用的 {@code ChatClient} 只认 ChatModel 接口，所以换成这里不用改任何业务代码。
+ *
+ * &lt;p&gt;上游：{@code ChatClient}（{@code ChatClientConfig} 构建，{@code ChatService} / {@code IntentService} 使用），由 {@link CliModelConfig}
+ * 注册为 Bean。下游：{@link CliCommandResolver}（找到可执行程序）、{@link CliWorkspace}（临时目录）、{@link CliDialect}（参数与解析）、
+ * {@link CliProcessRunner}（起进程、超时）。
+ *
+ * &lt;p&gt;失败：抛 {@link CliExecutionException} / {@link CliTimeoutException}，由上层统一转成 {@code ModelCallException}。这里没有自动重试：
+ * {@code spring.ai.retry} 是 OpenAI / Ollama 等厂商实现自己用的，自定义的 ChatModel 不会被它包一层。
+ */
+public class CliChatModel implements ChatModel {
+
+<span class="fc" id="L49">    private static final Logger log = LoggerFactory.getLogger(CliChatModel.class);</span>
+
+    private final CliProperties properties;
+    private final CliDialect dialect;
+    private final CliProcessRunner runner;
+    private volatile List&lt;String&gt; resolvedCommand;
+
+    /**
+     * 生产用构造器：按 {@code assistant.cli.flavor} 选方言，用配置的环境变量和超时创建进程执行器。
+     *
+     * @param properties {@code assistant.cli.*} 配置
+     * @throws NullPointerException 没有配置 flavor
+     */
+    public CliChatModel(CliProperties properties) {
+<span class="fc" id="L63">        this(</span>
+                properties,
+<span class="fc" id="L65">                Objects.requireNonNull(properties.flavor(), &quot;assistant.cli.flavor&quot;)</span>
+<span class="fc" id="L66">                        .dialect(),</span>
+<span class="fc" id="L67">                new CliProcessRunner(properties.env(), properties.timeout()));</span>
+<span class="fc" id="L68">    }</span>
+
+    /** 测试用构造器：可以换成别的方言或执行器。 */
+<span class="fc" id="L71">    CliChatModel(CliProperties properties, CliDialect dialect, CliProcessRunner runner) {</span>
+<span class="fc" id="L72">        this.properties = properties;</span>
+<span class="fc" id="L73">        this.dialect = dialect;</span>
+<span class="fc" id="L74">        this.runner = runner;</span>
+<span class="fc" id="L75">    }</span>
+
+    /**
+     * 这个模型的默认选项：Spring AI 会把它和每次请求带的选项（如意图识别设的温度）合并后放进 {@link Prompt}。
+     *
+     * &lt;p&gt;选项的&lt;b&gt;类型&lt;/b&gt;决定结构化输出走哪条路：返回 {@link StructuredOutputChatOptions} 表示「我能原生处理 JSON Schema」，
+     * {@code entity(..., spec -&gt; spec.useProviderStructuredOutput())} 时 Spring AI 就把 Schema 放进 {@code outputSchema} 选项交给这里，
+     * {@link #toRequest} 再取出来交给工具（claude 的 {@code --json-schema}、codex 的 {@code --output-schema}），工具保证输出符合 Schema；
+     * 配置 {@code native-structured-output=false} 时返回普通 {@link ChatOptions}，Spring AI 改为在用户消息末尾追加一段「请按这个
+     * JSON Schema 输出」的格式说明，能不能做到全靠模型自觉，解析失败时由意图识别的重试与兜底处理。
+     *
+     * @return 带默认模型名的选项
+     */
+    @Override
+    public ChatOptions getOptions() {
+<span class="fc bfc" id="L90" title="All 2 branches covered.">        return properties.nativeStructuredOutput()</span>
+<span class="fc" id="L91">                ? StructuredOutputChatOptions.builder()</span>
+<span class="fc" id="L92">                        .model(properties.model())</span>
+<span class="fc" id="L93">                        .build()</span>
+<span class="fc" id="L94">                : ChatOptions.builder().model(properties.model()).build();</span>
+    }
+
+    /** 工具输出里带模型名就用它；没带时用配置的模型；都没有说明用的是工具自己的默认模型（codex 的 JSON 事件不含模型名）。 */
+    private String modelForLog(CliReply reply, CliRequest request) {
+<span class="fc bfc" id="L99" title="All 2 branches covered.">        if (reply.model() != null) {</span>
+<span class="fc" id="L100">            return reply.model();</span>
+        }
+<span class="pc bpc" id="L102" title="2 of 4 branches missed.">        if (request.model() != null &amp;&amp; !request.model().isBlank()) {</span>
+<span class="fc" id="L103">            return request.model();</span>
+        }
+<span class="nc" id="L105">        return dialect.name() + &quot; 默认模型&quot;;</span>
+    }
+
+    /**
+     * 阻塞调用：起一个进程，等它退出后解析完整的 stdout。
+     *
+     * &lt;p&gt;步骤：拆出系统提示词 / 对话 / Schema → 新建临时目录 → 拼命令行 → 运行进程（用户消息写进 stdin）→ 方言解析 stdout →
+     * 包成 {@link ChatResponse}。临时目录由 try-with-resources 在返回或出错后删除。
+     *
+     * @param prompt Spring AI 组装好的提示词（消息列表 + 选项）
+     * @return 一个 Generation 的回答，元数据里带模型名与 token 用量（工具报告了的话）
+     * @throws CliExecutionException 找不到命令、退出码非 0、输出解析不了
+     * @throws CliTimeoutException 超过 {@code assistant.cli.timeout}
+     */
+    @Override
+    public ChatResponse call(Prompt prompt) {
+<span class="fc" id="L121">        CliRequest request = toRequest(prompt, false);</span>
+<span class="fc" id="L122">        long start = System.nanoTime();</span>
+<span class="fc" id="L123">        try (CliWorkspace workspace = CliWorkspace.create(properties.workDir())) {</span>
+<span class="fc" id="L124">            List&lt;String&gt; command = command(request, workspace);</span>
+<span class="fc" id="L125">            String stdout = runner.run(command, workspace.cwd(), dialect.stdin(request));</span>
+<span class="fc" id="L126">            CliReply reply = dialect.parseReply(stdout);</span>
+<span class="fc" id="L127">            log.info(</span>
+                    &quot;{} 调用完成：{} ms，模型 {}，tokens 输入 {} / 输出 {}，费用 {}&quot;,
+<span class="fc" id="L129">                    dialect.name(),</span>
+<span class="fc" id="L130">                    (System.nanoTime() - start) / 1_000_000,</span>
+<span class="fc" id="L131">                    modelForLog(reply, request),</span>
+<span class="fc" id="L132">                    reply.inputTokens(),</span>
+<span class="fc" id="L133">                    reply.outputTokens(),</span>
+                    // codex 用 ChatGPT 账号登录时按订阅计费，不报告单次费用；claude 会在结果里给出 total_cost_usd
+<span class="fc bfc" id="L135" title="All 2 branches covered.">                    reply.costUsd() != null ? &quot;$&quot; + reply.costUsd() : &quot;工具未报告（订阅计费）&quot;);</span>
+<span class="fc" id="L136">            return response(reply);</span>
+<span class="fc" id="L137">        } catch (CliExecutionException e) {</span>
+<span class="fc" id="L138">            log.warn(&quot;{} 调用失败：{}&quot;, dialect.name(), e.getMessage());</span>
+<span class="fc" id="L139">            throw e;</span>
+        }
+    }
+
+    /**
+     * 流式调用：进程 stdout 每输出一行事件就解析一次，有新文本就往下游发一个 {@link ChatResponse}。
+     *
+     * &lt;p&gt;Reactor 小科普：{@link Flux} 是「0 到 N 个元素的异步序列」，有人订阅（这里是 ChatService → SSE 接口）才真正开始执行。
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;{@code Flux.using(创建资源, 用资源生成 Flux, 清理资源)}：每次订阅新建一个临时目录，序列结束、出错或被取消时都会删除它
+     *   &lt;li&gt;{@code Flux.defer}：拼命令、起进程推迟到订阅时才做，不订阅就不会启动进程
+     *   &lt;li&gt;{@code concatMapIterable(parser::onLine)}：每行输出变成 0～N 段文本，保持顺序
+     *   &lt;li&gt;{@code concatWith(Flux.defer(...onEnd()))}：stdout 正常读完后再调 {@code onEnd()}，没见到结束事件就在这里报错
+     * &lt;/ul&gt;
+     *
+     * &lt;p&gt;超时有两层：{@link CliProcessRunner} 的看门狗（{@code assistant.cli.timeout}，整次调用），以及 ChatService 上的
+     * {@code Flux.timeout}（{@code assistant.chat.stream-timeout}，两段之间的空档）；后者触发时会取消订阅，进而杀掉进程树。
+     * 这里的 doOnError 只记日志，异常的归类在 ChatService 的 {@code onErrorMap} 里做。
+     *
+     * @param prompt Spring AI 组装好的提示词
+     * @return 逐段的回答，每个元素只含新增的文本
+     */
+    @Override
+    public Flux&lt;ChatResponse&gt; stream(Prompt prompt) {
+<span class="fc" id="L164">        CliRequest request = toRequest(prompt, true);</span>
+<span class="fc" id="L165">        return Flux.using(</span>
+<span class="fc" id="L166">                        () -&gt; CliWorkspace.create(properties.workDir()),</span>
+<span class="fc" id="L167">                        workspace -&gt; Flux.defer(() -&gt; {</span>
+<span class="fc" id="L168">                            CliDialect.StreamParser parser = dialect.streamParser();</span>
+<span class="fc" id="L169">                            List&lt;String&gt; command = command(request, workspace);</span>
+<span class="fc" id="L170">                            return runner.lines(command, workspace.cwd(), dialect.stdin(request))</span>
+<span class="fc" id="L171">                                    .concatMapIterable(parser::onLine)</span>
+<span class="fc" id="L172">                                    .concatWith(Flux.defer(() -&gt; Flux.fromIterable(parser.onEnd())));</span>
+                        }),
+                        CliWorkspace::close)
+<span class="pc bpc" id="L175" title="1 of 2 branches missed.">                .filter(text -&gt; !text.isEmpty())</span>
+<span class="fc" id="L176">                .map(text -&gt; new ChatResponse(List.of(new Generation(new AssistantMessage(text)))))</span>
+<span class="fc" id="L177">                .doOnError(CliExecutionException.class, e -&gt; log.warn(&quot;{} 流式调用失败：{}&quot;, dialect.name(), e.getMessage()));</span>
+    }
+
+    /**
+     * 拼出完整命令行：解析好的程序（可能是 {@code node.exe + 脚本}）+ 配置的 commandArgs + 方言给出的参数。
+     *
+     * @throws CliExecutionException 往临时目录写系统提示词 / Schema 文件失败
+     */
+    private List&lt;String&gt; command(CliRequest request, CliWorkspace workspace) {
+<span class="fc" id="L186">        List&lt;String&gt; command = new ArrayList&lt;&gt;(resolvedCommand());</span>
+<span class="fc" id="L187">        command.addAll(properties.commandArgs());</span>
+        try {
+<span class="fc" id="L189">            command.addAll(dialect.arguments(request, workspace, properties.extraArgs()));</span>
+<span class="nc" id="L190">        } catch (IOException e) {</span>
+<span class="nc" id="L191">            throw new CliExecutionException(&quot;准备 &quot; + dialect.name() + &quot; 的输入文件失败&quot;, e);</span>
+<span class="fc" id="L192">        }</span>
+<span class="fc" id="L193">        return command;</span>
+    }
+
+    /** 第一次调用时才解析命令：没装 CLI 的机器（如 CI）照样能启动应用、跑测试。 */
+    private List&lt;String&gt; resolvedCommand() {
+<span class="fc" id="L198">        List&lt;String&gt; current = resolvedCommand;</span>
+<span class="fc bfc" id="L199" title="All 2 branches covered.">        if (current == null) {</span>
+<span class="fc" id="L200">            current = CliCommandResolver.resolve(properties.commandOrDefault());</span>
+<span class="fc" id="L201">            log.info(&quot;{} 命令：{}&quot;, dialect.name(), current);</span>
+<span class="fc" id="L202">            resolvedCommand = current;</span>
+        }
+<span class="fc" id="L204">        return current;</span>
+    }
+
+    /**
+     * 把 Spring AI 的 {@link Prompt} 拆成命令行需要的几部分。
+     *
+     * &lt;p&gt;Prompt 里是一串带角色的消息：SYSTEM（系统提示词，定人设和规则）、USER（用户说的话）、ASSISTANT（模型之前的回答）。
+     * 系统消息合并后单独走系统提示词参数，其余消息拼成文本走 stdin；Schema 只在选项是 {@link StructuredOutputChatOptions} 时才有；
+     * temperature 等采样参数命令行工具没有对应参数，直接丢弃（所以意图识别设的温度 0 在这里不起作用）。
+     *
+     * @param prompt Spring AI 组装好的提示词
+     * @param stream 是否流式（决定方言用哪种输出格式）
+     * @return 本次调用的内容
+     */
+    CliRequest toRequest(Prompt prompt, boolean stream) {
+<span class="fc" id="L219">        String system = prompt.getInstructions().stream()</span>
+<span class="fc bfc" id="L220" title="All 2 branches covered.">                .filter(m -&gt; m.getMessageType() == MessageType.SYSTEM)</span>
+<span class="fc" id="L221">                .map(Message::getText)</span>
+<span class="fc" id="L222">                .filter(Objects::nonNull)</span>
+<span class="fc" id="L223">                .collect(Collectors.joining(&quot;\n\n&quot;));</span>
+<span class="fc" id="L224">        List&lt;Message&gt; conversation = prompt.getInstructions().stream()</span>
+<span class="fc bfc" id="L225" title="All 2 branches covered.">                .filter(m -&gt; m.getMessageType() != MessageType.SYSTEM)</span>
+<span class="fc" id="L226">                .toList();</span>
+        String schema =
+<span class="fc bfc" id="L228" title="All 2 branches covered.">                prompt.getOptions() instanceof StructuredOutputChatOptions options ? options.getOutputSchema() : null;</span>
+<span class="pc bpc" id="L229" title="1 of 4 branches missed.">        String model = prompt.getOptions() != null &amp;&amp; prompt.getOptions().getModel() != null</span>
+<span class="fc" id="L230">                ? prompt.getOptions().getModel()</span>
+<span class="fc" id="L231">                : properties.model();</span>
+<span class="fc" id="L232">        return new CliRequest(system, render(conversation), schema, model, stream);</span>
+    }
+
+    /**
+     * 只有一条用户消息时原样发送；多轮对话（第 6 章起）按「用户：/ 助手：」拼成一段文本。
+     *
+     * &lt;p&gt;{@code claude -p} / {@code codex exec} 一次只接收一段输入，没有「消息列表」的概念，所以历史消息只能拼成文本交给它。
+     */
+    static String render(List&lt;Message&gt; conversation) {
+<span class="pc bpc" id="L241" title="1 of 4 branches missed.">        if (conversation.size() == 1 &amp;&amp; conversation.getFirst().getMessageType() == MessageType.USER) {</span>
+<span class="fc" id="L242">            return Objects.requireNonNullElse(conversation.getFirst().getText(), &quot;&quot;);</span>
+        }
+<span class="fc" id="L244">        return conversation.stream()</span>
+<span class="fc bfc" id="L245" title="All 2 branches covered.">                .map(m -&gt; (m.getMessageType() == MessageType.ASSISTANT ? &quot;助手：&quot; : &quot;用户：&quot;)</span>
+<span class="fc" id="L246">                        + Objects.requireNonNullElse(m.getText(), &quot;&quot;))</span>
+<span class="fc" id="L247">                .collect(Collectors.joining(&quot;\n\n&quot;));</span>
+    }
+
+    /** 把解析结果包成 Spring AI 的 {@link ChatResponse}：一个 Generation（回答文本），元数据里放模型名和 token 用量（有才放）。 */
+    private static ChatResponse response(CliReply reply) {
+<span class="fc" id="L252">        ChatResponseMetadata.Builder metadata = ChatResponseMetadata.builder();</span>
+<span class="fc bfc" id="L253" title="All 2 branches covered.">        if (reply.model() != null) {</span>
+<span class="fc" id="L254">            metadata.model(reply.model());</span>
+        }
+<span class="pc bpc" id="L256" title="3 of 4 branches missed.">        if (reply.inputTokens() != null || reply.outputTokens() != null) {</span>
+<span class="fc" id="L257">            metadata.usage(new DefaultUsage(reply.inputTokens(), reply.outputTokens()));</span>
+        }
+<span class="fc" id="L259">        return new ChatResponse(List.of(new Generation(new AssistantMessage(reply.text()))), metadata.build());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>IngestReport.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">IngestReport.java</span></div><h1>IngestReport.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.util.List;
+
+/**
+ * 一次入库的报告：{@code POST /api/knowledge/ingest} 的响应，启动时自动入库也会打到日志里（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：接口层的数据。由 {@link KnowledgeIngestionService#ingest} 生成。
+ *
+ * @param embeddingModel 用的向量模型
+ * @param store 向量库类型（memory / pgvector）
+ * @param location 向量库位置（文件路径或 schema.表名）
+ * @param rebuild 是否先清空再全部重新入库
+ * @param documentsAdded 新增的文档数
+ * @param documentsUpdated 内容变了、重新入库的文档数
+ * @param documentsSkipped 没变、跳过的文档数
+ * @param documentsRemoved 磁盘上已删除、从库里清掉的文档数
+ * @param chunksAdded 写入的块数（新增 + 更新）
+ * @param chunksRemoved 删除的旧块数（更新 + 删除）
+ * @param totalDocuments 入库后库里共有几篇文档
+ * @param totalChunks 入库后库里共有几块
+ * @param durationMs 耗时，毫秒（主要花在调向量模型上）
+ * @param documents 每篇文档的处理结果
+ */
+<span class="fc" id="L25">public record IngestReport(</span>
+        String embeddingModel,
+        String store,
+        String location,
+        boolean rebuild,
+        int documentsAdded,
+        int documentsUpdated,
+        int documentsSkipped,
+        int documentsRemoved,
+        int chunksAdded,
+        int chunksRemoved,
+        int totalDocuments,
+        int totalChunks,
+        long durationMs,
+        List&lt;DocumentChange&gt; documents) {
+
+    /** 一篇文档怎么处理的。 */
+<span class="fc" id="L42">    public enum Action {</span>
+        /** 新增：库里原来没有。 */
+<span class="fc" id="L44">        ADDED,</span>
+        /** 更新：内容哈希变了，删旧块、写新块。 */
+<span class="fc" id="L46">        UPDATED,</span>
+        /** 跳过：内容哈希没变，不调向量模型。 */
+<span class="fc" id="L48">        SKIPPED,</span>
+        /** 删除：磁盘上已经没有这篇文档。 */
+<span class="fc" id="L50">        REMOVED</span>
+    }
+
+    /**
+     * 一篇文档的处理结果。
+     *
+     * @param source 文件名
+     * @param action 怎么处理的
+     * @param chunksAdded 写入了几块
+     * @param chunksRemoved 删除了几块旧的
+     */
+<span class="fc" id="L61">    public record DocumentChange(String source, Action action, int chunksAdded, int chunksRemoved) {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

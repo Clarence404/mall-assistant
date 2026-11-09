@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>KnowledgeStats.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">KnowledgeStats.java</span></div><h1>KnowledgeStats.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.util.List;
+
+/**
+ * 知识库概况：{@code GET /api/knowledge/stats} 的响应（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：接口层的数据。由 {@link KnowledgeSearchService#stats} 生成。
+ *
+ * @param store 向量库类型（memory / pgvector）
+ * @param location 向量库位置（文件路径或 schema.表名）
+ * @param embeddingModel 当前向量模型
+ * @param dimensions 向量维度；模型不可用、还没探测出来时为 null
+ * @param queryPrefix 当前模型的查询前缀（空串表示不加）
+ * @param documentPrefix 当前模型的文档前缀
+ * @param documentCount 库里有几篇文档
+ * @param chunkCount 库里有几块
+ * @param documents 每篇文档的汇总
+ * @param warning 需要注意的问题（模型不可用、库里有别的模型生成的块等），没有时为 null
+ */
+<span class="fc" id="L21">public record KnowledgeStats(</span>
+        String store,
+        String location,
+        String embeddingModel,
+        Integer dimensions,
+        String queryPrefix,
+        String documentPrefix,
+        int documentCount,
+        int chunkCount,
+        List&lt;StoredDocument&gt; documents,
+        String warning) {}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
