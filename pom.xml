@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.9</version> <!-- 取 4.0.x 最新补丁版；Spring AI 2.0.x 支持 Boot 4.0 / 4.1 -->
+        <version>4.1.2</version> <!-- 取 4.1.x 最新补丁版（4.0 的开源支持到 2026-12 结束）；Spring AI 2.0.x 支持 Boot 4.0 / 4.1 -->
         <relativePath/>
     </parent>
 

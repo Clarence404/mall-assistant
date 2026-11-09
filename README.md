@@ -2,7 +2,7 @@
 
 Java Doc「AI」模块的配套练习项目：给 [mall-evolution](https://github.com/Clarence404/mall-evolution) 里的示例商城做一个智能客服，一章一章自己动手写出来。
 
-**版本基线**：JDK 21、Spring Boot 4.0.9、Spring AI 2.0.2、Testcontainers 2.0.5、Ollama 0.40（默认对话模型 `qwen2.5:0.5b`，向量模型 `bge-m3`）、pgvector 0.8.1（PostgreSQL 17，可选）。
+**版本基线**：JDK 21、Spring Boot 4.1.2、Spring AI 2.0.2、Testcontainers 2.0.5、Ollama 0.40（默认对话模型 `qwen2.5:0.5b`，向量模型 `bge-m3`）、pgvector 0.8.1（PostgreSQL 17，可选）。
 
 [![verify](https://github.com/Clarence404/mall-assistant/actions/workflows/verify.yml/badge.svg)](https://github.com/Clarence404/mall-assistant/actions/workflows/verify.yml) [测试报告](https://clarence404.github.io/mall-assistant/)
 
