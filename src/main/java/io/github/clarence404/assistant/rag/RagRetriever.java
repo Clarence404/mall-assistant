@@ -158,7 +158,7 @@ public class RagRetriever {
      * <p>要求（测试按这个写）：
      *
      * <ul>
-     *   <li>候选算「相关」的条件（满足其一即可）：向量相似度不为 null 且 ≥ {@code min-score}；或覆盖率不为 null 且 ≥
+     *   <li>候选算「相关」的条件（满足其一即可）：向量相似度不为 null 且 ≥ {@link #minScore()}（第 6 章起按当前向量模型取）；或覆盖率不为 null 且 ≥
      *       {@code keyword-min-coverage}
      *   <li>保持 ranked 的先后，取前 {@code topK} 个相关的
      * </ul>
@@ -172,11 +172,21 @@ public class RagRetriever {
      * @return 相关的候选，最多 topK 个；一个都不相关时为空列表
      */
     List<RagCandidate> select(List<RagCandidate> ranked, int topK) {
+        double minScore = minScore();
         return ranked.stream()
-                .filter(c -> (c.vectorScore() != null && c.vectorScore() >= properties.minScore())
+                .filter(c -> (c.vectorScore() != null && c.vectorScore() >= minScore)
                         || (c.coverage() != null && c.coverage() >= properties.keywordMinCoverage()))
                 .limit(topK)
                 .toList();
+    }
+
+    /**
+     * 当前向量模型的相似度门槛（第 6 章补充）：{@code assistant.rag.model-profiles} 里按模型名配了的用配置的，否则用 {@code min-score}。
+     *
+     * @return 门槛
+     */
+    public double minScore() {
+        return properties.minScoreFor(searchService.modelName());
     }
 
     /** 关键词索引：库里的文档汇总没变就复用，变了（重新入库过）就从全部块重建。 */

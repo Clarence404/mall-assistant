@@ -38,6 +38,10 @@ import reactor.core.publisher.Flux;
  * {@link OllamaChatOptions}，只是拿它当「选项对象」，并不连 Ollama。{@link #withoutToolCalling()} 模拟命令行模型那样只支持结构化输出、
  * 不支持工具调用的模型。用 {@link #willCallTool} 预设「模型决定调用某个工具」：回答调用的第一轮返回调用意图（工具名 + JSON 参数），
  * Spring AI 执行工具、把结果作为工具结果消息追加进对话后再调一次，这时假模型才返回 {@link #willReply} 的回答。
+ *
+ * <p>第 6 章多了两种「辅助调用」，按用户消息里的标签区分：带 {@code <对话历史>} 的是追问改写（{@code QuestionCondenser}），返回
+ * {@link #willCondense} 的预设；带 {@code <要压缩的对话>} 的是摘要记忆（{@code ConversationSummarizer}），返回 {@link #willSummarize}
+ * 的预设。它们不算「回答调用」（{@link #answerPrompts()} 里没有），分别记在 {@link #condensePrompts()} / {@link #summaryPrompts()}。
  */
 public class FakeChatModel implements ChatModel {
 
@@ -57,6 +61,9 @@ public class FakeChatModel implements ChatModel {
     private volatile List<String> classifications = List.of(UNKNOWN_INTENT_JSON);
     private volatile RuntimeException classificationFailure;
     private volatile int classificationCalls;
+    private volatile String condensed = "（没有预设改写结果）";
+    private volatile RuntimeException condenseFailure;
+    private volatile String summary = "（没有预设摘要）";
 
     /** 默认声明支持原生结构化输出与原生工具调用，与 Ollama 的行为一致。 */
     public FakeChatModel() {
@@ -104,6 +111,44 @@ public class FakeChatModel implements ChatModel {
         classificationFailure = null;
         classificationCalls = 0;
         toolCalls.clear();
+        condensed = "（没有预设改写结果）";
+        condenseFailure = null;
+        summary = "（没有预设摘要）";
+    }
+
+    /** 第 6 章：追问改写调用返回这段文本（模型「改写后的问题」的原样输出）。 */
+    public void willCondense(String text) {
+        this.condensed = text;
+    }
+
+    /** 第 6 章：追问改写调用直接抛出该异常。 */
+    public void willFailCondense(RuntimeException error) {
+        this.condenseFailure = error;
+    }
+
+    /** 第 6 章：摘要记忆的压缩调用返回这段文本。 */
+    public void willSummarize(String text) {
+        this.summary = text;
+    }
+
+    /** 第 6 章：追问改写调用收到的 Prompt。 */
+    public List<Prompt> condensePrompts() {
+        return prompts.stream().filter(FakeChatModel::isCondense).toList();
+    }
+
+    /** 第 6 章：摘要记忆调用收到的 Prompt。 */
+    public List<Prompt> summaryPrompts() {
+        return prompts.stream().filter(FakeChatModel::isSummary).toList();
+    }
+
+    /** 追问改写的调用：用户消息里有 {@code <对话历史>} 标签。 */
+    public static boolean isCondense(Prompt prompt) {
+        return !isStructured(prompt) && prompt.getUserMessage().getText().contains("<对话历史>");
+    }
+
+    /** 摘要记忆的调用：用户消息里有 {@code <要压缩的对话>} 标签。 */
+    public static boolean isSummary(Prompt prompt) {
+        return !isStructured(prompt) && prompt.getUserMessage().getText().contains("<要压缩的对话>");
     }
 
     /** 回答调用（阻塞）返回这段文本。 */
@@ -163,9 +208,11 @@ public class FakeChatModel implements ChatModel {
         return prompts.stream().filter(FakeChatModel::isStructured).toList();
     }
 
-    /** 回答调用收到的 Prompt。 */
+    /** 回答调用收到的 Prompt（第 6 章起不含追问改写和摘要）。 */
     public List<Prompt> answerPrompts() {
-        return prompts.stream().filter(p -> !isStructured(p)).toList();
+        return prompts.stream()
+                .filter(p -> !isStructured(p) && !isCondense(p) && !isSummary(p))
+                .toList();
     }
 
     /** 回答调用的 Prompt 里注册了哪些工具（工具名）；没注册时为空。 */
@@ -220,6 +267,15 @@ public class FakeChatModel implements ChatModel {
             // 第 n 次调用取第 n 个预设，用完重复最后一个：用来模拟「第一次输出乱码、重试后才正常」
             int index = Math.min(classificationCalls++, outputs.size() - 1);
             return response(outputs.get(index));
+        }
+        if (isCondense(prompt)) {
+            if (condenseFailure != null) {
+                throw condenseFailure;
+            }
+            return response(condensed);
+        }
+        if (isSummary(prompt)) {
+            return response(summary);
         }
         if (failure != null) {
             throw failure;

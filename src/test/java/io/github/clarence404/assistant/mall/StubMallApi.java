@@ -29,6 +29,8 @@ import java.util.concurrent.Executors;
  *       （{@link #ORDER_NO}、{@link #COMPLETED_ORDER_NO}），取前 N 笔，还有剩下的就 {@code hasMore=true}；{@link #NEW_USER_TOKEN}
  *       （没下过单的新用户）→ 空列表；令牌不对 → 401、没有响应体
  *   <li>{@code GET /api/products/{skuId}}：20001 在售有货，20004 已下架无货，其他数字 → 404 {@code PRODUCT_NOT_FOUND}，非数字 → 400
+ *   <li>{@code GET /api/users/me}（第 6 章，确认会话归属）：{@link #TOKEN} → 用户 10001，{@link #NEW_USER_TOKEN} → 用户 10002，
+ *       令牌不对 → 401、没有响应体
  * </ul>
  *
  * 还能注入故障：{@link #failWith(int)} 让所有接口返回指定状态码，{@link #delay(Duration)} 让响应变慢（测读超时）。每个请求都记下来，
@@ -167,6 +169,8 @@ public final class StubMallApi implements AutoCloseable {
             listOrders(exchange, exchange.getRequestURI().getQuery(), authorization);
         } else if ("GET".equals(method) && path.startsWith("/api/orders/")) {
             order(exchange, path.substring("/api/orders/".length()), authorization);
+        } else if ("GET".equals(method) && "/api/users/me".equals(path)) {
+            me(exchange, authorization);
         } else if ("GET".equals(method) && path.startsWith("/api/products/")) {
             product(exchange, path.substring("/api/products/".length()));
         } else {
@@ -222,6 +226,17 @@ public final class StubMallApi implements AutoCloseable {
                 200,
                 "{\"items\":[" + String.join(",", page) + "],\"nextCursor\":" + (hasMore ? "\"stub-cursor\"" : "null")
                         + ",\"hasMore\":" + hasMore + "}");
+    }
+
+    /** 「我的」：第 6 章用它确认令牌属于哪个用户。 */
+    private static void me(HttpExchange exchange, String authorization) throws IOException {
+        if (("Bearer " + TOKEN).equals(authorization)) {
+            json(exchange, 200, "{\"userId\":\"10001\",\"nickname\":\"演示用户\",\"points\":120}");
+        } else if (("Bearer " + NEW_USER_TOKEN).equals(authorization)) {
+            json(exchange, 200, "{\"userId\":\"10002\",\"nickname\":\"新用户\",\"points\":0}");
+        } else {
+            unauthorized(exchange);
+        }
     }
 
     /** 网关（Spring Security 资源服务器）的 401：只有 WWW-Authenticate 头，没有响应体。 */

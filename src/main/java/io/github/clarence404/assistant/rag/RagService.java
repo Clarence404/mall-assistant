@@ -8,6 +8,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.rag.Query;
@@ -19,7 +20,7 @@ import org.springframework.stereotype.Service;
 /**
  * RAG（Retrieval-Augmented Generation，检索增强生成）：规则类问题先到知识库里找资料，再让模型<b>只依据资料</b>回答并标出引用（第 5 章引入）。
  *
- * <p>所在层：业务层。上游是 {@code ChatService}（意图是售后 / 规则政策时走这里）；下游是 {@link RagRetriever}（检索）、
+ * <p>所在层：业务层。上游是 {@code ChatService}（意图是售后 / 规则政策时走这里；第 6 章起多轮对话里先把追问改写成独立问题再交给 {@link #plan}）；下游是 {@link RagRetriever}（检索）、
  * {@link ChatClient}（改写问题、生成回答）和 {@link AssistantPrompts}（模板变量）。
  *
  * <p><b>为什么要 RAG</b>：模型不知道「示例商城」的规则（训练数据里没有），问它「七天无理由退货要什么条件」，它只能按别家商城的常识编一个，
@@ -173,17 +174,35 @@ public class RagService {
     }
 
     /**
-     * 拼出带资料的回答请求（阻塞、流式共用）：系统消息 = RAG 提示词模板（{@code prompts/rag-v1.st}）；用户消息 = {@link #CONTEXT_TEMPLATE}
-     * 填入用户原话和 {@link #context} 拼好的资料；温度 {@link #TEMPERATURE}。不注册工具、不带 ToolContext。
+     * 拼出带资料的回答请求（单轮）：同 {@link #request(String, RagPlan, List)}，不带历史。
      *
      * @param message 用户原话
      * @param plan 有资料的回答计划
      * @return 还没发出的请求，调用方接着 {@code call()} 或 {@code stream()}
      */
     public ChatClient.ChatClientRequestSpec request(String message, RagPlan plan) {
+        return request(message, plan, List.of());
+    }
+
+    /**
+     * 拼出带资料的回答请求（阻塞、流式共用）：系统消息 = RAG 提示词模板（{@code prompts/rag-v1.st}）；第 6 章起接着是对话历史；用户消息 =
+     * {@link #CONTEXT_TEMPLATE} 填入问题和 {@link #context} 拼好的资料；温度 {@link #TEMPERATURE}。不注册工具、不带 ToolContext。
+     *
+     * <p>第 6 章（ch06-2 的一处）：历史用 {@code .messages(history)} 放进去。ChatClient 拼 Prompt 的顺序固定是「系统消息 →
+     * messages(...) 给的消息 → user(...) 给的用户消息」，所以历史正好夹在系统提示词和这一轮的问题之间，和真实对话的时间顺序一致。
+     * 有历史时 {@code message} 传的是追问改写后的独立问题（「七天无理由退货的运费谁出」），模型即使没读懂历史，也知道这一轮问的是什么；
+     * 历史帮它把话接上（「刚才说的四个条件里……」）。资料只放在这一轮的用户消息里，不进历史。
+     *
+     * @param message 这一轮的问题（有改写时是改写后的）
+     * @param plan 有资料的回答计划
+     * @param history 对话历史（{@code Conversation#history()}），按时间从早到晚；单轮时为空列表
+     * @return 还没发出的请求，调用方接着 {@code call()} 或 {@code stream()}
+     */
+    public ChatClient.ChatClientRequestSpec request(String message, RagPlan plan, List<Message> history) {
         return chatClient
                 .prompt()
                 .system(spec -> spec.text(systemTemplate).params(prompts.variables()))
+                // TODO ch06-2：用 .messages(history) 把历史放在系统消息和这一轮的用户消息之间
                 .user(u -> u.text(CONTEXT_TEMPLATE).param("message", message).param("context", context(plan.sources())))
                 .options(ChatOptions.builder().temperature(TEMPERATURE));
     }

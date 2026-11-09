@@ -63,6 +63,26 @@ public record IntentResult(
     }
 
     /**
+     * 换一个订单号（第 6 章：这一句没提订单号，从会话历史里沿用上一句提到的）。
+     *
+     * @param value 订单号，同样要符合格式，否则置为 null
+     * @return 新的结果；原对象不变
+     */
+    public IntentResult withOrderNo(String value) {
+        return new IntentResult(intent, confidence, valid(value, ORDER_NO), skuId);
+    }
+
+    /**
+     * 换一个 SKU（第 6 章：从会话历史里沿用）。
+     *
+     * @param value SKU，同样要符合格式，否则置为 null
+     * @return 新的结果；原对象不变
+     */
+    public IntentResult withSkuId(String value) {
+        return new IntentResult(intent, confidence, orderNo, valid(value, SKU_ID));
+    }
+
+    /**
      * 格式校验：去掉首尾空白后整串匹配才保留。
      *
      * @return 去掉空白后的值；null 或格式不对时为 null

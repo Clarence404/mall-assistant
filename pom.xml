@@ -99,6 +99,14 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-rag</artifactId>
         </dependency>
+        <!-- 第 6 章：对话记忆存进 PostgreSQL 时用的 JdbcChatMemoryRepository（含各数据库的建表脚本）。
+             同样只引非 Starter 的模块：Starter 会触发 JDBC 自动配置、要求 spring.datasource.*，默认的 memory 记忆就起不来了；
+             只有 assistant.memory.store=jdbc 时才由 MemoryConfig 自己建连接池。ChatMemory、MessageWindowChatMemory、
+             InMemoryChatMemoryRepository 在 spring-ai-model 里，已经随模型 Starter 传递引入 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-model-chat-memory-repository-jdbc</artifactId>
+        </dependency>
         <!-- pgvector 模式的连接池（版本由 Spring Boot 管理）；只在 PgVectorConfig 里手动创建，不触发任何数据源自动配置 -->
         <dependency>
             <groupId>com.zaxxer</groupId>

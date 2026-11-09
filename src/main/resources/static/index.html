@@ -3,7 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>示例商城智能客服</title>
+<title>智能客服 · 示例商城</title>
+<!-- 标签页图标：与 mall-evolution 演示控制台同一底色 #4f46e5，图形不同（这里是对话气泡），内联 SVG，不额外请求文件 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%234f46e5%27/%3E%3Cpath d=%27M9 8h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-9l-5 4v-4a3 3 0 0 1-3-3v-8a3 3 0 0 1 3-3z%27 fill=%27%23fff%27/%3E%3Cg fill=%27%234f46e5%27%3E%3Ccircle cx=%2712%27 cy=%2715%27 r=%271.5%27/%3E%3Ccircle cx=%2716%27 cy=%2715%27 r=%271.5%27/%3E%3Ccircle cx=%2720%27 cy=%2715%27 r=%271.5%27/%3E%3C/g%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #f5f6fa; --card: #ffffff; --fg: #1f2937; --muted: #6b7280; --border: #e5e7eb;
@@ -97,6 +99,12 @@
   .sources li { margin: 2px 0 8px; word-break: break-all; padding: 2px 6px; border-radius: 6px; }
   .sources li.hl { background: var(--user); }
   .sources .meta { color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+  /* 第 6 章：会话条（新对话、清空）与恢复的历史 */
+  .conv-bar { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .conv-bar code { font-family: ui-monospace, Consolas, monospace; }
+  .conv-bar button { height: 26px; padding: 0 10px; border-radius: 6px; font-size: 12px; }
+  .conv-bar button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .msg.summary { align-self: stretch; max-width: none; color: var(--muted); font-size: 13px; border: 1px dashed var(--border); }
   .rag-note { color: var(--muted); margin: 4px 0; }
   .rag-note.warn { color: var(--err-fg); }
 </style>
@@ -125,6 +133,14 @@
     <p class="hint" id="hint">你好，我是示例商城客服，有什么可以帮你？</p>
   </main>
 
+  <!-- 第 6 章：会话 ID 存在 localStorage，刷新页面后恢复历史；「新对话」换一个 ID，「清空」删掉服务端这个会话的记录 -->
+  <div class="conv-bar">
+    <span>会话 <code id="convId">-</code></span>
+    <button type="button" id="newConvBtn">新对话</button>
+    <button type="button" class="ghost" id="clearConvBtn">清空</button>
+    <span id="convNote"></span>
+  </div>
+
   <form id="chatForm">
     <textarea id="input" rows="1" maxlength="2000" placeholder="输入问题，Enter 发送，Shift + Enter 换行" required></textarea>
     <button type="submit" id="send">发送</button>
@@ -151,6 +167,17 @@
           <dt>把握</dt><dd id="dbgConfidence">-</dd>
           <dt>订单号</dt><dd id="dbgOrderNo">-</dd>
           <dt>SKU</dt><dd id="dbgSku">-</dd>
+        </dl>
+      </section>
+      <section>
+        <h3>记忆</h3>
+        <dl id="dbgMemory">
+          <dt>记忆库</dt><dd id="dbgMemStore">-</dd>
+          <dt>带了历史</dt><dd id="dbgMemTurns">-</dd>
+          <dt>裁掉</dt><dd id="dbgMemDropped">-</dd>
+          <dt>改写为</dt><dd id="dbgMemCondensed">-</dd>
+          <dt>沿用订单号</dt><dd id="dbgMemCarried">-</dd>
+          <dt>说明</dt><dd id="dbgMemNote">-</dd>
         </dl>
       </section>
       <section class="wide">
@@ -198,6 +225,9 @@
 //   阻塞接口在响应体的 sources / rag 字段里，流式接口是文字之前的 source 事件
 // 第 3 章：右上角登录商城账号，令牌存在 sessionStorage（关掉标签页就没了），提问时放进 Authorization 请求头；
 //   令牌只给后端的工具用，后端不会把它发给模型
+// 第 6 章：多轮对话。页面生成会话 ID（crypto.randomUUID，存在 localStorage，刷新后还是同一个），每次提问放在请求体的 conversationId 里；
+//   打开页面时用 GET /api/conversations/{id}/messages 把历史画回来；「新对话」换一个 ID，「清空」DELETE 服务端的记录；
+//   登录、退出时自动换新对话（服务端按登录身份隔离会话，匿名时聊的内容登录后本来就看不到）；调试面板「记忆」一栏显示带了几轮历史、裁掉几轮、改写后的问题
 (() => {
   const $ = (id) => document.getElementById(id);
   const messages = $('messages');
@@ -283,15 +313,98 @@
       const body = await res.json();
       $('password').value = '';
       saveLogin(body.accessToken, phone);
+      startNewConversation('已登录，开始新对话');
     } catch {
       renderLogin('登录失败：网络异常');
     }
   });
-  $('logoutBtn').addEventListener('click', () => saveLogin(null));
+  $('logoutBtn').addEventListener('click', () => { saveLogin(null); startNewConversation('已退出，开始新对话'); });
 
   // 提问时的请求头：登录了就带上 Authorization: Bearer <商城令牌>
   function authHeaders(headers) {
     return mallToken ? { ...headers, 'Authorization': 'Bearer ' + mallToken } : headers;
+  }
+
+  // 第 6 章：会话 ID。localStorage 关掉标签页也还在（sessionStorage 不行），刷新页面、重开浏览器都接得上；读写同样包一层
+  const CONV_KEY = 'conversationId';
+  let conversationId = null;
+  try { conversationId = localStorage.getItem(CONV_KEY); } catch { /* 存不了就只在内存里 */ }
+
+  // 小写 UUID，和后端的格式校验一致。crypto.randomUUID 只在 https 或 localhost 下可用，其他地址退回 getRandomValues 自己拼
+  function newUuid() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+    return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+  }
+
+  function setConversation(id) {
+    conversationId = id;
+    try { localStorage.setItem(CONV_KEY, id); } catch { /* 同上 */ }
+    $('convId').textContent = id.slice(0, 8);
+    $('convId').title = id;
+  }
+
+  // 清空聊天区，换回开场提示
+  function clearScreen(note) {
+    messages.innerHTML = '';
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.id = 'hint';
+    hint.textContent = '你好，我是示例商城客服，有什么可以帮你？';
+    messages.appendChild(hint);
+    $('convNote').textContent = note || '';
+  }
+
+  function startNewConversation(note) {
+    setConversation(newUuid());
+    clearScreen(note);
+    resetMemory();
+  }
+
+  // 打开页面时恢复历史：404（新会话、已过期、不是你的）就什么都不画
+  async function restoreConversation() {
+    try {
+      const res = await fetch('/api/conversations/' + conversationId + '/messages', { headers: authHeaders({}) });
+      if (res.status === 404) return;
+      if (!res.ok) { $('convNote').textContent = '历史恢复失败：' + (await problemMessage(res)).message; return; }
+      const body = await res.json();
+      for (const m of body.messages) {
+        if (m.role === 'user') addMessage('user', m.text);
+        else if (m.role === 'assistant') addMessage('bot', m.text);
+        else if (m.role === 'summary') addMessage('summary', '早期对话摘要：' + m.text);
+      }
+      $('convNote').textContent = '已恢复 ' + body.messages.length + ' 条历史';
+    } catch { /* 网络异常就不恢复了 */ }
+  }
+
+  $('newConvBtn').addEventListener('click', () => startNewConversation('已开始新对话'));
+  $('clearConvBtn').addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/conversations/' + conversationId, { method: 'DELETE', headers: authHeaders({}) });
+      if (res.ok || res.status === 404) clearScreen('已清空这个会话的记录');
+      else $('convNote').textContent = (await problemMessage(res)).message;
+    } catch {
+      $('convNote').textContent = '清空失败：网络异常';
+    }
+    resetMemory();
+  });
+
+  // 第 6 章：调试面板「记忆」一栏。阻塞接口在响应体的 memory 字段里，流式接口是 intent 之后的 memory 事件
+  function resetMemory() {
+    for (const id of ['dbgMemStore', 'dbgMemTurns', 'dbgMemDropped', 'dbgMemCondensed', 'dbgMemCarried', 'dbgMemNote']) $(id).textContent = '-';
+  }
+
+  function showMemory(m) {
+    if (!m) { resetMemory(); return; }
+    $('dbgMemStore').textContent = m.store + (m.active ? '' : '（这一轮没用上记忆）');
+    $('dbgMemTurns').textContent = m.historyTurns + ' 轮，' + m.historyChars + ' 字' + (m.summarized ? '，含早期摘要' : '');
+    $('dbgMemDropped').textContent = m.droppedTurns + ' 轮';
+    $('dbgMemCondensed').textContent = m.condensedQuestion || '-';
+    $('dbgMemCarried').textContent = m.carriedOrderNo || (m.carriedSkuId ? 'SKU ' + m.carriedSkuId : '-');
+    $('dbgMemNote').textContent = m.warning || (m.expired ? '会话空闲太久已过期，按新会话处理' : '-');
   }
 
   // 第 3 章：工具调用记录（阻塞接口在响应体的 tools 字段里，流式接口是 tool 事件）
@@ -408,17 +521,18 @@
     }
   }
 
-  // 阻塞模式：一次请求拿到 { reply, intent }；非 2xx 时抛出 { code, message }，由 submit() 统一显示
+  // 阻塞模式：一次请求拿到 { reply, intent, tools, sources, rag, memory }；非 2xx 时抛出 { code, message }，由 submit() 统一显示
   async function askBlocking(text, bubble, t0) {
     debug({ endpoint: 'POST /api/chat' });
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json', 'Accept': 'application/json' }),
-      body: JSON.stringify({ message: text })
+      body: JSON.stringify({ message: text, conversationId })
     });
     if (!res.ok) throw await problemMessage(res);
     const body = await res.json();
     showIntent(body.intent);
+    showMemory(body.memory);
     (body.tools || []).forEach(addTool);
     const sources = body.sources || [];
     sources.forEach(addSource);
@@ -437,7 +551,7 @@
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json', 'Accept': 'text/event-stream' }),
-      body: JSON.stringify({ message: text })
+      body: JSON.stringify({ message: text, conversationId })
     });
     if (!res.ok) throw await problemMessage(res);
 
@@ -452,6 +566,8 @@
     const handle = (event, data) => {
       if (event === 'intent') {
         showIntent(JSON.parse(data));
+      } else if (event === 'memory') {
+        showMemory(JSON.parse(data));
       } else if (event === 'tool') {
         addTool(JSON.parse(data));
       } else if (event === 'source') {
@@ -510,6 +626,7 @@
     debug({ status: 'waiting', first: '-', total: '-', chunks: '0', error: '-', intent: '-', confidence: '-', orderNo: '-', sku: '-' });
     resetTools();
     resetSources();
+    resetMemory();
     const t0 = performance.now();
     try {
       if (streamMode.checked) await askStreaming(text, bubble, t0);
@@ -606,6 +723,12 @@
   $('knowledgePanel').addEventListener('toggle', (e) => { if (e.target.open) kbStats(); });
 
   renderLogin();
+  if (conversationId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(conversationId)) {
+    setConversation(conversationId);
+    restoreConversation();
+  } else {
+    startNewConversation();
+  }
   form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
   input.addEventListener('input', autosize);
   input.addEventListener('keydown', (e) => {

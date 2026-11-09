@@ -17,6 +17,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -131,6 +132,36 @@ class CliChatModelTest {
                         .map(r -> r.getResult().getOutput().getText()))
                 .expectNext("收到：" + expectedStdin)
                 .verifyComplete();
+        assertNoLeftoverWorkspaces();
+    }
+
+    /**
+     * 第 6 章：多轮对话。ChatClient 发来的是「系统消息 + 历史（用户、助手交替）+ 这一轮的用户消息」，两种方言都把系统消息走系统提示词文件，
+     * 其余按「用户：/ 助手：」拼成一段写进 stdin（{@code claude -p} / {@code codex exec} 一次只收一段输入，没有消息列表）；摘要记忆那条带标签的
+     * 用户消息也在 stdin 里，不会混进系统提示词。
+     */
+    @Test
+    void multiTurnHistoryIsRenderedIntoStdinForBothDialects() throws Exception {
+        Prompt multiTurn = new Prompt(List.of(
+                new SystemMessage(SYSTEM),
+                new UserMessage("<早期对话摘要>\n用户问过订单物流\n</早期对话摘要>"),
+                new UserMessage("七天无理由退货要什么条件"),
+                new AssistantMessage("签收后 7 天内可以申请。"),
+                new UserMessage("那运费谁出")));
+        String expected = "用户：<早期对话摘要>\n用户问过订单物流\n</早期对话摘要>\n\n用户：七天无理由退货要什么条件\n\n" + "助手：签收后 7 天内可以申请。\n\n用户：那运费谁出";
+
+        for (CliFlavor flavor : List.of(CliFlavor.CLAUDE, CliFlavor.CODEX)) {
+            String reply =
+                    model(flavor, "ok").call(multiTurn).getResult().getOutput().getText();
+
+            assertThat(FakeCliSupport.recorded(record(), ".stdin"))
+                    .as(flavor + " 的 stdin")
+                    .isEqualTo(expected);
+            assertThat(FakeCliSupport.recorded(record(), ".system"))
+                    .as(flavor + " 的系统提示词")
+                    .isEqualTo(SYSTEM);
+            assertThat(reply).isEqualTo("收到：" + expected);
+        }
         assertNoLeftoverWorkspaces();
     }
 

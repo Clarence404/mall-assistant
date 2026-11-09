@@ -1,0 +1,276 @@
+{
+  "model" : "qwen2.5:1.5b",
+  "embeddingModel" : "bge-m3",
+  "recordedAt" : "2026-11-09",
+  "cases" : [ {
+    "name" : "退货追问运费",
+    "login" : false,
+    "turns" : [ {
+      "message" : "七天无理由退货要什么条件",
+      "intent" : {
+        "intent" : "POLICY",
+        "confidence" : 0.9,
+        "orderNo" : null,
+        "skuId" : null
+      },
+      "historyTurns" : 0,
+      "condensedQuestion" : null,
+      "carriedOrderNo" : null,
+      "retrievalQuery" : "七天无理由退货要什么条件",
+      "sources" : [ {
+        "index" : 1,
+        "source" : "returns.md",
+        "title" : "退换货规则",
+        "headingPath" : "退换货规则 > 七天无理由退货 > 适用条件",
+        "chunkIndexes" : [ 1 ],
+        "score" : 0.8085,
+        "keywordScore" : 35.0532,
+        "fusedScore" : 0.0328,
+        "foundBy" : [ "vector", "keyword" ],
+        "snippet" : "自签收次日起 7 天内（含第 7 天），可以申请无理由退货，需同时满足以下条件：  - 商品及包装保持原状，不影响二次销售； - 吊牌、说明书、配件、赠品齐全；…",
+        "content" : "退换货规则 > 七天无理由退货 > 适用条件\n自签收次日起 7 天内（含第 7 天），可以申请无理由退货，需同时满足以下条件：\n\n- 商品及包装保持原状，不影响二次销售；\n- 吊牌、说明书、配件、赠品齐全；\n- 未经使用、未经洗涤、未人为损坏；\n- 提供订单号，在「我的订单」中发起申请。\n\n签收时间以物流系统记录的签收时间为准。超过 7 天的，只能按质量问题申请售后。"
+      }, {
+        "index" : 2,
+        "source" : "returns.md",
+        "title" : "退换货规则",
+        "headingPath" : "退换货规则 > 七天无理由退货 > 不支持七天无理由的商品",
+        "chunkIndexes" : [ 2 ],
+        "score" : 0.755,
+        "keywordScore" : 31.9909,
+        "fusedScore" : 0.0323,
+        "foundBy" : [ "vector", "keyword" ],
+        "snippet" : "以下商品一经签收，不支持七天无理由退货（有质量问题的除外）：  - 生鲜水果、鲜花绿植、冷冻冷藏食品等易腐商品； - 已拆封的食品、保健品、化妆品与个人护理用品…",
+        "content" : "退换货规则 > 七天无理由退货 > 不支持七天无理由的商品\n以下商品一经签收，不支持七天无理由退货（有质量问题的除外）：\n\n- 生鲜水果、鲜花绿植、冷冻冷藏食品等易腐商品；\n- 已拆封的食品、保健品、化妆品与个人护理用品；\n- 定制类商品（刻字、按尺寸定做）；\n- 已激活的虚拟商品、充值卡、电子券；\n- 内衣、袜子等贴身用品。\n\n商品详情页会标注「不支持七天无理由退货」，下单前请留意。"
+      }, {
+        "index" : 3,
+        "source" : "returns.md",
+        "title" : "退换货规则",
+        "headingPath" : "退换货规则 > 七天无理由退货 > 退货运费",
+        "chunkIndexes" : [ 3 ],
+        "score" : 0.6802,
+        "keywordScore" : 26.4934,
+        "fusedScore" : 0.0317,
+        "foundBy" : [ "vector", "keyword" ],
+        "snippet" : "无理由退货的寄回运费由买家承担，按实际快递费用支付，商城不提供运费补贴。购买时勾选了「退货运费险」的订单，退货完成后保险公司按 8～15 元的标准理赔到原支付账…",
+        "content" : "退换货规则 > 七天无理由退货 > 退货运费\n无理由退货的寄回运费由买家承担，按实际快递费用支付，商城不提供运费补贴。购买时勾选了「退货运费险」的订单，退货完成后保险公司按 8～15 元的标准理赔到原支付账户。\n\n退货时请使用可追踪单号的快递，不接受平邮和到付。"
+      }, {
+        "index" : 4,
+        "source" : "returns.md",
+        "title" : "退换货规则",
+        "headingPath" : "退换货规则 > 拒收与退货地址",
+        "chunkIndexes" : [ 7 ],
+        "score" : 0.6515,
+        "keywordScore" : 8.5407,
+        "fusedScore" : 0.0308,
+        "foundBy" : [ "vector", "keyword" ],
+        "snippet" : "签收时发现外包装明显破损，可以当场拒收，拒收视为质量问题处理，运费由商城承担。  退货请寄往订单详情页显示的退货地址，不要直接寄往商城办公地址。寄出后请在 48…",
+        "content" : "退换货规则 > 拒收与退货地址\n签收时发现外包装明显破损，可以当场拒收，拒收视为质量问题处理，运费由商城承担。\n\n退货请寄往订单详情页显示的退货地址，不要直接寄往商城办公地址。寄出后请在 48 小时内填写快递单号，超过 7 天未填写的，退货申请自动关闭。"
+      } ],
+      "tools" : [ ],
+      "reply" : "[1] 七天无理由退货的适用条件要求商品及包装保持原状，不影响二次销售；吊牌、说明书、配件、赠品齐全；未经使用、未经洗涤、未人为损坏；提供订单号，在「我的订单」中发起申请。签收时间以物流系统记录的签收时间为准。超过7天的，只能按质量问题申请售后。"
+    }, {
+      "message" : "那运费谁出",
+      "intent" : {
+        "intent" : "POLICY",
+        "confidence" : 0.9,
+        "orderNo" : null,
+        "skuId" : null
+      },
+      "historyTurns" : 1,
+      "condensedQuestion" : "运费谁出",
+      "carriedOrderNo" : null,
+      "retrievalQuery" : "运费谁出",
+      "sources" : [ {
+        "index" : 1,
+        "source" : "returns.md",
+        "title" : "退换货规则",
+        "headingPath" : "退换货规则 > 质量问题退换货 > 处理方式与运费",
+        "chunkIndexes" : [ 5 ],
+        "score" : 0.6079,
+        "keywordScore" : 5.521,
+        "fusedScore" : 0.0325,
+        "foundBy" : [ "vector", "keyword" ],
+        "snippet" : "质量问题由商城承担来回运费：可选择上门取件（免费），或自行寄回后申请运费补偿，补偿上限 20 元，凭快递单据报销。  换货只能换同款同规格的商品；同款缺货时可以…",
+        "content" : "退换货规则 > 质量问题退换货 > 处理方式与运费\n质量问题由商城承担来回运费：可选择上门取件（免费），或自行寄回后申请运费补偿，补偿上限 20 元，凭快递单据报销。\n\n换货只能换同款同规格的商品；同款缺货时可以改为退款。生鲜水果出现腐烂、破损的，按坏果比例退款，坏果超过一半的整单退款，不需要寄回。"
+      }, {
+        "index" : 2,
+        "source" : "returns.md",
+        "title" : "退换货规则",
+        "headingPath" : "退换货规则 > 七天无理由退货 > 退货运费",
+        "chunkIndexes" : [ 3 ],
+        "score" : 0.6265,
+        "keywordScore" : 4.5418,
+        "fusedScore" : 0.0323,
+        "foundBy" : [ "vector", "keyword" ],
+        "snippet" : "无理由退货的寄回运费由买家承担，按实际快递费用支付，商城不提供运费补贴。购买时勾选了「退货运费险」的订单，退货完成后保险公司按 8～15 元的标准理赔到原支付账…",
+        "content" : "退换货规则 > 七天无理由退货 > 退货运费\n无理由退货的寄回运费由买家承担，按实际快递费用支付，商城不提供运费补贴。购买时勾选了「退货运费险」的订单，退货完成后保险公司按 8～15 元的标准理赔到原支付账户。\n\n退货时请使用可追踪单号的快递，不接受平邮和到付。"
+      } ],
+      "tools" : [ ],
+      "reply" : "[1] 退换货规则 > 质量问题退换货 > 处理方式与运费\n质量问题由商城承担来回运费：可选择上门取件（免费），或自行寄回后申请运费补偿，补偿上限 20 元，凭快递单据报销。"
+    } ],
+    "calls" : [ {
+      "promptHash" : "4cacc5b8765883a5",
+      "output" : "{\"confidence\":0.9,\"intent\":\"POLICY\",\"orderNo\": \"\", \"skuId\": \"\"}"
+    }, {
+      "promptHash" : "2a5a574573036977",
+      "output" : "[1] 七天无理由退货的适用条件要求商品及包装保持原状，不影响二次销售；吊牌、说明书、配件、赠品齐全；未经使用、未经洗涤、未人为损坏；提供订单号，在「我的订单」中发起申请。签收时间以物流系统记录的签收时间为准。超过7天的，只能按质量问题申请售后。"
+    }, {
+      "promptHash" : "fdc0be5f5a84469b",
+      "output" : "运费谁出"
+    }, {
+      "promptHash" : "f46164b3218c180a",
+      "output" : "{\"confidence\":0.9,\"intent\":\"POLICY\",\"orderNo\": \"\", \"skuId\": \"\"}"
+    }, {
+      "promptHash" : "b7957e37d0d6e376",
+      "output" : "[1] 退换货规则 > 质量问题退换货 > 处理方式与运费\n质量问题由商城承担来回运费：可选择上门取件（免费），或自行寄回后申请运费补偿，补偿上限 20 元，凭快递单据报销。"
+    } ]
+  }, {
+    "name" : "订单追问下单时间",
+    "login" : true,
+    "turns" : [ {
+      "message" : "订单 21182516707889029120785 到哪了",
+      "intent" : {
+        "intent" : "ORDER_STATUS",
+        "confidence" : 0.95,
+        "orderNo" : "21182516707889029120785",
+        "skuId" : null
+      },
+      "historyTurns" : 0,
+      "condensedQuestion" : null,
+      "carriedOrderNo" : null,
+      "retrievalQuery" : null,
+      "sources" : [ ],
+      "tools" : [ "queryOrderStatus" ],
+      "reply" : "您的订单21182516707889029120785处于待发货状态，已付款但商家还未发货。物流信息暂无法获取，建议您在「我的订单」中查看物流轨迹。"
+    }, {
+      "message" : "它什么时候下的单",
+      "intent" : {
+        "intent" : "ORDER_STATUS",
+        "confidence" : 0.95,
+        "orderNo" : "21182516707889029120785",
+        "skuId" : null
+      },
+      "historyTurns" : 1,
+      "condensedQuestion" : "订单 21182516707889029120785 是什么时候下的单",
+      "carriedOrderNo" : null,
+      "retrievalQuery" : null,
+      "sources" : [ ],
+      "tools" : [ "queryOrderStatus" ],
+      "reply" : "您的订单是在2026年11月5日15:58下的。"
+    } ],
+    "calls" : [ {
+      "promptHash" : "1acb4755cc73dd77",
+      "output" : "{\"confidence\":0.95,\"intent\":\"ORDER_STATUS\",\"orderNo\":\"21182516707889029120785\",\"skuId\":\"}\" }"
+    }, {
+      "promptHash" : "daf5e16781c679ad",
+      "output" : "您的订单21182516707889029120785处于待发货状态，已付款但商家还未发货。物流信息暂无法获取，建议您在「我的订单」中查看物流轨迹。"
+    }, {
+      "promptHash" : "f58d44ffc476005f",
+      "output" : "订单 21182516707889029120785 是什么时候下的单"
+    }, {
+      "promptHash" : "9fddc09c536fbc78",
+      "output" : "{\"confidence\":0.95,\"intent\":\"ORDER_STATUS\",\"orderNo\":\"21182516707889029120785\",\"skuId\":\"}\" }"
+    }, {
+      "promptHash" : "dad3a6b2a3beec4e",
+      "output" : "您的订单是在2026年11月5日15:58下的。"
+    } ]
+  }, {
+    "name" : "积分追问抵扣",
+    "login" : false,
+    "turns" : [ {
+      "message" : "积分多久过期",
+      "intent" : {
+        "intent" : "POLICY",
+        "confidence" : 0.9,
+        "orderNo" : null,
+        "skuId" : null
+      },
+      "historyTurns" : 0,
+      "condensedQuestion" : null,
+      "carriedOrderNo" : null,
+      "retrievalQuery" : "积分多久过期",
+      "sources" : [ {
+        "index" : 1,
+        "source" : "points-membership.md",
+        "title" : "积分与会员",
+        "headingPath" : "积分与会员 > 积分有效期",
+        "chunkIndexes" : [ 2 ],
+        "score" : 0.8108,
+        "keywordScore" : 13.4891,
+        "fusedScore" : 0.0328,
+        "foundBy" : [ "vector", "keyword" ],
+        "snippet" : "积分有效期为获得之日起的 12 个月，到期自动清零。每月 1 日系统会通过站内信提醒即将在当月过期的积分数量。",
+        "content" : "积分与会员 > 积分有效期\n积分有效期为获得之日起的 12 个月，到期自动清零。每月 1 日系统会通过站内信提醒即将在当月过期的积分数量。"
+      }, {
+        "index" : 2,
+        "source" : "returns.md",
+        "title" : "退换货规则",
+        "headingPath" : "退换货规则 > 退款时效",
+        "chunkIndexes" : [ 6 ],
+        "score" : 0.6131,
+        "keywordScore" : 9.689,
+        "fusedScore" : 0.0318,
+        "foundBy" : [ "vector", "keyword" ],
+        "snippet" : "商城收到退货并验收通过后，1 个工作日内发起退款。各支付方式的到账时间：  - 余额支付：实时到账； - 微信支付、支付宝：1～3 个工作日； - 银行卡与信用…",
+        "content" : "退换货规则 > 退款时效\n商城收到退货并验收通过后，1 个工作日内发起退款。各支付方式的到账时间：\n\n- 余额支付：实时到账；\n- 微信支付、支付宝：1～3 个工作日；\n- 银行卡与信用卡：3～7 个工作日，以银行处理为准。\n\n使用优惠券的订单部分退货时，优惠金额按商品实付金额比例扣减；整单退货的，未过期的优惠券原路退回，已过期的不再退回。赠送的积分在退款时一并扣回。"
+      }, {
+        "index" : 3,
+        "source" : "points-membership.md",
+        "title" : "积分与会员",
+        "headingPath" : "积分与会员 > 积分获取",
+        "chunkIndexes" : [ 0 ],
+        "score" : 0.6907,
+        "keywordScore" : 7.5979,
+        "fusedScore" : 0.0315,
+        "foundBy" : [ "vector", "keyword" ],
+        "snippet" : "- 购物：订单完成后，按实付金额每 1 元得 1 积分（不足 1 元的部分不计），运费不计积分； - 评价：确认收货后 30 天内发表评价得 10 积分，带图评…",
+        "content" : "积分与会员 > 积分获取\n- 购物：订单完成后，按实付金额每 1 元得 1 积分（不足 1 元的部分不计），运费不计积分；\n- 评价：确认收货后 30 天内发表评价得 10 积分，带图评价得 20 积分，每笔订单限一次；\n- 签到：每天签到得 5 积分，连续签到 7 天额外奖励 30 积分；\n- 生日：会员生日当月可领取一次生日积分，普通会员 100 积分，黄金会员 300 积分，钻石会员 500 积分。\n\n积分在订单完成（确认收货后 7 天，即退货期结束）后到账。发生退款的，按退款金额扣回相应积分。"
+      }, {
+        "index" : 4,
+        "source" : "points-membership.md",
+        "title" : "积分与会员",
+        "headingPath" : "积分与会员 > 会员权益",
+        "chunkIndexes" : [ 4 ],
+        "score" : 0.6298,
+        "keywordScore" : 6.4516,
+        "fusedScore" : 0.031,
+        "foundBy" : [ "vector", "keyword" ],
+        "snippet" : "黄金会员：购物积分 1.2 倍，每月 2 张包邮券，专属客服通道。  钻石会员：购物积分 1.5 倍，每月 5 张包邮券，专属客服通道，退货优先处理（收到退货当…",
+        "content" : "积分与会员 > 会员权益\n黄金会员：购物积分 1.2 倍，每月 2 张包邮券，专属客服通道。\n\n钻石会员：购物积分 1.5 倍，每月 5 张包邮券，专属客服通道，退货优先处理（收到退货当天完成验收与退款），每年 2 次免费上门取件（无理由退货也可使用）。\n\n会员权益不能转让，账户被冻结期间暂停享受。"
+      } ],
+      "tools" : [ ],
+      "reply" : "积分有效期为获得之日起的12个月，到期自动清零。每月1日系统会通过站内信提醒即将在当月过期的积分数量。"
+    }, {
+      "message" : "那能抵多少钱",
+      "intent" : {
+        "intent" : "PRODUCT_INFO",
+        "confidence" : 0.9,
+        "orderNo" : null,
+        "skuId" : null
+      },
+      "historyTurns" : 1,
+      "condensedQuestion" : null,
+      "carriedOrderNo" : null,
+      "retrievalQuery" : null,
+      "sources" : [ ],
+      "tools" : [ ],
+      "reply" : "积分可以抵扣商品价格，具体抵扣金额取决于商品的单价。您可以查询商品详情来了解具体的抵扣信息。"
+    } ],
+    "calls" : [ {
+      "promptHash" : "252ef780c7d4afd2",
+      "output" : "{\"confidence\":0.9,\"intent\":\"POLICY\",\"orderNo\": \"\", \"skuId\": \"\"}"
+    }, {
+      "promptHash" : "4f0659c598e2321b",
+      "output" : "积分有效期为获得之日起的12个月，到期自动清零。每月1日系统会通过站内信提醒即将在当月过期的积分数量。"
+    }, {
+      "promptHash" : "8a946ee5bfc559f9",
+      "output" : "积分多久过期"
+    }, {
+      "promptHash" : "0350f8e68e9ad7c7",
+      "output" : "{\"confidence\":0.9,\"intent\":\"PRODUCT_INFO\",\"orderNo\": \"\", \"skuId\": \"null\"}"
+    }, {
+      "promptHash" : "24d0178407ac1940",
+      "output" : "积分可以抵扣商品价格，具体抵扣金额取决于商品的单价。您可以查询商品详情来了解具体的抵扣信息。"
+    } ]
+  } ]
+}

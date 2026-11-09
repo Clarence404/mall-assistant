@@ -38,3 +38,10 @@ spring:
 #       url: jdbc:postgresql://<pg-host>:5432/mall_assistant
 #       username: mall
 #       password: <your-password>
+
+# —— 第 6 章：对话记忆存进 PostgreSQL（默认 memory，重启就没了）——
+# 连接默认沿用上面第 4 章 pgvector 的 url / username / password（同一个库，表是 SPRING_AI_CHAT_MEMORY，第一次用到时自动建）；
+# 知识库仍用 memory 时也可以只开这一项，pgvector 一段照样要填连接信息
+# assistant:
+#   memory:
+#     store: jdbc

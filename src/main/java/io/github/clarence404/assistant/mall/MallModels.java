@@ -33,6 +33,15 @@ public final class MallModels {
     public record Tokens(String accessToken, String refreshToken, long expiresIn) {}
 
     /**
+     * {@code GET /api/users/me} 的响应（商城「我的」页面的 Profile）：第 6 章用它确认令牌属于哪个用户，把会话绑定到这个用户。
+     *
+     * @param userId 用户 ID（商城按字符串输出）
+     * @param nickname 昵称，智能客服不使用
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record UserProfile(String userId, String nickname) {}
+
+    /**
      * {@code GET /api/orders/{orderNo}} 的响应（商城的 OrderView），只取客服回答用得到的字段。
      *
      * @param orderNo 订单号

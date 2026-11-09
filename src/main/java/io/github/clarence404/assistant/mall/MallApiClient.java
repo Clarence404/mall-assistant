@@ -12,7 +12,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 /**
- * 调商城（mall-evolution）网关的 HTTP 客户端：登录、查自己的订单、列出自己最近的订单、查商品。每个方法都返回 {@link MallResult}，不抛异常。
+ * 调商城（mall-evolution）网关的 HTTP 客户端：登录、查自己的订单、列出自己最近的订单、查商品、查当前用户（第 6 章）。每个方法都返回 {@link MallResult}，不抛异常。
  *
  * <p>所在层：外部系统接入（第 3 章引入）。上游是 {@code tool.MallTools}（模型调用的工具）和 {@link MallLoginController}
  * （页面登录）；下游是商城网关 {@code assistant.mall.base-url}（默认 {@code http://localhost:9000}）。
@@ -96,6 +96,22 @@ public class MallApiClient {
                 "列订单",
                 rest.get().uri("/api/orders?size={size}", size).headers(h -> h.setBearerAuth(accessToken)),
                 MallModels.OrderPage.class);
+    }
+
+    /**
+     * 查当前令牌对应的商城用户：{@code GET /api/users/me}，带 {@code Authorization: Bearer <令牌>}。第 6 章引入，用来把会话绑定到商城用户。
+     *
+     * <p>为什么不自己解析令牌：商城的访问令牌是 JWT，中间那段 Base64 解开就能看到用户 ID（{@code sub}），但没有商城的密钥就<b>验不了签名</b>——
+     * 谁都可以伪造一个 {@code sub} 写着别人 ID 的令牌。让商城自己验（这个接口只有令牌有效时才返回本人信息），拿到的用户 ID 才可信。
+     *
+     * @param accessToken 商城访问令牌
+     * @return 成功时是用户 ID 与昵称；令牌无效或过期是 {@link MallFailure#UNAUTHORIZED}；商城不可用是 {@link MallFailure#UNAVAILABLE}
+     */
+    public MallResult<MallModels.UserProfile> me(String accessToken) {
+        return exchange(
+                "查当前用户",
+                rest.get().uri("/api/users/me").headers(h -> h.setBearerAuth(accessToken)),
+                MallModels.UserProfile.class);
     }
 
     /**

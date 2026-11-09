@@ -2,6 +2,7 @@ package io.github.clarence404.assistant.error;
 
 import io.github.clarence404.assistant.knowledge.KnowledgeException;
 import io.github.clarence404.assistant.knowledge.KnowledgeFailure;
+import io.github.clarence404.assistant.memory.ConversationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -24,6 +25,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * 流式接口的错误不经过这里（响应已经开始写了），由 {@code ChatController} 转成 error 事件。
  *
  * <p>第 4 章起还处理知识库的 {@link KnowledgeException}：向量模型 / 向量库不可用 503，库里是别的模型生成的向量 409，同样带 code。
+ *
+ * <p>第 6 章起还处理会话的 {@link ConversationException}：会话不存在 404、正在回答 409、登录失效 401、商城或记忆库不可用 503。
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -64,6 +67,26 @@ public class ApiExceptionHandler {
         KnowledgeFailure failure = e.failure();
         log.warn("知识库操作失败：{} {}", failure, e.getMessage(), e.getCause());
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(failure.status(), e.getMessage());
+        problem.setTitle(failure.title());
+        problem.setProperty("code", failure.name());
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(failure.status());
+        if (failure.status() == HttpStatus.SERVICE_UNAVAILABLE) {
+            response.header(HttpHeaders.RETRY_AFTER, "5");
+        }
+        return response.body(problem);
+    }
+
+    /**
+     * 会话操作失败 → ProblemDetail（第 6 章）：状态码与 code 见 {@link ConversationException.Failure}。
+     *
+     * @param e 会话异常，原始异常（如数据库连不上）只写日志
+     * @return 对应状态码的响应；503 带 Retry-After
+     */
+    @ExceptionHandler(ConversationException.class)
+    public ResponseEntity<ProblemDetail> handleConversationFailure(ConversationException e) {
+        ConversationException.Failure failure = e.failure();
+        log.info("会话操作失败：{}", failure, e.getCause());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(failure.status(), failure.message());
         problem.setTitle(failure.title());
         problem.setProperty("code", failure.name());
         ResponseEntity.BodyBuilder response = ResponseEntity.status(failure.status());

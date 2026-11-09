@@ -162,6 +162,76 @@ class OllamaEmbeddingIT {
         }
     }
 
+    /**
+     * 第 6 章：相似度门槛扫描——按模型定 {@code assistant.rag.model-profiles} 的 min-score 时就是这样跑的，结果打进日志（docs/ch06.md 的表）。
+     *
+     * <p>对每道正例记下「正确那一节」的向量相似度和关键词覆盖率，对每道反例（{@link RetrievalEval#OUT_OF_KNOWLEDGE}）记下所有候选里最高的相似度和覆盖率；
+     * 再看每个候选门槛下：正例里正确那一节能过门槛的有几道（过不了就可能答不出），反例里一块都过不了（短路）的有几道（过了就可能拿不相关的资料硬答）。
+     * 覆盖率门槛固定 0.6；「只看覆盖率」等于把相似度门槛设成大于 1。
+     *
+     * <p>最后断言当前配置下（application.yml 里这个模型的门槛）6 道反例至少 5 道短路。
+     */
+    @Test
+    void similarityThresholdSweep() {
+        ingestion.ingest(false);
+        RagRetriever ranking = new RagRetriever(search, store, RagFixtures.properties(-1, true));
+        double coverageGate = ragProperties.keywordMinCoverage();
+
+        List<double[]> positives = new java.util.ArrayList<>();
+        for (RetrievalEval.Case c : RetrievalEval.cases()) {
+            double bestScore = -1;
+            double bestCoverage = 0;
+            for (var candidate : ranking.retrieve(c.question(), c.question(), 4).ranked()) {
+                if (candidate.chunk().source().equals(c.source())
+                        && candidate.chunk().headingPath().contains(c.heading())) {
+                    bestScore = Math.max(bestScore, candidate.vectorScore() == null ? -1 : candidate.vectorScore());
+                    bestCoverage = Math.max(bestCoverage, candidate.coverage() == null ? 0 : candidate.coverage());
+                }
+            }
+            positives.add(new double[] {bestScore, bestCoverage});
+            log.info("{} 正例「{}」：正确那一节 相似度 {} 覆盖率 {}", MODEL, c.question(), round(bestScore), round(bestCoverage));
+        }
+        List<double[]> negatives = new java.util.ArrayList<>();
+        for (String question : RetrievalEval.OUT_OF_KNOWLEDGE) {
+            double maxScore = -1;
+            double maxCoverage = 0;
+            for (var candidate : ranking.retrieve(question, question, 4).ranked()) {
+                maxScore = Math.max(maxScore, candidate.vectorScore() == null ? -1 : candidate.vectorScore());
+                maxCoverage = Math.max(maxCoverage, candidate.coverage() == null ? 0 : candidate.coverage());
+            }
+            negatives.add(new double[] {maxScore, maxCoverage});
+            log.info("{} 反例「{}」：最高相似度 {} 最高覆盖率 {}", MODEL, question, round(maxScore), round(maxCoverage));
+        }
+        for (double gate : new double[] {0.55, 0.6, 0.65, 0.7, 0.72, 0.75, 0.8, 1.01}) {
+            long kept = positives.stream()
+                    .filter(p -> p[0] >= gate || p[1] >= coverageGate)
+                    .count();
+            long shorted = negatives.stream()
+                    .filter(n -> n[0] < gate && n[1] < coverageGate)
+                    .count();
+            log.info(
+                    "{} 门槛 {}：正例里正确那一节过门槛 {}/{}，反例短路 {}/{}",
+                    MODEL,
+                    gate > 1 ? "（只看覆盖率）" : gate,
+                    kept,
+                    positives.size(),
+                    shorted,
+                    negatives.size());
+        }
+
+        RagRetriever configured = new RagRetriever(search, store, ragProperties);
+        long shortCircuited = RetrievalEval.OUT_OF_KNOWLEDGE.stream()
+                .filter(q -> configured.retrieve(q).sources().isEmpty())
+                .count();
+        log.info("{} 当前配置的相似度门槛 {}：反例短路 {}/{}", MODEL, configured.minScore(), shortCircuited, negatives.size());
+        // bge-m3 的 0.6 放过了「买完降价了能补差价吗」（0.636，第 5 章就记录过）；nomic-embed-text 的 0.72 全部短路
+        assertThat(shortCircuited).as("当前门槛下知识库里没有的问题大多应该短路").isGreaterThanOrEqualTo(5);
+    }
+
+    private static double round(double value) {
+        return Math.round(value * 1000) / 1000.0;
+    }
+
     /** 测试用的假对话模型：应用启动需要一个 ChatModel，这个测试不调它。 */
     @TestConfiguration(proxyBeanMethods = false)
     static class Models {

@@ -2,8 +2,8 @@ package io.github.clarence404.assistant.chat;
 
 import io.github.clarence404.assistant.error.ModelCallException;
 import io.github.clarence404.assistant.error.ModelFailure;
-import io.github.clarence404.assistant.intent.IntentService;
 import io.github.clarence404.assistant.mall.MallToken;
+import io.github.clarence404.assistant.memory.ConversationException;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,8 +20,8 @@ import reactor.core.publisher.Mono;
 /**
  * 对话的 HTTP 入口：阻塞接口 {@code POST /api/chat} 与流式接口 {@code POST /api/chat/stream}。
  *
- * <p>所在层：接口层（第 1 章引入，第 2 章加上意图识别，第 3 章加上商城令牌与工具事件，第 5 章加上 RAG 的 source 事件）。上游是 {@code static/index.html} 聊天页或任意
- * HTTP 客户端；下游是 {@link ChatService}（回答）与 {@link IntentService}（意图识别）。这里只做协议转换：请求体校验、取出请求头里的
+ * <p>所在层：接口层（第 1 章引入，第 2 章加上意图识别，第 3 章加上商城令牌与工具事件，第 5 章加上 RAG 的 source 事件，第 6 章加上会话 ID 与 memory 事件）。上游是 {@code static/index.html} 聊天页或任意
+ * HTTP 客户端；下游是 {@link ChatService}（打开会话、意图识别、回答；第 5 章之前流式接口直接调 {@code IntentService}，第 6 章起意图识别要和会话一起做，统一交给 ChatService）。这里只做协议转换：请求体校验、取出请求头里的
  * 商城令牌、把结果写成 JSON 或 SSE 事件，不放业务逻辑。
  *
  * <p>商城令牌：页面登录后，每次提问在 {@code Authorization: Bearer <商城令牌>} 请求头里带上（没登录就不带）。这里只把它取出来交给
@@ -40,16 +40,19 @@ public class ChatController {
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
 
     private final ChatService chatService;
-    private final IntentService intentService;
-
-    public ChatController(ChatService chatService, IntentService intentService) {
+    /**
+     * 创建。
+     *
+     * @param chatService 对话服务
+     */
+    public ChatController(ChatService chatService) {
         this.chatService = chatService;
-        this.intentService = intentService;
     }
 
     /**
-     * 阻塞接口：{"message": "..."} → {"reply": "...", "intent": {...}, "tools": [...], "sources": [...], "rag": {...}}；
-     * 模型调用失败由 ApiExceptionHandler 转成 503。第 5 章起规则类问题走 RAG，sources 是引用的资料，rag 是检索与引用校验的调试信息。
+     * 阻塞接口：{"message": "...", "conversationId": "..."} → {"reply": "...", "intent": {...}, "tools": [...], "sources": [...], "rag": {...},
+     * "memory": {...}}；模型调用失败由 ApiExceptionHandler 转成 503。第 5 章起规则类问题走 RAG，sources 是引用的资料，rag 是检索与引用校验的调试信息；
+     * 第 6 章起带了会话 ID 就是多轮对话，memory 是记忆的调试信息，同一个会话的上一条还没回答完时返回 409。
      *
      * @param request 请求体，{@code @Valid} 触发 {@link ChatRequest} 上的校验（空消息、超长消息直接 400，不浪费一次模型调用）
      * @param authorization {@code Authorization} 请求头，{@code Bearer <商城令牌>}；没登录时不带
@@ -60,12 +63,13 @@ public class ChatController {
     public ChatReply chat(
             @Valid @RequestBody ChatRequest request,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
-        return chatService.chat(request.message(), MallToken.fromAuthorizationHeader(authorization));
+        return chatService.chat(
+                request.message(), request.conversationId(), MallToken.fromAuthorizationHeader(authorization));
     }
 
     /**
-     * 流式接口：返回 text/event-stream，先推一个 intent 事件，再推 0 到多个 tool / source 事件和若干 token 事件，最后一个 done 事件；
-     * 出错时推一个 error 事件后结束。
+     * 流式接口：返回 text/event-stream，先推一个 intent 事件（第 6 章起带了会话 ID 时接着一个 memory 事件），再推 0 到多个 tool / source 事件和
+     * 若干 token 事件，最后一个 done 事件；出错时推一个 error 事件后结束（会话正忙也是 error 事件，code 为 CONVERSATION_BUSY）。
      *
      * <p>Spring MVC 直接支持返回 Flux：每个元素写成一条 SSE，Flux 结束时关闭连接。意图识别是一次阻塞调用，放进
      * {@code Mono.fromCallable}，它失败时同样走 error 事件。
@@ -74,8 +78,9 @@ public class ChatController {
      * 订阅之后才真正开始调用模型。下面这条链的含义：
      *
      * <ol>
-     *   <li>{@code Mono.fromCallable}：订阅时才执行意图识别，异常会变成序列里的错误信号，而不是直接抛出
-     *   <li>{@code flatMapMany} + {@code Flux.concat}：拿到意图后，先发 intent 事件，再按顺序接上回答的 tool / token 事件
+     *   <li>{@code Flux.using}：订阅时才打开会话、识别意图（{@link ChatService#begin}），异常会变成序列里的错误信号，而不是直接抛出；
+     *       不管序列怎么结束（完成、出错、页面断开取消），最后都关掉会话（第 6 章）
+     *   <li>{@code Flux.concat}：拿到意图后，先发 intent 事件，再按顺序接上回答的 memory / tool / source / token 事件
      *   <li>{@code concatWith(done)}：上游正常结束才会接上 done；上游出错时不会执行
      *   <li>{@code onErrorResume}：链上任何一步出错，都把错误换成一个 error 事件，然后正常结束
      * </ol>
@@ -94,21 +99,23 @@ public class ChatController {
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
         String message = request.message();
         String mallToken = MallToken.fromAuthorizationHeader(authorization);
-        return Mono.fromCallable(() -> intentService.classify(message))
-                .flatMapMany(intent -> Flux.concat(
-                        Mono.just(event(StreamEvents.INTENT, intent)),
-                        chatService
-                                .answerStream(message, intent, mallToken)
-                                // 模型偶尔会推内容为空的片段，不值得占一条事件
-                                .filter(part -> !(part instanceof AnswerPart.Text text
-                                        && text.text().isEmpty()))
-                                .map(ChatController::partEvent)))
+        return Flux.using(
+                        () -> chatService.begin(message, request.conversationId(), mallToken),
+                        turn -> Flux.concat(
+                                Mono.just(event(StreamEvents.INTENT, turn.intent())),
+                                chatService
+                                        .answerStream(turn)
+                                        // 模型偶尔会推内容为空的片段，不值得占一条事件
+                                        .filter(part -> !(part instanceof AnswerPart.Text text
+                                                && text.text().isEmpty()))
+                                        .map(ChatController::partEvent)),
+                        turn -> turn.conversation().close())
                 .concatWith(Mono.fromSupplier(() -> event(StreamEvents.DONE, StreamEvents.Done.stop())))
                 .onErrorResume(e -> Mono.just(errorEvent(e)));
     }
 
     /**
-     * 回答片段 → SSE：文字是 token 事件，工具调用记录是 tool 事件，RAG 引用来源是 source 事件（第 5 章）。
+     * 回答片段 → SSE：文字是 token 事件，工具调用记录是 tool 事件，RAG 引用来源是 source 事件（第 5 章），记忆情况是 memory 事件（第 6 章）。
      *
      * @param part {@link ChatService#answerStream} 产出的片段
      */
@@ -117,6 +124,7 @@ public class ChatController {
             case AnswerPart.Text text -> event(StreamEvents.TOKEN, new StreamEvents.Token(text.text()));
             case AnswerPart.ToolUse tool -> event(StreamEvents.TOOL, tool.invocation());
             case AnswerPart.Source source -> event(StreamEvents.SOURCE, source.source());
+            case AnswerPart.Memory memory -> event(StreamEvents.MEMORY, memory.trace());
         };
     }
 
@@ -127,6 +135,15 @@ public class ChatController {
      * @return {@code event: error} 事件，code 与阻塞接口 ProblemDetail 里的 code 相同
      */
     private static ServerSentEvent<Object> errorEvent(Throwable e) {
+        if (e instanceof ConversationException conversation) {
+            // 第 6 章：会话正忙等不是模型的问题，用会话自己的错误码
+            log.info("流式对话的会话操作失败：{}", conversation.failure());
+            return event(
+                    StreamEvents.ERROR,
+                    new StreamEvents.Error(
+                            conversation.failure().name(),
+                            conversation.failure().message()));
+        }
         ModelFailure failure = ModelCallException.from(e).failure();
         log.warn("流式调用模型失败：{}", failure, e);
         return event(StreamEvents.ERROR, new StreamEvents.Error(failure.name(), failure.message()));

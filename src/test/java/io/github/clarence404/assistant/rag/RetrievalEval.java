@@ -24,6 +24,13 @@ public final class RetrievalEval {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
+    /**
+     * 知识库里<b>没有</b>答案的问题（第 5 章定 bge-m3 门槛时用的 6 道反例，第 6 章定 nomic-embed-text 门槛时再用一次）：门槛合适的话，
+     * 它们一块资料都不该留下（短路，不调模型）。
+     */
+    public static final List<String> OUT_OF_KNOWLEDGE =
+            List.of("能用花呗分期付款吗", "你们有线下门店吗", "买空调送安装吗", "能以旧换新吗", "买完降价了能补差价吗", "礼品卡能转赠给别人吗");
+
     private RetrievalEval() {}
 
     /**

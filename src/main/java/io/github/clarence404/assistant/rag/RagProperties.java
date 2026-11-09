@@ -2,7 +2,9 @@ package io.github.clarence404.assistant.rag;
 
 import io.github.clarence404.assistant.intent.Intent;
 import java.util.List;
+import java.util.Locale;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
@@ -24,7 +26,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *     多半是闲聊或别的，走 RAG 检索不到时会回「没找到相关规定」，反而答非所问
  * @param topK 最终交给模型几块（编号 [1]～[topK]）。太少容易漏掉答案，太多提示词变长、小模型更容易被无关内容带偏
  * @param candidateK 向量检索、关键词检索各取几块候选，再融合；比 topK 大，融合才有东西可挑（受 {@code assistant.knowledge.search.max-top-k} 限制）
- * @param minScore 向量检索的最低余弦相似度：低于它的块不算「相关」。只能在同一个向量模型内部比较，换模型要重新定（见 docs/ch05.md 实测）
+ * @param minScore 向量检索的最低余弦相似度：低于它的块不算「相关」。只能在同一个向量模型内部比较，换模型要重新定（见 docs/ch05.md 实测）；
+ *     第 6 章起这是「兜底值」，{@code modelProfiles} 里按模型配了的以那里为准
  * @param keywordMinCoverage 只被关键词检索找到的块，问题里的词（去掉「的、了、吗」等）至少有这么大比例出现在块里才算相关，0～1
  * @param contextBudgetChars 拼进提示词的资料最多多少个字（上下文窗口预算）。超出时后面的块不再放进去，第一块太长时截断
  * @param hybrid 是否加上关键词检索，与向量检索用 RRF 融合（混合检索）。关掉 = 只用向量检索，用来对比效果
@@ -33,6 +36,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *     多一次模型调用：本地小模型要 1～3 秒，命令行模型要好几秒，默认关闭
  * @param snippetChars 引用来源里的片段显示多少个字（页面悬停提示、调试面板用）
  * @param prompt RAG 回答的系统提示词版本，对应 {@code prompts/<prompt>.st}
+ * @param modelProfiles 按向量模型分别配置的相似度门槛（第 6 章补充，和第 4 章 {@code assistant.knowledge.model-profiles} 一样按模型名前缀匹配）：
+ *     不同模型的相似度分布完全不同（bge-m3 正确答案在 0.67～0.81，nomic-embed-text 在 0.59～0.77、而且和不相关的问题重叠），一个数用不了两个模型
  */
 @ConfigurationProperties("assistant.rag")
 public record RagProperties(
@@ -47,11 +52,14 @@ public record RagProperties(
         @DefaultValue("60") int rrfK,
         @DefaultValue("false") boolean rewriteQuery,
         @DefaultValue("80") int snippetChars,
-        @DefaultValue("rag-v1") String prompt) {
+        @DefaultValue("rag-v1") String prompt,
+        List<ScoreProfile> modelProfiles) {
 
     /** 启动时就校验，配错了立刻报错，而不是第一个用户提问时才发现。 */
+    @ConstructorBinding
     public RagProperties {
         intents = intents == null ? List.of() : List.copyOf(intents);
+        modelProfiles = modelProfiles == null ? List.of() : List.copyOf(modelProfiles);
         if (topK < 1 || candidateK < topK) {
             throw new IllegalArgumentException(
                     "assistant.rag.top-k 至少为 1，且 candidate-k 不能小于 top-k，当前 " + topK + " / " + candidateK);
@@ -63,6 +71,76 @@ public record RagProperties(
             throw new IllegalArgumentException("assistant.rag.rrf-k 至少为 1，当前 " + rrfK);
         }
     }
+
+    /**
+     * 不按模型区分门槛的配置（第 5 章的写法，测试里用）。
+     *
+     * @param enabled 总开关
+     * @param intents 走 RAG 的意图
+     * @param topK 交给模型几块
+     * @param candidateK 每路取几块候选
+     * @param minScore 向量相似度门槛
+     * @param keywordMinCoverage 关键词覆盖率门槛
+     * @param contextBudgetChars 资料字数预算
+     * @param hybrid 是否混合检索
+     * @param rrfK RRF 常数
+     * @param rewriteQuery 是否改写问题
+     * @param snippetChars 片段长度
+     * @param prompt 系统提示词版本
+     */
+    public RagProperties(
+            boolean enabled,
+            List<Intent> intents,
+            int topK,
+            int candidateK,
+            double minScore,
+            double keywordMinCoverage,
+            int contextBudgetChars,
+            boolean hybrid,
+            int rrfK,
+            boolean rewriteQuery,
+            int snippetChars,
+            String prompt) {
+        this(
+                enabled,
+                intents,
+                topK,
+                candidateK,
+                minScore,
+                keywordMinCoverage,
+                contextBudgetChars,
+                hybrid,
+                rrfK,
+                rewriteQuery,
+                snippetChars,
+                prompt,
+                List.of());
+    }
+
+    /**
+     * 当前向量模型用的相似度门槛：模型名以某个 profile 的 {@code match} 开头就用它的 {@code minScore}（{@code nomic-embed-text:v1.5}
+     * 也能命中 {@code nomic-embed-text}），都不命中时用 {@link #minScore()}。
+     *
+     * @param model 向量模型名，可以为 null
+     * @return 门槛
+     */
+    public double minScoreFor(String model) {
+        String name = model == null ? "" : model.toLowerCase(Locale.ROOT);
+        return modelProfiles.stream()
+                .filter(p -> p.match() != null && !p.match().isBlank())
+                .filter(p -> name.startsWith(p.match().toLowerCase(Locale.ROOT)))
+                .map(ScoreProfile::minScore)
+                .findFirst()
+                .orElse(minScore);
+    }
+
+    /**
+     * 某个向量模型的相似度门槛（第 6 章补充）。
+     *
+     * @param match 模型名前缀，如 {@code bge-m3}
+     * @param minScore 这个模型的最低余弦相似度；大于 1 表示这个模型的向量分数不作为「相关」的依据，只靠关键词覆盖率（见 docs/ch06.md 的实测）
+     */
+    public record ScoreProfile(String match, double minScore) {}
 
     /**
      * 复制一份，只改「是否混合检索」（评测时对比开 / 关混合检索用）。
@@ -83,6 +161,7 @@ public record RagProperties(
                 rrfK,
                 rewriteQuery,
                 snippetChars,
-                prompt);
+                prompt,
+                modelProfiles);
     }
 }

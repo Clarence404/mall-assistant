@@ -10,13 +10,15 @@ package io.github.clarence404.assistant.chat;
  *       参数和结果；不认识它的前端同样可以忽略
  *   <li>{@code event: source}，data 为 {@code RagSource}：第 5 章新增，规则类问题走 RAG 时，0 到多个，在第一段文字之前推送，
  *       告诉前端回答里的 [1]、[2] 各对应哪段资料（编号、标题路径、来源文件、分数、片段）；检索不到、直接回固定话术时没有
+ *   <li>{@code event: memory}，data 为 {@code MemoryTrace}：第 6 章新增，请求带了会话 ID 时推一次，在回答的文字和引用来源之前：
+ *       这一轮带了几轮历史、裁掉几轮、追问改写成了什么、沿用了哪个订单号；不认识它的前端可以忽略
  *   <li>{@code event: token}，data 为 {@link Token}：一段增量文本，前端按顺序拼接
  *   <li>{@code event: done}，data 为 {@link Done}：回答结束，之后连接关闭
  *   <li>{@code event: error}，data 为 {@link Error}：出错，之后连接关闭，不再有 done
  * </ul>
  *
  * <p>顺序：{@code intent → tool* → token* → done | error}（第 3 章起 tool 也可能夹在 token 之间：模型先说了几句再调工具时）；
- * 走 RAG 时是 {@code intent → source* → token* → done | error}（第 5 章，RAG 不用工具）。
+ * 走 RAG 时是 {@code intent → source* → token* → done | error}（第 5 章，RAG 不用工具）；第 6 章起带了会话 ID 时，intent 之后紧跟一个 memory 事件。
  *
  * <p>data 用 JSON 而不是纯文本：增量文本里常有换行和前导空格，纯文本 SSE 会把换行拆成多行 data、 把行首空格吃掉。
  *
@@ -30,6 +32,7 @@ public final class StreamEvents {
     public static final String INTENT = "intent";
     public static final String TOOL = "tool";
     public static final String SOURCE = "source";
+    public static final String MEMORY = "memory";
     public static final String TOKEN = "token";
     public static final String DONE = "done";
     public static final String ERROR = "error";

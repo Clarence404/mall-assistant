@@ -30,6 +30,8 @@ class IndexPageTest extends FakeModelWebTest {
 
         assertThat(html)
                 .contains("示例商城智能客服")
+                .contains("<title>智能客服 · 示例商城</title>")
+                .contains("rel=\"icon\" href=\"data:image/svg+xml,")
                 .contains("/api/chat/stream")
                 .contains("调试面板")
                 .contains("dbgIntent")
@@ -44,6 +46,13 @@ class IndexPageTest extends FakeModelWebTest {
                 // 第 5 章：调试面板的引用来源、流式的 source 事件、回答里可点的引用编号
                 .contains("dbgSources")
                 .contains("'source'")
-                .contains("renderCitations");
+                .contains("renderCitations")
+                // 第 6 章：会话 ID（localStorage）、请求体带 conversationId、恢复与清空历史、新对话、调试面板的记忆一栏与 memory 事件
+                .contains("localStorage")
+                .contains("conversationId")
+                .contains("/api/conversations/")
+                .contains("新对话")
+                .contains("dbgMemory")
+                .contains("'memory'");
     }
 }

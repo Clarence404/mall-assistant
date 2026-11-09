@@ -45,7 +45,8 @@ spring:
         max-interval: 2s          # 指数退避的等待上限（默认 3 分钟）
 
 # 本项目自己的配置，分别绑定到 ChatProperties（assistant.chat）、PromptProperties（assistant.prompt）、
-# ToolProperties（assistant.tools）、MallApiProperties（assistant.mall）与 KnowledgeProperties（assistant.knowledge）
+# ToolProperties（assistant.tools）、MallApiProperties（assistant.mall）、KnowledgeProperties（assistant.knowledge）、
+# RagProperties（assistant.rag）与 MemoryProperties（assistant.memory）
 assistant:
   chat:
     stream-timeout: 30s      # 流式：首段和相邻两段之间最多等多久
@@ -99,7 +100,7 @@ assistant:
       - POLICY
     top-k: 4                 # 最终交给模型几块资料（编号 [1]～[4]）：太少容易漏答案，太多提示词变长、小模型容易被无关内容带偏
     candidate-k: 10          # 向量检索、关键词检索各取几块候选再融合（不超过 assistant.knowledge.search.max-top-k）
-    min-score: 0.6           # 向量检索的最低余弦相似度，低于它不算相关。按 bge-m3 实测定的（评测集正确答案 0.67～0.81，知识库里没有的问题多在 0.49～0.64），换模型要重新测（见 docs/ch05.md）
+    min-score: 0.6           # 向量检索的最低余弦相似度，低于它不算相关。按 bge-m3 实测定的（评测集正确答案 0.67～0.81，知识库里没有的问题多在 0.49～0.64），换模型要重新测（见 docs/ch05.md）；下面 model-profiles 没列到的模型用它
     keyword-min-coverage: 0.6  # 关键词检索找到的块：问题里的词（去掉「的、了、吗」等）至少六成出现在块里才算相关
     context-budget-chars: 1500 # 拼进提示词的资料最多多少字（上下文窗口预算），放不下的块不放
     hybrid: true             # 混合检索：关键词检索（BM25）+ 向量检索，RRF 融合；false = 只用向量检索，用来对比
@@ -107,6 +108,34 @@ assistant:
     rewrite-query: false     # 检索前先让对话模型改写问题（Spring AI RewriteQueryTransformer）；多一次模型调用，默认关
     snippet-chars: 80        # 引用来源的片段长度（页面悬停提示用）
     prompt: rag-v1           # RAG 回答的系统提示词：prompts/rag-v1.st
+    model-profiles:          # 第 6 章补充：按向量模型分别定相似度门槛（按模型名前缀匹配，和 assistant.knowledge.model-profiles 一样），不同模型的分数分布不能共用一个数
+      - match: bge-m3        # 第 5 章实测：正确答案 0.67～0.81，知识库里没有的问题 0.49～0.64
+        min-score: 0.6
+      - match: nomic-embed-text   # 第 6 章实测（docs/ch06.md）：知识库里没有的问题最高也有 0.64～0.71，取 0.72 才能全部短路；代价是 20 道正例只剩 5 道过门槛（都靠关键词覆盖率），中文请用 bge-m3
+        min-score: 0.72
+  memory:                    # 第 6 章：多轮对话与记忆（见 MemoryProperties）。请求带了 conversationId 才启用，不带时和第 5 章一样单轮
+    enabled: true            # 总开关；关掉后带了会话 ID 也按单轮处理
+    store: ${ASSISTANT_MEMORY_STORE:memory}   # 记忆存在哪：memory（默认，JVM 内存，重启就没了）或 jdbc（PostgreSQL 的 SPRING_AI_CHAT_MEMORY 表）
+    ttl: 30m                 # 会话空闲多久过期：最后一句话之后超过它，再来就当新会话（历史清空）
+    sweep-interval: 10m      # 后台多久清理一次过期会话（内存模式不清理会一直占内存）
+    max-messages: 40         # 存储窗口：每个会话最多留几条消息（一问一答两条），超出删最早的；页面刷新后最多恢复这么多
+    window-turns: 6          # 提示词窗口：每次最多带最近几轮历史给模型（一轮 = 一问一答）
+    budget-chars: 2000       # 提示词窗口：带进提示词的历史最多多少字（粗略代替 token 预算，中文大致一两个字一个 token），超出从最早一轮开始丢
+    entity-turns: 3          # 指代沿用：「它什么时候下的单」从最近几轮里找订单号 / SKU
+    condense:                # 追问改写：走 RAG 且有历史时，先把「那运费谁出」改写成独立问题再检索
+      enabled: true          # 多一次模型调用（本地 1.5b 一两秒，命令行模型几秒）；关掉后追问用原话检索，多半检索不到
+      history-turns: 3       # 改写时给模型看最近几轮
+      max-chars: 120         # 改写结果超过这么多字当作失败（小模型有时会直接开始回答问题），退回原话
+    summary:                 # 摘要记忆：超出 window-turns 的早期对话让模型压成摘要，原话删掉
+      enabled: false         # 默认关：每次压缩多一次模型调用、可能丢细节或说错，原话删了就找不回来
+      max-chars: 300         # 摘要最多多少字
+    owner-cache-ttl: 5m      # 商城令牌 → 商城用户的缓存时长（问商城 /api/users/me 的结果），不用每句话都问一次
+    jdbc:                    # store=jdbc 时：默认和第 4 章的 pgvector 同一个库、同一个账号（不同的表），真实地址和密码写进 config/application-local.yml
+      url: ${MEMORY_JDBC_URL:${assistant.knowledge.pgvector.url}}
+      username: ${MEMORY_JDBC_USERNAME:${assistant.knowledge.pgvector.username}}
+      password: ${MEMORY_JDBC_PASSWORD:${assistant.knowledge.pgvector.password}}
+      initialize-schema: true   # 第一次用到时执行 Spring AI 自带的建表脚本（CREATE TABLE IF NOT EXISTS，已存在不动）
+      max-pool-size: 4       # 连接池大小
 
 server:
   port: ${SERVER_PORT:8088}    # 与 mall-evolution（8080 / 8082 / 8083 / 9000）错开，两个项目可以同时运行

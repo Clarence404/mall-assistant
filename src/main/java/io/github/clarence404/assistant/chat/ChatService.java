@@ -4,6 +4,9 @@ import io.github.clarence404.assistant.error.ModelCallException;
 import io.github.clarence404.assistant.intent.Intent;
 import io.github.clarence404.assistant.intent.IntentResult;
 import io.github.clarence404.assistant.intent.IntentService;
+import io.github.clarence404.assistant.memory.Conversation;
+import io.github.clarence404.assistant.memory.ConversationMemory;
+import io.github.clarence404.assistant.memory.QuestionCondenser;
 import io.github.clarence404.assistant.prompt.AssistantPrompts;
 import io.github.clarence404.assistant.rag.CitationChecker;
 import io.github.clarence404.assistant.rag.RagPlan;
@@ -17,7 +20,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import tools.jackson.databind.json.JsonMapper;
@@ -27,9 +32,23 @@ import tools.jackson.databind.json.JsonMapper;
  * 回答时可以用工具查商城的订单和商品。
  * 调用失败统一转成 {@link ModelCallException}。
  *
- * <p>所在层：业务层（第 1 章引入 {@link #reply} / {@link #stream}，第 2 章加上意图识别与拒答，第 3 章加上工具调用，第 5 章加上 RAG）。
- * 上游是 {@link ChatController}；下游是 {@link IntentService}（识别意图）、{@link AssistantPrompts}（系统提示词与拒答话术）、
- * {@link MallTools}（查订单、查商品）、{@link RagService}（检索知识库、拼带资料的提示词）和 {@link ChatClient}（真正调模型）。
+ * <p>所在层：业务层（第 1 章引入 {@link #reply} / {@link #stream}，第 2 章加上意图识别与拒答，第 3 章加上工具调用，第 5 章加上 RAG，
+ * 第 6 章加上多轮对话与记忆）。上游是 {@link ChatController}；下游是 {@link IntentService}（识别意图）、{@link AssistantPrompts}（系统提示词与拒答话术）、
+ * {@link MallTools}（查订单、查商品）、{@link RagService}（检索知识库、拼带资料的提示词）、{@link ConversationMemory}（会话历史）、
+ * {@link QuestionCondenser}（追问改写）和 {@link ChatClient}（真正调模型）。
+ *
+ * <p>第 6 章的一轮多轮对话（请求带了会话 ID 时）：
+ *
+ * <ol>
+ *   <li>打开会话（{@link ConversationMemory#open}）：确认归属、占住会话、读出历史、按轮数和字数裁剪
+ *   <li>有历史时先把追问改写成独立问题（{@link #condense}）：「那运费谁出」→「七天无理由退货的运费谁出」。意图识别和检索都只认得一句话，
+ *       给它们改写后的这一句
+ *   <li>识别意图，再核对 / 沿用订单号和 SKU（{@link Conversation#carryOver}）：「它什么时候下的单」照样走第 3 章的直接查询
+ *   <li>回答：历史放在系统消息和这一轮的用户消息之间；走 RAG 时检索和资料模板里的问题都用改写后的
+ *   <li>回答成功后写回记忆：只写用户原话和最终回答（阻塞在返回前写，流式在最后一段文字之后写），失败、取消不写
+ * </ol>
+ *
+ * 模型本身没有记忆：第 2 轮的请求里如果不带第 1 轮，模型根本不知道第 1 轮发生过。所以「多轮对话」本质上就是「每次都把挑选过的历史一起发过去」。
  *
  * <p>按意图分三条路（第 5 章）：
  *
@@ -88,9 +107,11 @@ public class ChatService {
     private final MallTools mallTools;
     private final ToolProperties toolProperties;
     private final RagService ragService;
+    private final ConversationMemory memory;
+    private final QuestionCondenser condenser;
 
     /**
-     * 创建对话服务（Spring 注入；测试里手工 new）。
+     * 创建对话服务（Spring 注入）。
      *
      * @param chatClient 共享的 ChatClient
      * @param properties {@code assistant.chat.*}：流式超时、拒答门槛
@@ -99,6 +120,41 @@ public class ChatService {
      * @param mallTools 查订单、查商品的工具（第 3 章）
      * @param toolProperties {@code assistant.tools.*}：原生工具调用、按意图直接查询的开关（第 3 章）
      * @param ragService 规则类问题的检索增强回答（第 5 章）
+     * @param memory 会话记忆（第 6 章）
+     * @param condenser 追问改写（第 6 章）
+     */
+    @Autowired
+    public ChatService(
+            ChatClient chatClient,
+            ChatProperties properties,
+            AssistantPrompts prompts,
+            IntentService intentService,
+            MallTools mallTools,
+            ToolProperties toolProperties,
+            RagService ragService,
+            ConversationMemory memory,
+            QuestionCondenser condenser) {
+        this.chatClient = chatClient;
+        this.properties = properties;
+        this.prompts = prompts;
+        this.intentService = intentService;
+        this.mallTools = mallTools;
+        this.toolProperties = toolProperties;
+        this.ragService = ragService;
+        this.memory = memory;
+        this.condenser = condenser;
+    }
+
+    /**
+     * 不带记忆的对话服务（前几章的测试手工 new 它）：带了会话 ID 也按单轮处理。
+     *
+     * @param chatClient 共享的 ChatClient
+     * @param properties {@code assistant.chat.*}
+     * @param prompts 系统提示词与拒答话术
+     * @param intentService 意图识别
+     * @param mallTools 查订单、查商品的工具
+     * @param toolProperties {@code assistant.tools.*}
+     * @param ragService 检索增强回答
      */
     public ChatService(
             ChatClient chatClient,
@@ -108,32 +164,74 @@ public class ChatService {
             MallTools mallTools,
             ToolProperties toolProperties,
             RagService ragService) {
-        this.chatClient = chatClient;
-        this.properties = properties;
-        this.prompts = prompts;
-        this.intentService = intentService;
-        this.mallTools = mallTools;
-        this.toolProperties = toolProperties;
-        this.ragService = ragService;
+        this(chatClient, properties, prompts, intentService, mallTools, toolProperties, ragService, null, null);
     }
 
     /**
-     * 阻塞接口的完整流程：识别意图 → 超出范围就回拒答话术（不调回答模型）→ 否则让模型回答（可能用到工具）。
-     *
-     * <p>拒答「短路」的好处：写代码、做作业这类请求，与其让模型生成一段再由提示词约束它拒绝，不如识别出来直接回固定话术——
-     * 少一次模型调用（省时间也省 token），而且拒答措辞稳定，不会被用户绕过去。
+     * 阻塞接口的完整流程（单轮）：同 {@link #chat(String, String, String)}，不带会话 ID。
      *
      * @param message 用户原文
-     * @param mallToken 商城访问令牌（页面登录后放在 Authorization 请求头里带来）；未登录为 null
+     * @param mallToken 商城访问令牌；未登录为 null
      * @return 回答（或拒答话术）、意图与工具调用记录
      * @throws ModelCallException 意图识别或回答时模型调用失败（连不上、超时）
      */
     public ChatReply chat(String message, String mallToken) {
-        IntentResult intent = intentService.classify(message);
-        if (shouldRefuse(intent)) {
-            return new ChatReply(prompts.refusal(), intent, List.of());
+        return chat(message, null, mallToken);
+    }
+
+    /**
+     * 阻塞接口的完整流程：打开会话 → 识别意图（沿用历史里的订单号）→ 超出范围就回拒答话术（不调回答模型）→ 否则让模型回答（可能用到工具或 RAG）
+     * → 写回记忆。
+     *
+     * <p>拒答「短路」的好处：写代码、做作业这类请求，与其让模型生成一段再由提示词约束它拒绝，不如识别出来直接回固定话术——
+     * 少一次模型调用（省时间也省 token），而且拒答措辞稳定，不会被用户绕过去。
+     *
+     * <p>第 6 章（ch06-6 的阻塞部分）：回答成功后、返回之前，{@code conversation.save(用户原话, 回答)} 把这一轮写回记忆。拒答和「没找到相关规定」
+     * 也是这一轮的回答，照样写（下一轮的模型才知道上一句被拒了）；模型调用失败时异常直接抛出，不写——半截的一轮不进历史，用户重问即可。
+     * 写的是用户<b>原话</b>和最终回答，不是拼了查询结果、参考资料之后发给模型的那段（见 {@code MemoryMessages}）。
+     *
+     * @param message 用户原文
+     * @param conversationId 会话 ID（第 6 章），没带时为 null：单轮，和第 5 章一样
+     * @param mallToken 商城访问令牌（页面登录后放在 Authorization 请求头里带来）；未登录为 null
+     * @return 回答（或拒答话术）、意图、工具调用记录、引用来源与记忆调试信息
+     * @throws ModelCallException 意图识别或回答时模型调用失败（连不上、超时）
+     * @throws io.github.clarence404.assistant.memory.ConversationException 同一个会话的上一条还没回答完（409）
+     */
+    public ChatReply chat(String message, String conversationId, String mallToken) {
+        ChatTurn turn = begin(message, conversationId, mallToken);
+        try (Conversation conversation = turn.conversation()) {
+            IntentResult intent = turn.intent();
+            ChatReply reply = shouldRefuse(intent)
+                    ? new ChatReply(prompts.refusal(), intent, List.of())
+                    : answer(message, intent, mallToken, conversation);
+            // TODO ch06-6：回答成功后把这一轮写回记忆：conversation.save(用户原话, 回答)
+            return reply.withMemory(conversation.trace());
         }
-        return answer(message, intent, mallToken);
+    }
+
+    /**
+     * 一轮对话的开头（阻塞、流式共用）：打开会话、（有历史时）改写追问、识别意图、核对并沿用订单号 / SKU。
+     *
+     * <p>流式接口要先把意图推给页面，所以把这一段单独拿出来：{@link ChatController#stream} 先调它，推 intent 事件，再调
+     * {@link #answerStream(ChatTurn)}。识别意图失败时会话已经打开了，这里负责关掉。
+     *
+     * @param message 用户原文
+     * @param conversationId 会话 ID，可以为 null
+     * @param mallToken 商城访问令牌，可以为 null
+     * @return 这一轮：意图（可能补上了沿用的订单号）与会话句柄；用完要关会话
+     * @throws ModelCallException 意图识别时模型调用失败
+     * @throws io.github.clarence404.assistant.memory.ConversationException 会话正忙（409）
+     */
+    public ChatTurn begin(String message, String conversationId, String mallToken) {
+        Conversation conversation = memory == null ? Conversation.none() : memory.open(conversationId, mallToken);
+        try {
+            String question = condense(message, conversation);
+            IntentResult intent = conversation.carryOver(intentService.classify(question), message);
+            return new ChatTurn(message, intent, mallToken, conversation);
+        } catch (RuntimeException e) {
+            conversation.close();
+            throw e;
+        }
     }
 
     /**
@@ -149,13 +247,29 @@ public class ChatService {
      * @throws ModelCallException 模型调用失败
      */
     public ChatReply answer(String message, IntentResult intent, String mallToken) {
+        return answer(message, intent, mallToken, Conversation.none());
+    }
+
+    /**
+     * 意图已知时的阻塞回答，带上会话历史（第 6 章）：同 {@link #answer(String, IntentResult, String)}，历史放进提示词。不写回记忆（由
+     * {@link #chat(String, String, String)} 负责）。
+     *
+     * @param message 用户原文
+     * @param intent 已识别的意图
+     * @param mallToken 商城访问令牌，可以为 null
+     * @param conversation 会话句柄（{@link Conversation#none()} 表示单轮）
+     * @return 回答、意图、工具调用记录与引用来源
+     * @throws ModelCallException 模型调用失败
+     */
+    ChatReply answer(String message, IntentResult intent, String mallToken, Conversation conversation) {
         if (ragService.handles(intent)) {
-            return ragAnswer(message, intent);
+            return ragAnswer(message, intent, conversation);
         }
         ToolCallRecorder recorder = new ToolCallRecorder();
         try {
-            String content =
-                    answerRequest(message, intent, mallToken, recorder).call().content();
+            String content = answerRequest(message, intent, mallToken, recorder, conversation.history())
+                    .call()
+                    .content();
             List<ToolInvocation> tools = recorder.invocations();
             String reply = ToolResultGuard.check(Objects.requireNonNullElse(content, ""), tools);
             return new ChatReply(reply, intent, tools);
@@ -165,34 +279,67 @@ public class ChatService {
     }
 
     /**
-     * 流式接口的回答部分：意图已经识别好，超出范围就只推一段拒答话术；规则类问题走 {@link #ragStream}（第 5 章）；否则流式调用模型，
-     * 工具调用的记录在它之后的文字之前推出。
+     * 流式接口的回答部分（单轮）：同 {@link #answerStream(ChatTurn)}，不带会话。
+     *
+     * @param message 用户原文
+     * @param intent 已识别的意图
+     * @param mallToken 商城访问令牌，可以为 null
+     * @return 文字片段、工具调用记录（或 RAG 引用来源）的序列
+     */
+    public Flux<AnswerPart> answerStream(String message, IntentResult intent, String mallToken) {
+        return answerStream(new ChatTurn(message, intent, mallToken, Conversation.none()));
+    }
+
+    /**
+     * 流式接口的回答部分：意图已经识别好（{@link #begin}），超出范围就只推一段拒答话术；规则类问题走 {@link #ragStream}（第 5 章）；否则流式调用模型，
+     * 工具调用的记录在它之后的文字之前推出。第 6 章起带了会话 ID 时，最前面先推一个 {@link AnswerPart.Memory}（这一轮的记忆情况）。
      *
      * <p>做法：每收到一段文字，先把这期间新发生的工具调用（{@link ToolCallRecorder#drainNew()}）推出去，再推这段文字；
      * 流结束时再检查一次（模型调了工具却一个字没说的情况）。直接查询发生在开始流式调用之前，所以它的记录总在第一段文字前面。
      * 整段在 {@link Flux#defer} 里：每次订阅（每个请求）新建一个记录器，订阅时才开始查询和调模型。
      *
-     * @param message 用户原文
-     * @param intent 已识别的意图（由 {@link ChatController#stream} 先调 IntentService 得到，并已作为 intent 事件推给前端）
-     * @param mallToken 商城访问令牌，可以为 null
-     * @return 文字片段、工具调用记录（或 RAG 引用来源）的序列；拒答时只有一段文字。出错时序列以 {@link ModelCallException} 结束
+     * <p>第 6 章（ch06-6 的流式部分）：<b>流正常结束之后</b>才把这一轮写回记忆——边推边把文字片段拼起来（{@code doOnNext}），
+     * 用 {@code concatWith(Mono.fromRunnable(写记忆))} 接在最后：{@code concatWith} 只在上游正常完成时才订阅后面的部分，所以
+     * 模型中途出错、超时、用户关掉页面（取消订阅）都不会写，半截的回答不进历史。写记忆可能是一次数据库操作，放到
+     * {@code Schedulers.boundedElastic()} 上执行（流式回答的最后一个信号可能来自网络 IO 线程，不能在那里阻塞）。不管怎么结束，
+     * {@code doFinally} 都关掉会话（放开「正在回答」的标记）。
+     *
+     * @param turn 这一轮（{@link #begin} 的结果）
+     * @return 记忆情况、文字片段、工具调用记录（或 RAG 引用来源）的序列；拒答时只有一段文字。出错时序列以 {@link ModelCallException} 结束
      */
-    public Flux<AnswerPart> answerStream(String message, IntentResult intent, String mallToken) {
-        if (shouldRefuse(intent)) {
-            return Flux.just(new AnswerPart.Text(prompts.refusal()));
+    public Flux<AnswerPart> answerStream(ChatTurn turn) {
+        Conversation conversation = turn.conversation();
+        Flux<AnswerPart> parts;
+        if (shouldRefuse(turn.intent())) {
+            parts = Flux.concat(memoryPart(conversation), Flux.just(new AnswerPart.Text(prompts.refusal())));
+        } else if (ragService.handles(turn.intent())) {
+            parts = ragStream(turn.message(), conversation);
+        } else {
+            parts = Flux.concat(memoryPart(conversation), toolStream(turn, conversation));
         }
-        if (ragService.handles(intent)) {
-            return ragStream(message);
-        }
+        // TODO ch06-6：边推边把文字片段拼起来，流正常结束后（concatWith）在 boundedElastic 上写回记忆；出错、取消不写
+        return parts.doFinally(signal -> conversation.close());
+    }
+
+    /** 第 3 章的流式回答：直接查询或交给模型调工具，工具记录排在它之后的文字前面。 */
+    private Flux<AnswerPart> toolStream(ChatTurn turn, Conversation conversation) {
         return Flux.defer(() -> {
                     ToolCallRecorder recorder = new ToolCallRecorder();
-                    return answerRequest(message, intent, mallToken, recorder).stream()
+                    return answerRequest(
+                                    turn.message(), turn.intent(), turn.mallToken(), recorder, conversation.history())
+                            .stream()
                             .content()
                             .timeout(properties.streamTimeout())
                             .concatMap(text -> Flux.concat(newToolUses(recorder), Flux.just(new AnswerPart.Text(text))))
                             .concatWith(Flux.defer(() -> newToolUses(recorder)));
                 })
                 .onErrorMap(ModelCallException::from);
+    }
+
+    /** 带了会话 ID 时的记忆情况（订阅时才生成，追问改写的结果才在里面）；没带时为空。 */
+    private static Flux<AnswerPart> memoryPart(Conversation conversation) {
+        return Flux.defer(
+                () -> conversation.present() ? Flux.just(new AnswerPart.Memory(conversation.trace())) : Flux.empty());
     }
 
     /**
@@ -211,18 +358,28 @@ public class ChatService {
      *
      * <p>为什么检索不到就不调模型：见 {@link RagService} 的说明——没有资料还问模型，它就会凭常识编一个规则出来。
      *
+     * <p>第 6 章：检索和拼提示词都用 {@link #begin} 里改写后的问题（{@link Conversation#question}），历史也一起交给模型。
+     *
      * @param message 用户原文
      * @param intent 已识别的意图（售后或规则政策）
      * @return 回答、意图、引用来源与调试信息
      * @throws ModelCallException 模型调用失败
      */
     ChatReply ragAnswer(String message, IntentResult intent) {
-        RagPlan plan = ragService.plan(message);
+        return ragAnswer(message, intent, Conversation.none());
+    }
+
+    private ChatReply ragAnswer(String message, IntentResult intent, Conversation conversation) {
+        String question = conversation.question(message);
+        RagPlan plan = ragService.plan(question);
         if (plan.shortCircuited()) {
             return new ChatReply(plan.fallback(), intent, List.of(), List.of(), plan.trace());
         }
         try {
-            String content = ragService.request(message, plan).call().content();
+            String content = ragService
+                    .request(question, plan, conversation.history())
+                    .call()
+                    .content();
             CitationChecker.Check check = CitationChecker.check(
                     Objects.requireNonNullElse(content, ""), plan.sources().size());
             return new ChatReply(
@@ -251,23 +408,44 @@ public class ChatService {
      * <p>为什么来源要排在文字前面：页面拿到 source 事件就知道 [1]、[2] 是什么，文字流到 [1] 时可以立刻对上。流式回答的引用没法
      * 事后删改（已经推给用户了），只能由页面把对不上的编号标出来。
      *
+     * <p>第 6 章：检索用 {@link #begin} 里改写后的问题；先推记忆情况，再推来源和文字。
+     *
      * @param message 用户原文
-     * @return 引用来源与文字片段的序列
+     * @param conversation 会话句柄（{@link Conversation#none()} 表示单轮）
+     * @return 记忆情况、引用来源与文字片段的序列
      */
-    Flux<AnswerPart> ragStream(String message) {
+    Flux<AnswerPart> ragStream(String message, Conversation conversation) {
         return Flux.defer(() -> {
-                    RagPlan plan = ragService.plan(message);
+                    String question = conversation.question(message);
+                    RagPlan plan = ragService.plan(question);
                     if (plan.shortCircuited()) {
-                        return Flux.<AnswerPart>just(new AnswerPart.Text(plan.fallback()));
+                        return Flux.concat(memoryPart(conversation), Flux.just(new AnswerPart.Text(plan.fallback())));
                     }
                     Flux<AnswerPart> sources = Flux.fromIterable(plan.sources()).map(AnswerPart.Source::new);
-                    Flux<AnswerPart> text = ragService.request(message, plan).stream()
+                    Flux<AnswerPart> text = ragService.request(question, plan, conversation.history()).stream()
                             .content()
                             .timeout(properties.streamTimeout())
                             .map(AnswerPart.Text::new);
-                    return Flux.concat(sources, text);
+                    return Flux.concat(memoryPart(conversation), sources, text);
                 })
                 .onErrorMap(ModelCallException::from);
+    }
+
+    /**
+     * 这一轮的独立问题（第 6 章）：没有历史就是原话；有历史时交给 {@link QuestionCondenser} 改写，改写失败或不可信也退回原话。改写结果记进会话
+     * （调试信息里显示，RAG 路径用 {@link Conversation#question} 取回）。
+     *
+     * @param message 用户原话
+     * @param conversation 会话句柄
+     * @return 检索和拼提示词用的问题
+     */
+    private String condense(String message, Conversation conversation) {
+        if (condenser == null || conversation.window().messages().isEmpty()) {
+            return message;
+        }
+        String condensed = condenser.condense(message, conversation.window().messages());
+        conversation.condensed(condensed);
+        return condensed != null ? condensed : message;
     }
 
     /** 记录器里新增的工具调用，转成 {@link AnswerPart.ToolUse}。 */
@@ -296,8 +474,28 @@ public class ChatService {
      */
     ChatClient.ChatClientRequestSpec answerRequest(
             String message, IntentResult intent, String mallToken, ToolCallRecorder recorder) {
+        return answerRequest(message, intent, mallToken, recorder, List.of());
+    }
+
+    /**
+     * 拼出一次回答请求，带上会话历史（第 6 章）。
+     *
+     * <p>第 6 章（ch06-2 的一处）：历史用 {@code .messages(history)} 放在系统消息之后、这一轮的用户消息之前（ChatClient 拼 Prompt 的固定顺序）。
+     * 历史里只有用户原话和助手的回答；这一轮的查询结果仍然只拼在这一轮的用户消息里（{@link #LOOKUP_TEMPLATE}），下一轮要用就重新查。
+     * 系统提示词每次都重新渲染、总在最前面，裁剪历史时永远保留它。
+     *
+     * @param message 用户原文
+     * @param intent 已识别的意图（可能带着从历史沿用的订单号）
+     * @param mallToken 商城访问令牌，可以为 null
+     * @param recorder 本次请求的工具调用记录器
+     * @param history 对话历史（{@code Conversation#history()}），按时间从早到晚；单轮时为空列表
+     * @return 还没发出的请求
+     */
+    ChatClient.ChatClientRequestSpec answerRequest(
+            String message, IntentResult intent, String mallToken, ToolCallRecorder recorder, List<Message> history) {
         String lookup = toolProperties.directLookup() ? directLookup(intent, mallToken, recorder) : null;
-        ChatClient.ChatClientRequestSpec spec = chatClient.prompt().system(prompts::applySystem);
+        ChatClient.ChatClientRequestSpec spec =
+                chatClient.prompt().system(prompts::applySystem); // TODO ch06-2：用 .messages(history) 把历史放进去
         if (lookup != null) {
             return spec.user(
                     u -> u.text(LOOKUP_TEMPLATE).param("message", message).param("lookup", lookup));

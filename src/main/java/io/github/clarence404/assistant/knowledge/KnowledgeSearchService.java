@@ -37,6 +37,15 @@ public class KnowledgeSearchService {
     }
 
     /**
+     * 当前向量模型的名字（第 6 章：RAG 按模型选相似度门槛用）。
+     *
+     * @return 模型名，如 {@code bge-m3}
+     */
+    public String modelName() {
+        return embedding.modelName();
+    }
+
+    /**
      * 检索：库里有别的模型生成的块时先报 409（{@link KnowledgeIngestionService#ensureSameModel}），再做相似度检索。
      *
      * @param query 问题，不能为空
