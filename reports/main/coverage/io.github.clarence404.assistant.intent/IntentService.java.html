@@ -43,6 +43,13 @@ public class IntentService {
     static final double TEMPERATURE = 0.0;
 
     /**
+     * 意图识别最多输出多少个 token（第 7 章补充）：一个意图 JSON 只有四十来个 token。结构化输出约束得住 JSON 的形状、约束不住长度，
+     * 第 7 章录制时 qwen2.5:0.5b 识别「订单 … 买错了，帮我取消」时在某个字段里一直写下去，60 秒读超时、整轮对话失败；限住之后最多是这次解析失败，
+     * 走原来的「重试一次、再不行按 UNKNOWN」。只限长度，不改提示词和消息，前几章的录制照样能回放。
+     */
+    static final int MAX_TOKENS = 200;
+
+    /**
      * 用户消息模板：用标签把用户原文圈起来，模型更不容易把里面的话当成给它的指令。
      *
      * &lt;p&gt;{@code {message}} 是模板变量，由 Spring AI 的模板引擎（StringTemplate）在发请求前替换成用户原文。用户原文里即使有
@@ -67,10 +74,10 @@ public class IntentService {
      * @param intentPrompt 意图识别的系统提示词：取值说明 + few-shot 示例（给模型看几个「输入 → 输出」的例子，比纯文字说明更管用）；
      *     测试里可以换成别的文件
      */
-<span class="fc" id="L70">    public IntentService(ChatClient chatClient, @Value(&quot;classpath:prompts/intent-v2.st&quot;) Resource intentPrompt) {</span>
-<span class="fc" id="L71">        this.chatClient = chatClient;</span>
-<span class="fc" id="L72">        this.intentPrompt = intentPrompt;</span>
-<span class="fc" id="L73">    }</span>
+<span class="fc" id="L77">    public IntentService(ChatClient chatClient, @Value(&quot;classpath:prompts/intent-v2.st&quot;) Resource intentPrompt) {</span>
+<span class="fc" id="L78">        this.chatClient = chatClient;</span>
+<span class="fc" id="L79">        this.intentPrompt = intentPrompt;</span>
+<span class="fc" id="L80">    }</span>
 
     /**
      * 识别一条用户消息的意图，结果已经过 {@link IntentResult#sanitized()} 校验。最多调两次模型，解析失败时兜底为 UNKNOWN。
@@ -80,18 +87,18 @@ public class IntentService {
      * @throws ModelCallException 模型调用本身失败（连不上、超时），不重试、不兜底
      */
     public IntentResult classify(String message) {
-<span class="fc" id="L83">        IntentResult result = callModel(message, false);</span>
-<span class="fc bfc" id="L84" title="All 2 branches covered.">        if (result == null) {</span>
-<span class="fc" id="L85">            log.info(&quot;意图识别：模型输出无法解析，带上更严格的提醒重试一次&quot;);</span>
-<span class="fc" id="L86">            result = callModel(message, true);</span>
+<span class="fc" id="L90">        IntentResult result = callModel(message, false);</span>
+<span class="fc bfc" id="L91" title="All 2 branches covered.">        if (result == null) {</span>
+<span class="fc" id="L92">            log.info(&quot;意图识别：模型输出无法解析，带上更严格的提醒重试一次&quot;);</span>
+<span class="fc" id="L93">            result = callModel(message, true);</span>
         }
-<span class="fc bfc" id="L88" title="All 2 branches covered.">        if (result == null) {</span>
-<span class="fc" id="L89">            log.warn(&quot;意图识别：重试后仍无法解析，按 UNKNOWN 处理&quot;);</span>
-<span class="fc" id="L90">            return IntentResult.unknown();</span>
+<span class="fc bfc" id="L95" title="All 2 branches covered.">        if (result == null) {</span>
+<span class="fc" id="L96">            log.warn(&quot;意图识别：重试后仍无法解析，按 UNKNOWN 处理&quot;);</span>
+<span class="fc" id="L97">            return IntentResult.unknown();</span>
         }
-<span class="fc" id="L92">        IntentResult sanitized = result.sanitized();</span>
-<span class="fc" id="L93">        log.debug(&quot;意图识别：{} -&gt; {}&quot;, message, sanitized);</span>
-<span class="fc" id="L94">        return sanitized;</span>
+<span class="fc" id="L99">        IntentResult sanitized = result.sanitized();</span>
+<span class="fc" id="L100">        log.debug(&quot;意图识别：{} -&gt; {}&quot;, message, sanitized);</span>
+<span class="fc" id="L101">        return sanitized;</span>
     }
 
     /**
@@ -110,20 +117,20 @@ public class IntentService {
      * @throws ModelCallException 模型调用本身失败
      */
     IntentResult callModel(String message, boolean strict) {
-<span class="fc bfc" id="L113" title="All 2 branches covered.">        String template = strict ? USER_TEMPLATE + &quot;\n\n&quot; + STRICT_REMINDER : USER_TEMPLATE;</span>
+<span class="fc bfc" id="L120" title="All 2 branches covered.">        String template = strict ? USER_TEMPLATE + &quot;\n\n&quot; + STRICT_REMINDER : USER_TEMPLATE;</span>
         try {
-<span class="fc" id="L115">            return chatClient</span>
-<span class="fc" id="L116">                    .prompt()</span>
-<span class="fc" id="L117">                    .system(intentPrompt)</span>
-<span class="fc" id="L118">                    .user(u -&gt; u.text(template).param(&quot;message&quot;, message))</span>
-<span class="fc" id="L119">                    .options(ChatOptions.builder().temperature(TEMPERATURE))</span>
-<span class="fc" id="L120">                    .call()</span>
-<span class="fc" id="L121">                    .entity(IntentResult.class, spec -&gt; spec.useProviderStructuredOutput());</span>
-<span class="fc" id="L122">        } catch (JacksonException e) {</span>
-<span class="fc" id="L123">            log.info(&quot;意图识别：输出不是合法的 JSON：{}&quot;, e.getOriginalMessage());</span>
-<span class="fc" id="L124">            return null;</span>
-<span class="fc" id="L125">        } catch (RuntimeException e) {</span>
-<span class="fc" id="L126">            throw ModelCallException.from(e);</span>
+<span class="fc" id="L122">            return chatClient</span>
+<span class="fc" id="L123">                    .prompt()</span>
+<span class="fc" id="L124">                    .system(intentPrompt)</span>
+<span class="fc" id="L125">                    .user(u -&gt; u.text(template).param(&quot;message&quot;, message))</span>
+<span class="fc" id="L126">                    .options(ChatOptions.builder().temperature(TEMPERATURE).maxTokens(MAX_TOKENS))</span>
+<span class="fc" id="L127">                    .call()</span>
+<span class="fc" id="L128">                    .entity(IntentResult.class, spec -&gt; spec.useProviderStructuredOutput());</span>
+<span class="fc" id="L129">        } catch (JacksonException e) {</span>
+<span class="fc" id="L130">            log.info(&quot;意图识别：输出不是合法的 JSON：{}&quot;, e.getOriginalMessage());</span>
+<span class="fc" id="L131">            return null;</span>
+<span class="fc" id="L132">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L133">            throw ModelCallException.from(e);</span>
         }
     }
 }

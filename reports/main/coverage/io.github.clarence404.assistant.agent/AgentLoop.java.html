@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AgentLoop.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">AgentLoop.java</span></div><h1>AgentLoop.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+import io.github.clarence404.assistant.error.ModelCallException;
+import java.util.function.BooleanSupplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+/**
+ * 方案 B 的 Agent 循环：想 → 选工具 → 执行 → 看结果，直到办完、提出写操作、或者碰到刹车（第 7 章引入）。
+ *
+ * &lt;p&gt;所在层：Agent 的核心。上游是 {@link AgentService}；下游是 {@link AgentPlanner}（想）、{@link AgentAction#parse}（看懂、校验）、
+ * {@link AgentToolbox}（执行只读工具）、{@link WriteActionGuard} 与 {@link ConfirmationService#create}（写操作只生成待确认）。
+ *
+ * &lt;p&gt;&lt;b&gt;Agent 是什么&lt;/b&gt;：前几章的客服是「一问一答」——代码决定查什么（第 3 章按意图直接查询）、模型只负责说人话。Agent 把「下一步干什么」也交给模型：
+ * 每一步模型看着目前为止的办事记录，决定再查点什么、还是可以办了、还是该回答了；代码执行它选的工具，把结果追加进办事记录，再问它下一步。
+ * 一件「订单买错了帮我取消」的事，典型的轨迹是：listMyOrders → queryOrder → cancelOrder（生成确认卡片，这一轮结束）。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么要刹车&lt;/b&gt;：循环的出口全靠模型说「办完了」，而小模型经常不说——反复查同一笔订单、在两个工具之间来回、输出看不懂的东西。所以每一步开始前检查：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;步数上限（{@code max-steps}，默认 6）：一件售后的事正常 2～4 步，6 步还没办完多半是在兜圈子
+ *   &lt;li&gt;同一个调用的次数上限（{@code max-same-calls}，默认 2）：同样的工具、同样的参数，结果不会变，再执行一次没有意义；超了不执行，告诉模型换一步，
+ *       被拦下后还在重复就直接停
+ *   &lt;li&gt;总时长（{@code timeout}）：每一步都是一次模型调用，本地小模型一步几秒到十几秒
+ *   &lt;li&gt;页面关了（流式被取消）：不再浪费模型调用
+ * &lt;/ul&gt;
+ *
+ * 停下来时回固定话术，并且&lt;b&gt;保证没有执行任何写操作&lt;/b&gt;（写操作本来就不在循环里执行）。
+ */
+@Component
+public class AgentLoop {
+
+<span class="fc" id="L34">    private static final Logger log = LoggerFactory.getLogger(AgentLoop.class);</span>
+
+    private final AgentPlanner planner;
+    private final AgentToolbox toolbox;
+    private final WriteActionGuard guard;
+    private final ConfirmationService confirmations;
+    private final AgentProperties properties;
+
+    /**
+     * 创建。
+     *
+     * @param planner 让模型想下一步
+     * @param toolbox 执行只读工具
+     * @param guard 核对写操作
+     * @param confirmations 登记待确认操作
+     * @param properties {@code assistant.agent.*}（刹车）
+     */
+    public AgentLoop(
+            AgentPlanner planner,
+            AgentToolbox toolbox,
+            WriteActionGuard guard,
+            ConfirmationService confirmations,
+<span class="fc" id="L56">            AgentProperties properties) {</span>
+<span class="fc" id="L57">        this.planner = planner;</span>
+<span class="fc" id="L58">        this.toolbox = toolbox;</span>
+<span class="fc" id="L59">        this.guard = guard;</span>
+<span class="fc" id="L60">        this.confirmations = confirmations;</span>
+<span class="fc" id="L61">        this.properties = properties;</span>
+<span class="fc" id="L62">    }</span>
+
+    /**
+     * 跑一次办事循环（ch07-2）。
+     *
+     * &lt;p&gt;要求（测试按这个写），每一轮：
+     *
+     * &lt;ol&gt;
+     *   &lt;li&gt;先检查刹车：已经走满 {@code max-steps} 步 → STEP_LIMIT；超过 {@code timeout} → TIMEOUT；{@code cancelled} 为 true → CANCELLED。
+     *       停下时回 {@link AgentReplies} 的固定话术
+     *   &lt;li&gt;{@code planner.decide(run)} 想下一步，{@link AgentAction#parse} 看懂；无效就记一步 REJECTED（结果是无效的原因），继续下一轮
+     *   &lt;li&gt;finish：记一步 FINISH（结果是回答），停，原因 FINISHED，回答用模型的 answer（经 {@link AgentReplies#checkFinish}）
+     *   &lt;li&gt;其余：这个调用（{@link AgentAction#key()}）已经执行过 {@code max-same-calls} 次 → 不执行，记一步 REJECTED 提醒它别重复；
+     *       这种「被拦下后还在重复」累计到 2 次 → 停，原因 REPEATED。没超就 {@code run.called(key)}，然后：
+     *       &lt;ul&gt;
+     *         &lt;li&gt;只读：{@code toolbox.read} 执行，记一步 READ
+     *         &lt;li&gt;写操作：{@code guard.check} 核对；不通过记一步 REJECTED（结果是原因），继续；通过则 {@code confirmations.create} 登记，
+     *             记一步 PROPOSE，再 {@code run.propose(...)}（这两个顺序不能反：页面先看到这一步、再看到确认卡片），停，原因
+     *             AWAITING_CONFIRMATION，回答用 {@link AgentReplies#awaitingConfirmation}
+     *       &lt;/ul&gt;
+     * &lt;/ol&gt;
+     *
+     * 每一步用 {@link #step} 生成（耗时从这一轮开始算起），用 {@code run.record} 记下（同时推给页面）。
+     *
+     * @param run 这次办事
+     * @param cancelled 页面是否已经关掉（流式被取消）；阻塞接口传 {@code () -&gt; false}
+     * @return 结果
+     * @throws ModelCallException 某一步调模型失败：整次办事失败，接口返回 503 / error 事件（这时一定没有执行任何写操作）
+     */
+    public AgentResult run(AgentRun run, BooleanSupplier cancelled) {
+<span class="fc" id="L92">        int repeatedRejections = 0;</span>
+        while (true) {
+<span class="fc bfc" id="L94" title="All 2 branches covered.">            if (run.steps().size() &gt;= properties.maxSteps()) {</span>
+<span class="fc" id="L95">                return stop(run, AgentReplies.stepLimit(properties.maxSteps()), AgentTrace.StopReason.STEP_LIMIT);</span>
+            }
+<span class="fc bfc" id="L97" title="All 2 branches covered.">            if (run.elapsedMs() &gt; properties.timeout().toMillis()) {</span>
+<span class="fc" id="L98">                return stop(run, AgentReplies.timeout(properties.timeout().toSeconds()), AgentTrace.StopReason.TIMEOUT);</span>
+            }
+<span class="fc bfc" id="L100" title="All 2 branches covered.">            if (cancelled.getAsBoolean()) {</span>
+<span class="fc" id="L101">                return stop(run, AgentReplies.cancelled(), AgentTrace.StopReason.CANCELLED);</span>
+            }
+<span class="fc" id="L103">            long start = System.nanoTime();</span>
+<span class="fc" id="L104">            AgentDecision decision = planner.decide(run);</span>
+<span class="fc" id="L105">            AgentAction.Parsed parsed = AgentAction.parse(decision);</span>
+<span class="fc bfc" id="L106" title="All 2 branches covered.">            if (!parsed.valid()) {</span>
+<span class="fc" id="L107">                run.record(step(</span>
+                        run,
+<span class="fc" id="L109">                        parsed.thought(),</span>
+<span class="fc bfc" id="L110" title="All 2 branches covered.">                        decision == null ? null : decision.action(),</span>
+                        AgentStep.Kind.REJECTED,
+                        &quot;{}&quot;,
+<span class="fc" id="L113">                        parsed.error(),</span>
+                        start));
+<span class="fc" id="L115">                continue;</span>
+            }
+<span class="fc" id="L117">            AgentAction action = parsed.action();</span>
+<span class="fc bfc" id="L118" title="All 2 branches covered.">            if (action.tool() == AgentTool.FINISH) {</span>
+<span class="fc" id="L119">                String answer = action.argument(&quot;answer&quot;);</span>
+<span class="fc" id="L120">                run.record(step(run, action, AgentStep.Kind.FINISH, answer, start));</span>
+<span class="fc" id="L121">                return stop(run, AgentReplies.checkFinish(answer), AgentTrace.StopReason.FINISHED);</span>
+            }
+<span class="fc bfc" id="L123" title="All 2 branches covered.">            if (run.calls(action.key()) &gt;= properties.maxSameCalls()) {</span>
+<span class="fc" id="L124">                run.record(step(</span>
+                        run,
+                        action,
+                        AgentStep.Kind.REJECTED,
+<span class="fc" id="L128">                        &quot;这个调用已经做过 &quot; + run.calls(action.key()) + &quot; 次，结果见上面的记录，不会变了；不要再重复，换一步或者用 finish 回答用户&quot;,</span>
+                        start));
+<span class="fc bfc" id="L130" title="All 2 branches covered.">                if (++repeatedRejections &gt;= 2) {</span>
+<span class="fc" id="L131">                    return stop(run, AgentReplies.repeated(), AgentTrace.StopReason.REPEATED);</span>
+                }
+                continue;
+            }
+<span class="fc" id="L135">            run.called(action.key());</span>
+<span class="fc bfc" id="L136" title="All 2 branches covered.">            if (action.tool().kind() == AgentTool.Kind.READ) {</span>
+<span class="fc" id="L137">                run.record(step(run, action, AgentStep.Kind.READ, toolbox.read(run, action), start));</span>
+<span class="fc" id="L138">                continue;</span>
+            }
+<span class="fc" id="L140">            WriteActionGuard.Proposal proposal = guard.check(run, action);</span>
+<span class="fc bfc" id="L141" title="All 2 branches covered.">            if (!proposal.accepted()) {</span>
+<span class="fc" id="L142">                run.record(step(run, action, AgentStep.Kind.REJECTED, &quot;没有生成确认：&quot; + proposal.rejection(), start));</span>
+<span class="fc" id="L143">                continue;</span>
+            }
+<span class="fc" id="L145">            PendingConfirmation pending = confirmations.create(</span>
+<span class="fc" id="L146">                    proposal.action(), run.task().owner(), run.task().conversationId());</span>
+<span class="fc" id="L147">            run.record(step(</span>
+                    run,
+                    action,
+                    AgentStep.Kind.PROPOSE,
+<span class="fc" id="L151">                    &quot;已生成待确认操作（&quot; + pending.summary() + &quot;），等用户在页面上点确认，这一轮到此结束&quot;,</span>
+                    start));
+<span class="fc" id="L153">            run.propose(pending);</span>
+<span class="fc" id="L154">            return stop(run, AgentReplies.awaitingConfirmation(pending), AgentTrace.StopReason.AWAITING_CONFIRMATION);</span>
+        }
+    }
+
+    /** 停下：生成结果（调试信息里带上全部步骤）。 */
+    private static AgentResult stop(AgentRun run, String reply, AgentTrace.StopReason reason) {
+<span class="fc" id="L160">        log.info(&quot;Agent 停止：{}，共 {} 步，{} ms&quot;, reason, run.steps().size(), run.elapsedMs());</span>
+<span class="fc" id="L161">        return new AgentResult(reply, new AgentTrace(&quot;loop&quot;, run.steps(), reason, run.elapsedMs()), run.confirmation());</span>
+    }
+
+    /** 一个有效动作的一步。 */
+    private static AgentStep step(
+            AgentRun run, AgentAction action, AgentStep.Kind kind, String observation, long start) {
+<span class="fc" id="L167">        return step(</span>
+                run,
+<span class="fc" id="L169">                action.thought(),</span>
+<span class="fc" id="L170">                action.tool().toolName(),</span>
+                kind,
+<span class="fc bfc" id="L172" title="All 2 branches covered.">                action.tool() == AgentTool.FINISH ? &quot;{}&quot; : action.argumentsJson(),</span>
+                observation,
+                start);
+    }
+
+    /**
+     * 生成一步。
+     *
+     * @param run 这次办事（取下一步的编号）
+     * @param thought 想法
+     * @param action 工具名
+     * @param kind 结果类型
+     * @param arguments 参数 JSON
+     * @param observation 结果
+     * @param start 这一轮开始的 {@link System#nanoTime()}
+     * @return 这一步
+     */
+    static AgentStep step(
+            AgentRun run,
+            String thought,
+            String action,
+            AgentStep.Kind kind,
+            String arguments,
+            String observation,
+            long start) {
+<span class="fc" id="L197">        return new AgentStep(</span>
+<span class="fc" id="L198">                run.nextIndex(),</span>
+                thought,
+                action,
+                kind,
+                arguments,
+                observation,
+<span class="fc" id="L204">                (System.nanoTime() - start) / 1_000_000);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

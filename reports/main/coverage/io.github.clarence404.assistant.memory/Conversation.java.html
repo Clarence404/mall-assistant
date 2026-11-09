@@ -88,19 +88,28 @@ public final class Conversation implements AutoCloseable {
 <span class="fc" id="L88">        return new Conversation(conversationId, store, HistoryWindow.Window.EMPTY, false, 0, warning, null, null);</span>
     }
 
+    /**
+     * 页面传来的会话 ID（第 7 章：待确认操作绑定到会话，确认后的结果写回这个会话）。
+     *
+     * @return 会话 ID；没带时为 null
+     */
+    public String conversationId() {
+<span class="fc" id="L97">        return conversationId;</span>
+    }
+
     /** 是否带了会话 ID（无论用没用上记忆）；为 false 时调试信息为 null。 */
     public boolean present() {
-<span class="fc bfc" id="L93" title="All 2 branches covered.">        return conversationId != null;</span>
+<span class="fc bfc" id="L102" title="All 2 branches covered.">        return conversationId != null;</span>
     }
 
     /** 这一轮是否用上了记忆：读了历史，回答完会写回去。 */
     public boolean active() {
-<span class="fc bfc" id="L98" title="All 2 branches covered.">        return saver != null;</span>
+<span class="fc bfc" id="L107" title="All 2 branches covered.">        return saver != null;</span>
     }
 
     /** 裁剪后的历史窗口。 */
     public HistoryWindow.Window window() {
-<span class="fc" id="L103">        return window;</span>
+<span class="fc" id="L112">        return window;</span>
     }
 
     /**
@@ -110,13 +119,13 @@ public final class Conversation implements AutoCloseable {
      * @return 消息列表，按时间从早到晚；没有历史时为空列表
      */
     public List&lt;Message&gt; history() {
-<span class="fc bfc" id="L113" title="All 2 branches covered.">        if (window.summary() == null) {</span>
-<span class="fc" id="L114">            return window.messages();</span>
+<span class="fc bfc" id="L122" title="All 2 branches covered.">        if (window.summary() == null) {</span>
+<span class="fc" id="L123">            return window.messages();</span>
         }
-<span class="fc" id="L116">        List&lt;Message&gt; messages = new ArrayList&lt;&gt;(window.messages().size() + 1);</span>
-<span class="fc" id="L117">        messages.add(MemoryMessages.summaryForPrompt(window.summary()));</span>
-<span class="fc" id="L118">        messages.addAll(window.messages());</span>
-<span class="fc" id="L119">        return List.copyOf(messages);</span>
+<span class="fc" id="L125">        List&lt;Message&gt; messages = new ArrayList&lt;&gt;(window.messages().size() + 1);</span>
+<span class="fc" id="L126">        messages.add(MemoryMessages.summaryForPrompt(window.summary()));</span>
+<span class="fc" id="L127">        messages.addAll(window.messages());</span>
+<span class="fc" id="L128">        return List.copyOf(messages);</span>
     }
 
     /**
@@ -127,14 +136,14 @@ public final class Conversation implements AutoCloseable {
      * @return 补上实体之后的意图
      */
     public IntentResult carryOver(IntentResult intent, String message) {
-<span class="fc bfc" id="L130" title="All 2 branches covered.">        if (window.messages().isEmpty()) {</span>
-<span class="fc" id="L131">            return intent;</span>
+<span class="fc bfc" id="L139" title="All 2 branches covered.">        if (window.messages().isEmpty()) {</span>
+<span class="fc" id="L140">            return intent;</span>
         }
-<span class="fc" id="L133">        ConversationEntities.Carried carried =</span>
-<span class="fc" id="L134">                ConversationEntities.carryOver(intent, message, window.messages(), entityTurns);</span>
-<span class="fc" id="L135">        carriedOrderNo = carried.orderNo();</span>
-<span class="fc" id="L136">        carriedSkuId = carried.skuId();</span>
-<span class="fc" id="L137">        return carried.intent();</span>
+<span class="fc" id="L142">        ConversationEntities.Carried carried =</span>
+<span class="fc" id="L143">                ConversationEntities.carryOver(intent, message, window.messages(), entityTurns);</span>
+<span class="fc" id="L144">        carriedOrderNo = carried.orderNo();</span>
+<span class="fc" id="L145">        carriedSkuId = carried.skuId();</span>
+<span class="fc" id="L146">        return carried.intent();</span>
     }
 
     /**
@@ -144,7 +153,7 @@ public final class Conversation implements AutoCloseable {
      * @return 改写后的问题或原话
      */
     public String question(String message) {
-<span class="fc bfc" id="L147" title="All 2 branches covered.">        return condensedQuestion != null ? condensedQuestion : message;</span>
+<span class="fc bfc" id="L156" title="All 2 branches covered.">        return condensedQuestion != null ? condensedQuestion : message;</span>
     }
 
     /**
@@ -153,8 +162,8 @@ public final class Conversation implements AutoCloseable {
      * @param question 改写后的问题，可以为 null
      */
     public void condensed(String question) {
-<span class="fc" id="L156">        this.condensedQuestion = question;</span>
-<span class="fc" id="L157">    }</span>
+<span class="fc" id="L165">        this.condensedQuestion = question;</span>
+<span class="fc" id="L166">    }</span>
 
     /**
      * 回答完把这一轮写回记忆：用户原话 + 助手最终的回答。没用上记忆时什么都不做。
@@ -163,10 +172,10 @@ public final class Conversation implements AutoCloseable {
      * @param assistantReply 给用户的回答
      */
     public void save(String userMessage, String assistantReply) {
-<span class="fc bfc" id="L166" title="All 2 branches covered.">        if (saver != null) {</span>
-<span class="fc" id="L167">            saver.save(userMessage, assistantReply);</span>
+<span class="fc bfc" id="L175" title="All 2 branches covered.">        if (saver != null) {</span>
+<span class="fc" id="L176">            saver.save(userMessage, assistantReply);</span>
         }
-<span class="fc" id="L169">    }</span>
+<span class="fc" id="L178">    }</span>
 
     /**
      * 调试信息。
@@ -174,17 +183,17 @@ public final class Conversation implements AutoCloseable {
      * @return 没带会话 ID 时为 null
      */
     public MemoryTrace trace() {
-<span class="fc bfc" id="L177" title="All 2 branches covered.">        if (!present()) {</span>
-<span class="fc" id="L178">            return null;</span>
+<span class="fc bfc" id="L186" title="All 2 branches covered.">        if (!present()) {</span>
+<span class="fc" id="L187">            return null;</span>
         }
-<span class="fc" id="L180">        return new MemoryTrace(</span>
+<span class="fc" id="L189">        return new MemoryTrace(</span>
                 conversationId,
                 store,
-<span class="fc" id="L183">                active(),</span>
-<span class="fc" id="L184">                window.keptTurns(),</span>
-<span class="fc" id="L185">                window.droppedTurns(),</span>
-<span class="fc" id="L186">                window.chars(),</span>
-<span class="fc bfc" id="L187" title="All 2 branches covered.">                window.summary() != null,</span>
+<span class="fc" id="L192">                active(),</span>
+<span class="fc" id="L193">                window.keptTurns(),</span>
+<span class="fc" id="L194">                window.droppedTurns(),</span>
+<span class="fc" id="L195">                window.chars(),</span>
+<span class="fc bfc" id="L196" title="All 2 branches covered.">                window.summary() != null,</span>
                 expired,
                 condensedQuestion,
                 carriedOrderNo,
@@ -195,9 +204,9 @@ public final class Conversation implements AutoCloseable {
     /** 放开「这个会话正在回答」的标记；重复调用无害。 */
     @Override
     public void close() {
-<span class="fc bfc" id="L198" title="All 4 branches covered.">        if (release != null &amp;&amp; closed.compareAndSet(false, true)) {</span>
-<span class="fc" id="L199">            release.run();</span>
+<span class="fc bfc" id="L207" title="All 4 branches covered.">        if (release != null &amp;&amp; closed.compareAndSet(false, true)) {</span>
+<span class="fc" id="L208">            release.run();</span>
         }
-<span class="fc" id="L201">    }</span>
+<span class="fc" id="L210">    }</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

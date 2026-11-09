@@ -166,6 +166,34 @@ public class ConversationMemory {
 <span class="fc" id="L166">    }</span>
 
     /**
+     * 在一轮对话之外补记一轮（第 7 章：用户点了确认卡片上的按钮，执行结果要写回会话，下一轮 Agent 才知道「那单已经取消了」）。
+     *
+     * &lt;p&gt;和正常的一轮走同一套：确认归属 → 占住会话 → 写入 → 放开。会话正忙、归属确认不了、记忆库挂了都不抛，返回 false（结果已经给用户了，记不下来不该让
+     * 确认失败）。
+     *
+     * @param conversationId 会话 ID，为 null 时什么都不做
+     * @param mallToken 商城令牌，可以为 null
+     * @param userMessage 这一轮「用户」那句（如「（点了确认）取消订单 …」）
+     * @param assistantReply 这一轮助手那句（执行结果）
+     * @return 写进去了为 true
+     */
+    public boolean record(String conversationId, String mallToken, String userMessage, String assistantReply) {
+<span class="pc bpc" id="L181" title="2 of 4 branches missed.">        if (conversationId == null || !properties.enabled()) {</span>
+<span class="nc" id="L182">            return false;</span>
+        }
+<span class="fc" id="L184">        try (Conversation conversation = open(conversationId, mallToken)) {</span>
+<span class="pc bpc" id="L185" title="1 of 2 branches missed.">            if (!conversation.active()) {</span>
+<span class="nc" id="L186">                return false;</span>
+            }
+<span class="fc" id="L188">            conversation.save(userMessage, assistantReply);</span>
+<span class="fc" id="L189">            return true;</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">        } catch (ConversationException e) {</span>
+<span class="nc" id="L191">            log.info(&quot;补记会话 {} 失败：{}&quot;, conversationId, e.failure());</span>
+<span class="nc" id="L192">            return false;</span>
+        }
+    }
+
+    /**
      * 查看会话的全部消息（{@code GET /api/conversations/{id}/messages}，页面刷新后恢复、调试用）。
      *
      * @param conversationId 会话 ID
@@ -174,12 +202,12 @@ public class ConversationMemory {
      * @throws ConversationException 会话不存在、已过期或不是你的（404）；登录失效（401）；商城或记忆库不可用（503）
      */
     public List&lt;ConversationMessage&gt; messages(String conversationId, String mallToken) {
-<span class="fc" id="L177">        String key = owners.memoryKey(owners.resolve(mallToken), conversationId);</span>
-<span class="fc" id="L178">        List&lt;Message&gt; stored = read(key);</span>
-<span class="pc bpc" id="L179" title="1 of 4 branches missed.">        if (stored.isEmpty() || isExpired(stored)) {</span>
-<span class="fc" id="L180">            throw new ConversationException(ConversationException.Failure.CONVERSATION_NOT_FOUND, null);</span>
+<span class="fc" id="L205">        String key = owners.memoryKey(owners.resolve(mallToken), conversationId);</span>
+<span class="fc" id="L206">        List&lt;Message&gt; stored = read(key);</span>
+<span class="pc bpc" id="L207" title="1 of 4 branches missed.">        if (stored.isEmpty() || isExpired(stored)) {</span>
+<span class="fc" id="L208">            throw new ConversationException(ConversationException.Failure.CONVERSATION_NOT_FOUND, null);</span>
         }
-<span class="fc" id="L182">        return stored.stream().map(ConversationMemory::view).toList();</span>
+<span class="fc" id="L210">        return stored.stream().map(ConversationMemory::view).toList();</span>
     }
 
     /**
@@ -190,23 +218,23 @@ public class ConversationMemory {
      * @throws ConversationException 会话不存在或不是你的（404）；正在回答（409）；登录失效（401）；商城或记忆库不可用（503）
      */
     public void clear(String conversationId, String mallToken) {
-<span class="fc" id="L193">        String key = owners.memoryKey(owners.resolve(mallToken), conversationId);</span>
-<span class="fc bfc" id="L194" title="All 2 branches covered.">        if (!busy.add(key)) {</span>
-<span class="fc" id="L195">            throw new ConversationException(ConversationException.Failure.CONVERSATION_BUSY, null);</span>
+<span class="fc" id="L221">        String key = owners.memoryKey(owners.resolve(mallToken), conversationId);</span>
+<span class="fc bfc" id="L222" title="All 2 branches covered.">        if (!busy.add(key)) {</span>
+<span class="fc" id="L223">            throw new ConversationException(ConversationException.Failure.CONVERSATION_BUSY, null);</span>
         }
         try {
-<span class="fc bfc" id="L198" title="All 2 branches covered.">            if (read(key).isEmpty()) {</span>
-<span class="fc" id="L199">                throw new ConversationException(ConversationException.Failure.CONVERSATION_NOT_FOUND, null);</span>
+<span class="fc bfc" id="L226" title="All 2 branches covered.">            if (read(key).isEmpty()) {</span>
+<span class="fc" id="L227">                throw new ConversationException(ConversationException.Failure.CONVERSATION_NOT_FOUND, null);</span>
             }
-<span class="fc" id="L201">            chatMemory.clear(key);</span>
-<span class="fc" id="L202">        } catch (ConversationException e) {</span>
-<span class="fc" id="L203">            throw e;</span>
-<span class="nc" id="L204">        } catch (RuntimeException e) {</span>
-<span class="nc" id="L205">            throw new ConversationException(ConversationException.Failure.MEMORY_UNAVAILABLE, e);</span>
+<span class="fc" id="L229">            chatMemory.clear(key);</span>
+<span class="fc" id="L230">        } catch (ConversationException e) {</span>
+<span class="fc" id="L231">            throw e;</span>
+<span class="nc" id="L232">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L233">            throw new ConversationException(ConversationException.Failure.MEMORY_UNAVAILABLE, e);</span>
         } finally {
-<span class="fc" id="L207">            busy.remove(key);</span>
+<span class="fc" id="L235">            busy.remove(key);</span>
         }
-<span class="fc" id="L209">    }</span>
+<span class="fc" id="L237">    }</span>
 
     /**
      * 后台清理过期会话，并清掉过期的归属缓存。
@@ -220,25 +248,25 @@ public class ConversationMemory {
             initialDelayString = &quot;${assistant.memory.sweep-interval:10m}&quot;,
             fixedDelayString = &quot;${assistant.memory.sweep-interval:10m}&quot;)
     public int sweep() {
-<span class="fc" id="L223">        owners.evictExpired();</span>
-<span class="pc bpc" id="L224" title="1 of 2 branches missed.">        if (!properties.enabled()) {</span>
-<span class="nc" id="L225">            return 0;</span>
+<span class="fc" id="L251">        owners.evictExpired();</span>
+<span class="pc bpc" id="L252" title="1 of 2 branches missed.">        if (!properties.enabled()) {</span>
+<span class="nc" id="L253">            return 0;</span>
         }
-<span class="fc" id="L227">        int removed = 0;</span>
+<span class="fc" id="L255">        int removed = 0;</span>
         try {
-<span class="fc bfc" id="L229" title="All 2 branches covered.">            for (String key : repository.findConversationIds()) {</span>
-<span class="pc bpc" id="L230" title="1 of 4 branches missed.">                if (!busy.contains(key) &amp;&amp; isExpired(repository.findByConversationId(key))) {</span>
-<span class="fc" id="L231">                    repository.deleteByConversationId(key);</span>
-<span class="fc" id="L232">                    removed++;</span>
+<span class="fc bfc" id="L257" title="All 2 branches covered.">            for (String key : repository.findConversationIds()) {</span>
+<span class="pc bpc" id="L258" title="1 of 4 branches missed.">                if (!busy.contains(key) &amp;&amp; isExpired(repository.findByConversationId(key))) {</span>
+<span class="fc" id="L259">                    repository.deleteByConversationId(key);</span>
+<span class="fc" id="L260">                    removed++;</span>
                 }
-<span class="fc" id="L234">            }</span>
-<span class="nc" id="L235">        } catch (RuntimeException e) {</span>
-<span class="nc" id="L236">            log.info(&quot;清理过期会话失败（记忆库不可用？），下次再试：{}&quot;, e.toString());</span>
-<span class="fc" id="L237">        }</span>
-<span class="pc bpc" id="L238" title="1 of 2 branches missed.">        if (removed &gt; 0) {</span>
-<span class="fc" id="L239">            log.info(&quot;清理了 {} 个过期会话&quot;, removed);</span>
+<span class="fc" id="L262">            }</span>
+<span class="nc" id="L263">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L264">            log.info(&quot;清理过期会话失败（记忆库不可用？），下次再试：{}&quot;, e.toString());</span>
+<span class="fc" id="L265">        }</span>
+<span class="pc bpc" id="L266" title="1 of 2 branches missed.">        if (removed &gt; 0) {</span>
+<span class="fc" id="L267">            log.info(&quot;清理了 {} 个过期会话&quot;, removed);</span>
         }
-<span class="fc" id="L241">        return removed;</span>
+<span class="fc" id="L269">        return removed;</span>
     }
 
     /**
@@ -248,28 +276,28 @@ public class ConversationMemory {
      * @return 过期时为 true
      */
     boolean isExpired(List&lt;Message&gt; stored) {
-<span class="fc" id="L251">        Instant last = MemoryMessages.lastActivity(stored);</span>
-<span class="fc bfc" id="L252" title="All 4 branches covered.">        return last != null &amp;&amp; last.plus(properties.ttl()).isBefore(clock.instant());</span>
+<span class="fc" id="L279">        Instant last = MemoryMessages.lastActivity(stored);</span>
+<span class="fc bfc" id="L280" title="All 4 branches covered.">        return last != null &amp;&amp; last.plus(properties.ttl()).isBefore(clock.instant());</span>
     }
 
     /** 读会话；记忆库不可用时转成 503。 */
     private List&lt;Message&gt; read(String key) {
         try {
-<span class="fc" id="L258">            return chatMemory.get(key);</span>
-<span class="fc" id="L259">        } catch (RuntimeException e) {</span>
-<span class="fc" id="L260">            throw new ConversationException(ConversationException.Failure.MEMORY_UNAVAILABLE, e);</span>
+<span class="fc" id="L286">            return chatMemory.get(key);</span>
+<span class="fc" id="L287">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L288">            throw new ConversationException(ConversationException.Failure.MEMORY_UNAVAILABLE, e);</span>
         }
     }
 
     /** 记忆里的消息 → 接口返回的形式。 */
     private static ConversationMessage view(Message message) {
-<span class="pc bpc" id="L266" title="2 of 4 branches missed.">        String role = switch (message.getMessageType()) {</span>
-<span class="fc" id="L267">            case USER -&gt; &quot;user&quot;;</span>
-<span class="fc" id="L268">            case ASSISTANT -&gt; &quot;assistant&quot;;</span>
-<span class="nc" id="L269">            case SYSTEM -&gt; &quot;summary&quot;;</span>
-<span class="pc" id="L270">            case TOOL -&gt; &quot;tool&quot;;</span>
+<span class="pc bpc" id="L294" title="2 of 4 branches missed.">        String role = switch (message.getMessageType()) {</span>
+<span class="fc" id="L295">            case USER -&gt; &quot;user&quot;;</span>
+<span class="fc" id="L296">            case ASSISTANT -&gt; &quot;assistant&quot;;</span>
+<span class="nc" id="L297">            case SYSTEM -&gt; &quot;summary&quot;;</span>
+<span class="pc" id="L298">            case TOOL -&gt; &quot;tool&quot;;</span>
         };
-<span class="fc" id="L272">        return new ConversationMessage(role, MemoryMessages.text(message), MemoryMessages.timestamp(message));</span>
+<span class="fc" id="L300">        return new ConversationMessage(role, MemoryMessages.text(message), MemoryMessages.timestamp(message));</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
