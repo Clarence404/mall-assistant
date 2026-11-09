@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ConversationOwner.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.memory</a> &gt; <span class="el_source">ConversationOwner.java</span></div><h1>ConversationOwner.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.memory;
+
+/**
+ * 会话归谁：匿名访客，或者某个商城用户（第 6 章引入）。
+ *
+ * &lt;p&gt;所在层：业务层的领域模型。{@link ConversationOwners#resolve} 根据请求里的商城令牌得出它，{@link ConversationOwners#memoryKey}
+ * 用它和会话 ID 一起算出记忆库里的键。
+ *
+ * &lt;p&gt;匿名和登录&lt;b&gt;不混用&lt;/b&gt;：同一个会话 ID，没登录时和登录后是两个不同的会话（键不同），登录前聊的内容登录后看不到，反之亦然。
+ * 否则就会出现「先匿名问了几句、再登录，前面匿名说的话被当成这个用户说的」，或者「退出登录后，下一个用这台电脑的人看到上一个人的订单对话」。
+ *
+ * @param kind 匿名还是商城用户
+ * @param userId 商城用户 ID；匿名时为 null
+ */
+<span class="fc" id="L15">public record ConversationOwner(Kind kind, String userId) {</span>
+
+    /** 匿名访客：没带商城令牌的请求。 */
+<span class="fc" id="L18">    public static final ConversationOwner ANONYMOUS = new ConversationOwner(Kind.ANONYMOUS, null);</span>
+
+    /**
+     * 商城用户。
+     *
+     * @param userId 商城确认过的用户 ID
+     * @return 归属
+     */
+    public static ConversationOwner user(String userId) {
+<span class="fc" id="L27">        return new ConversationOwner(Kind.USER, userId);</span>
+    }
+
+    /**
+     * 写进记忆键里的字符串：{@code anonymous} 或 {@code user:&lt;用户 ID&gt;}。
+     *
+     * @return 归属的字符串形式
+     */
+    public String key() {
+<span class="nc bnc" id="L36" title="All 2 branches missed.">        return kind == Kind.ANONYMOUS ? &quot;anonymous&quot; : &quot;user:&quot; + userId;</span>
+    }
+
+    /** 归属的种类。 */
+<span class="fc" id="L40">    public enum Kind {</span>
+        /** 没登录。 */
+<span class="fc" id="L42">        ANONYMOUS,</span>
+        /** 登录了商城。 */
+<span class="fc" id="L44">        USER</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MallApiClient.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.mall</a> &gt; <span class="el_source">MallApiClient.java</span></div><h1>MallApiClient.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.mall;
+
+import java.net.http.HttpClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.http.converter.HttpMessageConversionException;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
+
+/**
+ * 调商城（mall-evolution）网关的 HTTP 客户端：登录、查自己的订单、列出自己最近的订单、查商品、查当前用户（第 6 章）。每个方法都返回 {@link MallResult}，不抛异常。
+ *
+ * &lt;p&gt;所在层：外部系统接入（第 3 章引入）。上游是 {@code tool.MallTools}（模型调用的工具）和 {@link MallLoginController}
+ * （页面登录）；下游是商城网关 {@code assistant.mall.base-url}（默认 {@code http://localhost:9000}）。
+ *
+ * &lt;p&gt;智能客服对商城来说就是「另一个前端」：走网关的对外接口、带用户自己的令牌，网关和 mall-app 照常校验 JWT、限流、只返回本人的订单。
+ * 所以智能客服&lt;b&gt;看不到别人的订单&lt;/b&gt;不是靠提示词约束模型，而是商城本身就不给：用户 A 的令牌去查用户 B 的订单号，商城返回 404。
+ * 这也是工具安全的基本原则「工具以当前用户的身份和权限执行，不用全能服务账号」。
+ *
+ * &lt;p&gt;用的是 Spring 的 {@link RestClient}（同步 HTTP 客户端）。超时单独配置（连接 2 秒、读 5 秒，见 {@link MallApiProperties}），
+ * 不复用调模型用的 {@code spring.http.clients.*}（读超时 60 秒）。
+ */
+@Component
+public class MallApiClient {
+
+<span class="fc" id="L30">    private static final Logger log = LoggerFactory.getLogger(MallApiClient.class);</span>
+
+    private final RestClient rest;
+
+    /**
+     * 按配置创建 RestClient：JDK 自带的 HttpClient，HTTP/1.1，连接与读超时取自 {@link MallApiProperties}。
+     *
+     * @param properties {@code assistant.mall.*}
+     */
+<span class="fc" id="L39">    public MallApiClient(MallApiProperties properties) {</span>
+        // 明确用 HTTP/1.1：JDK HttpClient 默认先尝试 HTTP/2 升级，对 http:// 地址会多带一个 Upgrade 头，没必要
+<span class="fc" id="L41">        HttpClient http = HttpClient.newBuilder()</span>
+<span class="fc" id="L42">                .version(HttpClient.Version.HTTP_1_1)</span>
+<span class="fc" id="L43">                .connectTimeout(properties.connectTimeout())</span>
+<span class="fc" id="L44">                .build();</span>
+<span class="fc" id="L45">        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(http);</span>
+<span class="fc" id="L46">        factory.setReadTimeout(properties.readTimeout());</span>
+<span class="fc" id="L47">        this.rest = RestClient.builder()</span>
+<span class="fc" id="L48">                .baseUrl(properties.baseUrl())</span>
+<span class="fc" id="L49">                .requestFactory(factory)</span>
+<span class="fc" id="L50">                .build();</span>
+<span class="fc" id="L51">    }</span>
+
+    /**
+     * 登录：{@code POST /api/auth/login}，换回访问令牌。
+     *
+     * @param phone 手机号
+     * @param password 密码，只转发给商城，不记日志、不保存
+     * @return 成功时是令牌；手机号或密码错是 {@link MallFailure#UNAUTHORIZED}（code=USER_LOGIN_FAILED）
+     */
+    public MallResult&lt;MallModels.Tokens&gt; login(String phone, String password) {
+<span class="fc" id="L61">        return exchange(</span>
+                &quot;登录&quot;,
+<span class="fc" id="L63">                rest.post()</span>
+<span class="fc" id="L64">                        .uri(&quot;/api/auth/login&quot;)</span>
+<span class="fc" id="L65">                        .contentType(MediaType.APPLICATION_JSON)</span>
+<span class="fc" id="L66">                        .body(new MallModels.LoginRequest(phone, password)),</span>
+                MallModels.Tokens.class);
+    }
+
+    /**
+     * 查当前登录用户自己的一笔订单：{@code GET /api/orders/{orderNo}}，带 {@code Authorization: Bearer &lt;令牌&gt;}。
+     *
+     * @param accessToken 用户的访问令牌（来自页面登录，经 ToolContext 传到工具里）
+     * @param orderNo 订单号，已校验过格式
+     * @return 成功时是订单；不存在或不是本人的订单是 {@link MallFailure#NOT_FOUND}；令牌无效或过期是 {@link MallFailure#UNAUTHORIZED}
+     */
+    public MallResult&lt;MallModels.Order&gt; getOrder(String accessToken, String orderNo) {
+<span class="fc" id="L78">        return exchange(</span>
+                &quot;查订单&quot;,
+<span class="fc" id="L80">                rest.get().uri(&quot;/api/orders/{orderNo}&quot;, orderNo).headers(h -&gt; h.setBearerAuth(accessToken)),</span>
+                MallModels.Order.class);
+    }
+
+    /**
+     * 列出当前登录用户最近的订单：{@code GET /api/orders?size=N}，带 {@code Authorization: Bearer &lt;令牌&gt;}。第 3 章补充。
+     *
+     * &lt;p&gt;只取第一页（最近的 N 笔），不传游标、不按状态过滤。和 {@link #getOrder} 一样，用户是谁由商城从令牌里解析，
+     * 接口不接受「用户 ID」参数，所以这里也列不出别人的订单。
+     *
+     * @param accessToken 用户的访问令牌
+     * @param size 每页条数，调用方已限制在合理范围（商城自己也会再收紧到 1～50）
+     * @return 成功时是一页订单（可能为空列表）；令牌无效或过期是 {@link MallFailure#UNAUTHORIZED}
+     */
+    public MallResult&lt;MallModels.OrderPage&gt; listOrders(String accessToken, int size) {
+<span class="fc" id="L95">        return exchange(</span>
+                &quot;列订单&quot;,
+<span class="fc" id="L97">                rest.get().uri(&quot;/api/orders?size={size}&quot;, size).headers(h -&gt; h.setBearerAuth(accessToken)),</span>
+                MallModels.OrderPage.class);
+    }
+
+    /**
+     * 查当前令牌对应的商城用户：{@code GET /api/users/me}，带 {@code Authorization: Bearer &lt;令牌&gt;}。第 6 章引入，用来把会话绑定到商城用户。
+     *
+     * &lt;p&gt;为什么不自己解析令牌：商城的访问令牌是 JWT，中间那段 Base64 解开就能看到用户 ID（{@code sub}），但没有商城的密钥就&lt;b&gt;验不了签名&lt;/b&gt;——
+     * 谁都可以伪造一个 {@code sub} 写着别人 ID 的令牌。让商城自己验（这个接口只有令牌有效时才返回本人信息），拿到的用户 ID 才可信。
+     *
+     * @param accessToken 商城访问令牌
+     * @return 成功时是用户 ID 与昵称；令牌无效或过期是 {@link MallFailure#UNAUTHORIZED}；商城不可用是 {@link MallFailure#UNAVAILABLE}
+     */
+    public MallResult&lt;MallModels.UserProfile&gt; me(String accessToken) {
+<span class="nc" id="L111">        return exchange(</span>
+                &quot;查当前用户&quot;,
+<span class="nc" id="L113">                rest.get().uri(&quot;/api/users/me&quot;).headers(h -&gt; h.setBearerAuth(accessToken)),</span>
+                MallModels.UserProfile.class);
+    }
+
+    /**
+     * 查商品详情与是否有货：{@code GET /api/products/{skuId}}，匿名可查。
+     *
+     * @param skuId 商品编号，已校验过是数字
+     * @return 成功时是商品与库存展示；不存在是 {@link MallFailure#NOT_FOUND}
+     */
+    public MallResult&lt;MallModels.ProductPage&gt; getProduct(String skuId) {
+<span class="fc" id="L124">        return exchange(&quot;查商品&quot;, rest.get().uri(&quot;/api/products/{skuId}&quot;, skuId), MallModels.ProductPage.class);</span>
+    }
+
+    /**
+     * 发出请求，把结果统一成 {@link MallResult}：2xx 读出响应体；4xx / 5xx 读出商城 ProblemDetail 里的业务码，按状态码归类；
+     * 连不上、超时等网络异常归为 {@link MallFailure#UNAVAILABLE}。不抛异常，失败只记日志（不记令牌、不记密码）。
+     *
+     * &lt;p&gt;状态码归类：401 / 403 → UNAUTHORIZED，404 → NOT_FOUND，429 与 5xx → UNAVAILABLE，其余 4xx → REJECTED。
+     *
+     * @param action 动作名，只用于日志，如「查订单」
+     * @param request 已经拼好的请求（方法、路径、请求头、请求体）
+     * @param type 成功时响应体的类型
+     * @param &lt;T&gt; 响应体类型
+     * @return 成功或失败的结果，从不返回 null
+     */
+    &lt;T&gt; MallResult&lt;T&gt; exchange(String action, RestClient.RequestHeadersSpec&lt;?&gt; request, Class&lt;T&gt; type) {
+<span class="fc" id="L140">        long start = System.nanoTime();</span>
+        try {
+            // exchange 拿到原始响应自己处理：默认的 retrieve() 遇到 4xx / 5xx 会直接抛异常，这里要按状态码分类，不想靠异常走流程
+<span class="fc" id="L143">            MallResult&lt;T&gt; result = request.exchange((req, res) -&gt; {</span>
+<span class="fc" id="L144">                HttpStatusCode status = res.getStatusCode();</span>
+<span class="fc bfc" id="L145" title="All 2 branches covered.">                if (status.is2xxSuccessful()) {</span>
+<span class="fc" id="L146">                    T body = res.bodyTo(type);</span>
+<span class="pc bpc" id="L147" title="1 of 2 branches missed.">                    return body != null</span>
+<span class="fc" id="L148">                            ? MallResult.ok(body)</span>
+<span class="nc" id="L149">                            : MallResult.failed(MallFailure.UNAVAILABLE, null, &quot;响应体为空&quot;);</span>
+                }
+<span class="fc" id="L151">                MallModels.Problem problem = readProblem(res);</span>
+<span class="fc" id="L152">                return MallResult.failed(classify(status), problem.code(), problem.detail());</span>
+            });
+<span class="fc" id="L154">            long ms = (System.nanoTime() - start) / 1_000_000;</span>
+<span class="fc bfc" id="L155" title="All 2 branches covered.">            if (result.isOk()) {</span>
+<span class="fc" id="L156">                log.debug(&quot;商城接口{}成功：{} ms&quot;, action, ms);</span>
+            } else {
+<span class="fc" id="L158">                log.info(&quot;商城接口{}失败：{}，code={}，{} ms&quot;, action, result.failure(), result.code(), ms);</span>
+            }
+<span class="fc" id="L160">            return result;</span>
+<span class="fc" id="L161">        } catch (RestClientException | HttpMessageConversionException e) {</span>
+            // RestClientException 含 ResourceAccessException（连接被拒、超时）；HttpMessageConversionException 是响应体解析不了
+<span class="fc" id="L163">            log.warn(&quot;商城接口{}调用失败：{}&quot;, action, e.getMessage());</span>
+<span class="fc" id="L164">            return MallResult.failed(MallFailure.UNAVAILABLE, null, e.getMessage());</span>
+        }
+    }
+
+    /** 状态码归类，见 {@link #exchange} 的说明。 */
+    static MallFailure classify(HttpStatusCode status) {
+<span class="fc" id="L170">        int code = status.value();</span>
+<span class="pc bpc" id="L171" title="1 of 4 branches missed.">        if (code == 401 || code == 403) {</span>
+<span class="fc" id="L172">            return MallFailure.UNAUTHORIZED;</span>
+        }
+<span class="fc bfc" id="L174" title="All 2 branches covered.">        if (code == 404) {</span>
+<span class="fc" id="L175">            return MallFailure.NOT_FOUND;</span>
+        }
+<span class="pc bpc" id="L177" title="1 of 4 branches missed.">        if (code == 429 || status.is5xxServerError()) {</span>
+<span class="fc" id="L178">            return MallFailure.UNAVAILABLE;</span>
+        }
+<span class="fc" id="L180">        return MallFailure.REJECTED;</span>
+    }
+
+    /**
+     * 尽量读出 ProblemDetail；网关的 401 没有响应体、内容类型也不是 JSON，读不出来就返回空的 Problem，不影响按状态码归类。
+     */
+    private static MallModels.Problem readProblem(RestClient.RequestHeadersSpec.ConvertibleClientHttpResponse res) {
+        try {
+<span class="fc" id="L188">            MallModels.Problem problem = res.bodyTo(MallModels.Problem.class);</span>
+<span class="fc bfc" id="L189" title="All 2 branches covered.">            return problem != null ? problem : new MallModels.Problem(null, null);</span>
+<span class="nc" id="L190">        } catch (RestClientException | HttpMessageConversionException e) {</span>
+<span class="nc" id="L191">            return new MallModels.Problem(null, null);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

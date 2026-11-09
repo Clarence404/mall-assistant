@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MallResult.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.mall</a> &gt; <span class="el_source">MallResult.java</span></div><h1>MallResult.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.mall;
+
+/**
+ * 一次商城接口调用的结果：成功时有 body，失败时有失败类别和商城返回的错误码。
+ *
+ * &lt;p&gt;所在层：外部系统接入（第 3 章引入）。{@link MallApiClient} 的每个方法都返回它，而不是抛异常：调用方（工具）总要把失败翻译成
+ * 「给模型看的结构化结果」，用返回值比层层 try/catch 直观，也不会漏掉某种失败。
+ *
+ * @param body 成功时的响应体；失败时为 null
+ * @param failure 失败类别；成功时为 null
+ * @param code 商城 ProblemDetail 里的业务码（如 ORDER_NOT_FOUND）；成功、或响应体里没有时为 null
+ * @param detail 商城 ProblemDetail 里的 detail，只用于日志；可能为 null
+ * @param &lt;T&gt; 响应体类型
+ */
+<span class="fc" id="L15">public record MallResult&lt;T&gt;(T body, MallFailure failure, String code, String detail) {</span>
+
+    /** 成功。 */
+    public static &lt;T&gt; MallResult&lt;T&gt; ok(T body) {
+<span class="fc" id="L19">        return new MallResult&lt;&gt;(body, null, null, null);</span>
+    }
+
+    /** 失败。 */
+    public static &lt;T&gt; MallResult&lt;T&gt; failed(MallFailure failure, String code, String detail) {
+<span class="fc" id="L24">        return new MallResult&lt;&gt;(null, failure, code, detail);</span>
+    }
+
+    /** 是否成功（2xx 且有响应体）。 */
+    public boolean isOk() {
+<span class="fc bfc" id="L29" title="All 2 branches covered.">        return failure == null;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

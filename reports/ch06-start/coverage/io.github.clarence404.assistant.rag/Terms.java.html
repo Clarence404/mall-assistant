@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Terms.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.rag</a> &gt; <span class="el_source">Terms.java</span></div><h1>Terms.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.rag;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+/**
+ * 关键词检索的「分词」：把一段文字切成检索用的词项（term），建索引和查询用同一套切法（第 5 章引入）。
+ *
+ * &lt;p&gt;所在层：RAG 的工具类。{@link KeywordIndex} 建索引、查询时都调用它。
+ *
+ * &lt;p&gt;中文没有空格分词，常见的轻量做法是&lt;b&gt;字符 n-gram&lt;/b&gt;：不认词典，把相邻的 1 个字（单字）和 2 个字（双字）都当成词项。
+ * 「质量问题」切成 质、量、问、题、质量、量问、问题；用户问「质量有问题」时，质量、问题 两个双字都能对上。单字召回多、区分度低，
+ * 双字区分度高；两个都要，BM25 会按「在多少块里出现过」自动给常见的单字降权。真实项目可以换成 IK、HanLP、jieba 这类分词器，
+ * 或者直接用数据库 / 搜索引擎的全文检索。
+ *
+ * &lt;p&gt;规则：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;英文字母转小写，连续的字母、数字算一个词项（「618」「iphone」）
+ *   &lt;li&gt;汉字：每个字一个单字词项，相邻两个字一个双字词项；{@link #STOP_CHARS} 里的字（的、了、吗……）不当单字，含有它们的双字也不要
+ *   &lt;li&gt;其余字符（空格、标点、{@code &gt;}）是分隔符：双字不跨过它们
+ * &lt;/ul&gt;
+ */
+public final class Terms {
+
+    /**
+     * 停用字：几乎每句话都有、对「讲的是哪件事」没帮助的字。去掉它们，「东西坏了能退吗」剩下的词项才都是有用的。
+     * 只放虚词、语气词和人称；单字停用会连带去掉含它的双字，所以「问（问题）、过（过期）、地（地址）、不、没、能」这类会组成实词的字都不放。
+     */
+<span class="fc" id="L32">    static final Set&lt;Character&gt; STOP_CHARS = Set.of(</span>
+<span class="fc" id="L33">            '的', '了', '吗', '呢', '吧', '啊', '呀', '么', '嘛', '我', '你', '他', '她', '它', '们', '是', '和', '或', '请', '怎', '什',</span>
+<span class="fc" id="L34">            '哪', '这', '那', '些');</span>
+
+    private Terms() {}
+
+    /**
+     * 切词项，保留重复（BM25 要统计词频）。
+     *
+     * @param text 任意文字，可以为 null
+     * @return 词项列表，按出现顺序；没有可用的词项时为空列表
+     */
+    public static List&lt;String&gt; of(String text) {
+<span class="fc" id="L45">        List&lt;String&gt; terms = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L46" title="All 2 branches covered.">        if (text == null) {</span>
+<span class="fc" id="L47">            return terms;</span>
+        }
+<span class="fc" id="L49">        String t = text.toLowerCase(Locale.ROOT);</span>
+<span class="fc" id="L50">        int i = 0;</span>
+<span class="fc bfc" id="L51" title="All 2 branches covered.">        while (i &lt; t.length()) {</span>
+<span class="fc" id="L52">            char c = t.charAt(i);</span>
+<span class="fc bfc" id="L53" title="All 2 branches covered.">            if (isHan(c)) {</span>
+<span class="fc bfc" id="L54" title="All 2 branches covered.">                if (!STOP_CHARS.contains(c)) {</span>
+<span class="fc" id="L55">                    terms.add(String.valueOf(c));</span>
+<span class="fc bfc" id="L56" title="All 6 branches covered.">                    if (i + 1 &lt; t.length() &amp;&amp; isHan(t.charAt(i + 1)) &amp;&amp; !STOP_CHARS.contains(t.charAt(i + 1))) {</span>
+<span class="fc" id="L57">                        terms.add(t.substring(i, i + 2));</span>
+                    }
+                }
+<span class="fc" id="L60">                i++;</span>
+<span class="fc bfc" id="L61" title="All 2 branches covered.">            } else if (Character.isLetterOrDigit(c)) {</span>
+<span class="fc" id="L62">                int end = i;</span>
+<span class="pc bpc" id="L63" title="1 of 6 branches missed.">                while (end &lt; t.length() &amp;&amp; Character.isLetterOrDigit(t.charAt(end)) &amp;&amp; !isHan(t.charAt(end))) {</span>
+<span class="fc" id="L64">                    end++;</span>
+                }
+<span class="fc" id="L66">                terms.add(t.substring(i, end));</span>
+<span class="fc" id="L67">                i = end;</span>
+<span class="fc" id="L68">            } else {</span>
+<span class="fc" id="L69">                i++;</span>
+            }
+<span class="fc" id="L71">        }</span>
+<span class="fc" id="L72">        return terms;</span>
+    }
+
+    /** 是不是汉字（CJK 统一表意文字）。 */
+    static boolean isHan(char c) {
+<span class="fc bfc" id="L77" title="All 2 branches covered.">        return Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
