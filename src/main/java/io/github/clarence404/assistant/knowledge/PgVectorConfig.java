@@ -1,7 +1,11 @@
 package io.github.clarence404.assistant.knowledge;
 
+import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
+import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgDistanceType;
+import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgIdType;
+import org.springframework.ai.vectorstore.pgvector.PgVectorStore.PgIndexType;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -45,8 +49,17 @@ public class PgVectorConfig {
      */
     @Bean(destroyMethod = "close")
     public HikariDataSource knowledgeDataSource(KnowledgeProperties properties) {
-        // TODO ch04-6 用 HikariConfig 建连接池：连接信息与最大连接数取配置，连接超时 3 秒，启动时不连库（initializationFailTimeout = -1）
-        throw new UnsupportedOperationException("TODO ch04-6：创建 pgvector 连接池");
+        KnowledgeProperties.PgVector pg = properties.pgvector();
+        HikariConfig config = new HikariConfig();
+        config.setPoolName("knowledge-pgvector");
+        config.setJdbcUrl(pg.url());
+        config.setUsername(pg.username());
+        config.setPassword(pg.password());
+        config.setMaximumPoolSize(pg.maxPoolSize());
+        config.setMinimumIdle(0);
+        config.setConnectionTimeout(3_000);
+        config.setInitializationFailTimeout(-1);
+        return new HikariDataSource(config);
     }
 
     /**
@@ -112,7 +125,16 @@ public class PgVectorConfig {
             KnowledgeProperties.PgVector pg,
             String table,
             int dimensions) {
-        // TODO ch04-6 用 PgVectorStore.builder 设好 schema、表名、维度、余弦距离、HNSW、uuid、是否建表，build 后调 afterPropertiesSet()
-        throw new UnsupportedOperationException("TODO ch04-6：创建 PgVectorStore");
+        PgVectorStore store = PgVectorStore.builder(jdbc, embedding.model())
+                .schemaName(pg.schema())
+                .vectorTableName(table)
+                .dimensions(dimensions)
+                .distanceType(PgDistanceType.COSINE_DISTANCE)
+                .indexType(PgIndexType.HNSW)
+                .idType(PgIdType.UUID)
+                .initializeSchema(pg.initializeSchema())
+                .build();
+        store.afterPropertiesSet();
+        return store;
     }
 }

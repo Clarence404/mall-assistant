@@ -74,8 +74,7 @@ public class PrefixedEmbeddingModel implements EmbeddingModel {
      */
     @Override
     public float[] embed(String text) {
-        // TODO ch04-7 问题前加查询前缀再交给 delegate
-        return delegate.embed(text);
+        return delegate.embed(queryPrefix + text);
     }
 
     /**
@@ -87,8 +86,7 @@ public class PrefixedEmbeddingModel implements EmbeddingModel {
      */
     @Override
     public float[] embed(Document document) {
-        // TODO ch04-7 用 getEmbeddingContent 取带文档前缀的文字，交给 delegate（不要调本类的 embed(String)）
-        return delegate.embed(document.getText());
+        return delegate.embed(getEmbeddingContent(document));
     }
 
     /**
@@ -99,8 +97,8 @@ public class PrefixedEmbeddingModel implements EmbeddingModel {
      */
     @Override
     public String getEmbeddingContent(Document document) {
-        // TODO ch04-7 文档前缀 + 块文字
-        return document.getText();
+        String text = document.getText();
+        return documentPrefix + (text == null ? "" : text);
     }
 
     /**

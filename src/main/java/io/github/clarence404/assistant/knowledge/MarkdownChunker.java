@@ -135,8 +135,33 @@ public class MarkdownChunker {
      * @return 切好的若干块，每块长度不超过 {@code maxChars}
      */
     public List<String> split(String text) {
-        // TODO ch04-1 按上面的规则切块：不超过 maxChars、尽量在句末断开、相邻两块重叠 overlap 个字
-        return List.of();
+        String t = text.strip();
+        if (t.isEmpty()) {
+            return List.of();
+        }
+        if (t.length() <= maxChars) {
+            return List.of(t);
+        }
+        List<String> pieces = new ArrayList<>();
+        int start = 0;
+        while (start < t.length()) {
+            int end = Math.min(start + maxChars, t.length());
+            if (end < t.length()) {
+                int cut = lastBoundary(t, start + maxChars / 2, end);
+                if (cut > 0) {
+                    end = cut;
+                }
+            }
+            String piece = t.substring(start, end).strip();
+            if (!piece.isEmpty()) {
+                pieces.add(piece);
+            }
+            if (end >= t.length()) {
+                break;
+            }
+            start = Math.max(end - overlap, start + 1);
+        }
+        return pieces;
     }
 
     /**

@@ -2,6 +2,8 @@ package io.github.clarence404.assistant.knowledge;
 
 import java.util.List;
 import java.util.Map;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.stereotype.Service;
 
 /**
@@ -77,11 +79,33 @@ public class KnowledgeSearchService {
      * @return 命中块
      */
     List<KnowledgeHit> similaritySearch(String query, int topK) {
-        // TODO ch04-5 用 SearchRequest 做相似度检索，把每个 Document 换成 KnowledgeHit（分数与距离保留 4 位小数）
-        return List.of();
+        SearchRequest request = SearchRequest.builder()
+                .query(query)
+                .topK(topK)
+                .similarityThresholdAll()
+                .build();
+        List<Document> results = store.vectorStore().similaritySearch(request);
+        return results.stream().map(KnowledgeSearchService::toHit).toList();
     }
 
-    // TODO ch04-5 需要的话，把 Document → KnowledgeHit 的换算写成私有方法放在这里
+    private static KnowledgeHit toHit(Document document) {
+        Map<String, Object> metadata = document.getMetadata();
+        double score = round(document.getScore() == null ? 0.0 : document.getScore());
+        Object index = metadata.get(ChunkMetadata.CHUNK_INDEX);
+        return new KnowledgeHit(
+                document.getText(),
+                text(metadata, ChunkMetadata.SOURCE),
+                text(metadata, ChunkMetadata.TITLE),
+                text(metadata, ChunkMetadata.HEADING_PATH),
+                index instanceof Number n ? n.intValue() : null,
+                text(metadata, ChunkMetadata.DOC_VERSION),
+                score,
+                round(1.0 - score));
+    }
+
+    private static double round(double value) {
+        return Math.round(value * 10_000) / 10_000.0;
+    }
 
     /**
      * 知识库概况。模型不可用时也能返回：维度第一次会调一次模型探测（之后用缓存），探测失败就为 null 并在 warning 里说明；

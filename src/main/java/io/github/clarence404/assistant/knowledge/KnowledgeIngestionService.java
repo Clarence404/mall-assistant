@@ -1,8 +1,11 @@
 package io.github.clarence404.assistant.knowledge;
 
+import java.util.ArrayList;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.stereotype.Service;
@@ -115,8 +118,41 @@ public class KnowledgeIngestionService {
      * @return 每篇文档的处理结果
      */
     List<IngestReport.DocumentChange> apply(IngestPlan plan, ChunkDocumentFactory factory) {
-        // TODO ch04-4 按计划写库：新增直接写，更新先按 source 删再写，删除按 source 删；只在有活干时才取 store.vectorStore()
-        return List.of();
+        boolean writes = !plan.added().isEmpty()
+                || !plan.updated().isEmpty()
+                || !plan.removed().isEmpty();
+        VectorStore vectorStore = writes ? store.vectorStore() : null;
+        List<IngestReport.DocumentChange> changes = new ArrayList<>();
+        for (KnowledgeDocument document : plan.added()) {
+            List<Document> chunks = factory.toDocuments(document);
+            if (!chunks.isEmpty()) {
+                vectorStore.add(chunks);
+            }
+            changes.add(
+                    new IngestReport.DocumentChange(document.source(), IngestReport.Action.ADDED, chunks.size(), 0));
+        }
+        for (IngestPlan.Replacement replacement : plan.updated()) {
+            KnowledgeDocument document = replacement.document();
+            vectorStore.delete(bySource(document.source()));
+            List<Document> chunks = factory.toDocuments(document);
+            if (!chunks.isEmpty()) {
+                vectorStore.add(chunks);
+            }
+            changes.add(new IngestReport.DocumentChange(
+                    document.source(),
+                    IngestReport.Action.UPDATED,
+                    chunks.size(),
+                    replacement.previous().chunkCount()));
+        }
+        for (KnowledgeDocument document : plan.unchanged()) {
+            changes.add(new IngestReport.DocumentChange(document.source(), IngestReport.Action.SKIPPED, 0, 0));
+        }
+        for (StoredDocument removed : plan.removed()) {
+            vectorStore.delete(bySource(removed.source()));
+            changes.add(new IngestReport.DocumentChange(
+                    removed.source(), IngestReport.Action.REMOVED, 0, removed.chunkCount()));
+        }
+        return changes;
     }
 
     /**

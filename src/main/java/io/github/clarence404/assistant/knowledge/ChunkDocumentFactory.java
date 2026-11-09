@@ -3,8 +3,12 @@ package io.github.clarence404.assistant.knowledge;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import org.springframework.ai.document.Document;
 
 /**
@@ -67,8 +71,29 @@ public class ChunkDocumentFactory {
      * @return 这篇文档的全部块；正文为空时是空列表
      */
     public List<Document> toDocuments(KnowledgeDocument document) {
-        // TODO ch04-2 切块，每块一个 Document：文字 = 标题路径 + 换行 + 正文，确定性 UUID，元数据见上面的列表
-        return List.of();
+        List<KnowledgeChunk> chunks = chunker.chunk(document);
+        String docHash = docHash(document);
+        List<Document> documents = new ArrayList<>(chunks.size());
+        for (KnowledgeChunk chunk : chunks) {
+            String text = chunk.headingPath() + "\n" + chunk.body();
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put(ChunkMetadata.SOURCE, document.source());
+            metadata.put(ChunkMetadata.TITLE, document.title());
+            metadata.put(ChunkMetadata.HEADING_PATH, chunk.headingPath());
+            metadata.put(ChunkMetadata.CHUNK_INDEX, chunk.index());
+            metadata.put(ChunkMetadata.CHUNK_COUNT, chunks.size());
+            metadata.put(ChunkMetadata.DOC_HASH, docHash);
+            metadata.put(ChunkMetadata.CHUNK_HASH, sha256(text));
+            metadata.put(ChunkMetadata.DOC_VERSION, document.version());
+            metadata.put(ChunkMetadata.DOC_UPDATED, document.updated());
+            metadata.put(ChunkMetadata.EMBEDDING_MODEL, embeddingModel);
+            String id = UUID.nameUUIDFromBytes(
+                            (document.source() + "#" + chunk.index() + "#" + docHash).getBytes(StandardCharsets.UTF_8))
+                    .toString();
+            documents.add(
+                    Document.builder().id(id).text(text).metadata(metadata).build());
+        }
+        return documents;
     }
 
     /**

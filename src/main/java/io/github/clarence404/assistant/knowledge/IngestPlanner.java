@@ -1,6 +1,12 @@
 package io.github.clarence404.assistant.knowledge;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * 增量入库的判断：比对磁盘上的文档和库里已有的文档，产出 {@link IngestPlan}（第 4 章引入）。
@@ -42,7 +48,25 @@ public class IngestPlanner {
      * @return 入库计划
      */
     public IngestPlan plan(List<KnowledgeDocument> documents, List<StoredDocument> stored) {
-        // TODO ch04-3 按 source 比对磁盘上的文档和库里的汇总，分成新增 / 更新 / 跳过 / 删除
-        return new IngestPlan(List.of(), List.of(), List.of(), List.of());
+        Map<String, StoredDocument> storedBySource = stored.stream()
+                .collect(
+                        Collectors.toMap(StoredDocument::source, Function.identity(), (a, b) -> a, LinkedHashMap::new));
+        List<KnowledgeDocument> added = new ArrayList<>();
+        List<IngestPlan.Replacement> updated = new ArrayList<>();
+        List<KnowledgeDocument> unchanged = new ArrayList<>();
+        for (KnowledgeDocument document : documents) {
+            StoredDocument previous = storedBySource.get(document.source());
+            if (previous == null) {
+                added.add(document);
+            } else if (previous.docHash().equals(factory.docHash(document))) {
+                unchanged.add(document);
+            } else {
+                updated.add(new IngestPlan.Replacement(document, previous));
+            }
+        }
+        Set<String> onDisk = documents.stream().map(KnowledgeDocument::source).collect(Collectors.toSet());
+        List<StoredDocument> removed =
+                stored.stream().filter(s -> !onDisk.contains(s.source())).toList();
+        return new IngestPlan(added, updated, unchanged, removed);
     }
 }
