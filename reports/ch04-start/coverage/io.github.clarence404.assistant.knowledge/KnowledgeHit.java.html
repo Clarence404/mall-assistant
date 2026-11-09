@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>KnowledgeHit.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">KnowledgeHit.java</span></div><h1>KnowledgeHit.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+/**
+ * 检索命中的一块：{@code GET /api/knowledge/search} 返回的列表元素（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：接口层的数据。由 {@link KnowledgeSearchService#search} 生成；第 5 章做 RAG 时，这些块会被拼进提示词并作为引用来源。
+ *
+ * @param content 块文字（标题路径 + 正文，不含模型前缀）
+ * @param source 来源文件名
+ * @param title 文档标题
+ * @param headingPath 标题路径
+ * @param chunkIndex 块序号
+ * @param docVersion 文档版本
+ * @param score 余弦相似度，保留 4 位小数：越接近 1 越相似；结果按它从高到低排列
+ * @param distance 余弦距离 = 1 − score，pgvector 的 {@code &lt;=&gt;} 运算符算的就是它，越小越近
+ */
+<span class="nc" id="L17">public record KnowledgeHit(</span>
+        String content,
+        String source,
+        String title,
+        String headingPath,
+        Integer chunkIndex,
+        String docVersion,
+        double score,
+        double distance) {}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

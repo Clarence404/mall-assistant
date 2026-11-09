@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MarkdownKnowledgeReader.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">MarkdownKnowledgeReader.java</span></div><h1>MarkdownKnowledgeReader.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.core.io.support.ResourcePatternResolver;
+
+/**
+ * 读取知识文档：按 {@code assistant.knowledge.location} 找到所有 Markdown 文件，拆出 front matter 和正文（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：入库流水线的第一步。上游是 {@code src/main/resources/knowledge/*.md}；下游是 {@link KnowledgeIngestionService}。
+ *
+ * &lt;p&gt;为什么自己解析而不用 Spring AI 的 {@code MarkdownDocumentReader}：它按标题或分隔线切文档，但只记住「当前这一级标题」，
+ * 拿不到「退换货规则 &gt; 七天无理由退货 &gt; 适用条件」这样的完整标题路径，也不认 front matter。规则文档结构简单，自己解析几十行就够，
+ * 还能看清每一步在做什么。
+ *
+ * &lt;p&gt;front matter 是文件开头两行 {@code ---} 之间的 {@code 键: 值}，这里只认最简单的一行一个键值（不支持 YAML 的嵌套与多行）：
+ *
+ * &lt;pre&gt;
+ * ---
+ * title: 退换货规则
+ * version: 2026.10
+ * updated: 2026-10-15
+ * ---
+ * &lt;/pre&gt;
+ */
+public class MarkdownKnowledgeReader {
+
+    private static final String FENCE = &quot;---&quot;;
+
+    private final String location;
+    private final ResourcePatternResolver resolver;
+
+    /**
+     * 创建读取器。
+     *
+     * @param location 资源路径通配符，如 {@code classpath:knowledge/*.md}、{@code file:/tmp/kb/*.md}
+     */
+<span class="fc" id="L46">    public MarkdownKnowledgeReader(String location) {</span>
+<span class="fc" id="L47">        this.location = location;</span>
+<span class="fc" id="L48">        this.resolver = new PathMatchingResourcePatternResolver();</span>
+<span class="fc" id="L49">    }</span>
+
+    /** 读取的位置（入库报告与日志里显示）。 */
+    public String location() {
+<span class="nc" id="L53">        return location;</span>
+    }
+
+    /**
+     * 读出全部文档，按文件名排序（入库顺序固定，报告和日志每次一样）。
+     *
+     * @return 文档列表；目录里一篇都没有时是空列表（这时入库会把库里的旧块全部清掉）
+     * @throws UncheckedIOException 位置写错（如 classpath 前缀拼错）或文件读不出来
+     */
+    public List&lt;KnowledgeDocument&gt; read() {
+        try {
+<span class="fc" id="L64">            Resource[] resources = resolver.getResources(location);</span>
+<span class="fc" id="L65">            List&lt;KnowledgeDocument&gt; documents = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L66" title="All 2 branches covered.">            for (Resource resource : resources) {</span>
+<span class="pc bpc" id="L67" title="2 of 4 branches missed.">                if (resource.isReadable() &amp;&amp; resource.getFilename() != null) {</span>
+<span class="fc" id="L68">                    String raw = resource.getContentAsString(StandardCharsets.UTF_8);</span>
+<span class="fc" id="L69">                    documents.add(parse(resource.getFilename(), raw));</span>
+                }
+            }
+<span class="fc" id="L72">            documents.sort(Comparator.comparing(KnowledgeDocument::source));</span>
+<span class="fc" id="L73">            return documents;</span>
+<span class="nc" id="L74">        } catch (IOException e) {</span>
+<span class="nc" id="L75">            throw new UncheckedIOException(&quot;读取知识文档失败：&quot; + location, e);</span>
+        }
+    }
+
+    /**
+     * 解析一篇文档：拆出 front matter 与正文。没有 front matter 时标题用文件名（去掉扩展名），版本与日期为空串。
+     *
+     * @param source 文件名
+     * @param raw 文件原文
+     * @return 解析好的文档
+     */
+    public static KnowledgeDocument parse(String source, String raw) {
+        // Windows 上编辑过的文件可能是 \r\n 换行，统一成 \n，后面按行处理才不会多出 \r
+<span class="fc" id="L88">        String text = raw.replace(&quot;\r\n&quot;, &quot;\n&quot;);</span>
+<span class="fc" id="L89">        Map&lt;String, String&gt; front = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L90">        String body = text;</span>
+<span class="fc bfc" id="L91" title="All 2 branches covered.">        if (text.startsWith(FENCE + &quot;\n&quot;)) {</span>
+<span class="fc" id="L92">            int end = text.indexOf(&quot;\n&quot; + FENCE, FENCE.length());</span>
+<span class="pc bpc" id="L93" title="1 of 2 branches missed.">            if (end &gt; 0) {</span>
+<span class="fc bfc" id="L94" title="All 2 branches covered.">                for (String line : text.substring(FENCE.length() + 1, end).split(&quot;\n&quot;)) {</span>
+<span class="fc" id="L95">                    int colon = line.indexOf(':');</span>
+<span class="pc bpc" id="L96" title="1 of 2 branches missed.">                    if (colon &gt; 0) {</span>
+<span class="fc" id="L97">                        front.put(</span>
+<span class="fc" id="L98">                                line.substring(0, colon).strip(),</span>
+<span class="fc" id="L99">                                unquote(line.substring(colon + 1).strip()));</span>
+                    }
+                }
+<span class="fc" id="L102">                int bodyStart = text.indexOf('\n', end + 1);</span>
+<span class="pc bpc" id="L103" title="1 of 2 branches missed.">                body = bodyStart &lt; 0 ? &quot;&quot; : text.substring(bodyStart + 1);</span>
+            }
+        }
+<span class="pc bpc" id="L106" title="1 of 2 branches missed.">        String fallbackTitle = source.endsWith(&quot;.md&quot;) ? source.substring(0, source.length() - 3) : source;</span>
+<span class="fc" id="L107">        return new KnowledgeDocument(</span>
+                source,
+<span class="fc" id="L109">                front.getOrDefault(&quot;title&quot;, fallbackTitle),</span>
+<span class="fc" id="L110">                front.getOrDefault(&quot;version&quot;, &quot;&quot;),</span>
+<span class="fc" id="L111">                front.getOrDefault(&quot;updated&quot;, &quot;&quot;),</span>
+<span class="fc" id="L112">                body.strip(),</span>
+                text);
+    }
+
+    /** 去掉值两边的引号：{@code title: &quot;退换货规则&quot;} 和 {@code title: 退换货规则} 一样。 */
+    private static String unquote(String value) {
+<span class="pc bpc" id="L118" title="1 of 2 branches missed.">        if (value.length() &gt;= 2</span>
+<span class="pc bpc" id="L119" title="1 of 4 branches missed.">                &amp;&amp; ((value.startsWith(&quot;\&quot;&quot;) &amp;&amp; value.endsWith(&quot;\&quot;&quot;))</span>
+<span class="pc bpc" id="L120" title="3 of 4 branches missed.">                        || (value.startsWith(&quot;'&quot;) &amp;&amp; value.endsWith(&quot;'&quot;)))) {</span>
+<span class="fc" id="L121">            return value.substring(1, value.length() - 1);</span>
+        }
+<span class="fc" id="L123">        return value;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

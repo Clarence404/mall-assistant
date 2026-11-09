@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StoredDocument.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">StoredDocument.java</span></div><h1>StoredDocument.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 向量库里已有的一篇文档的汇总：由它的各块元数据按 source 归并而来（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：知识库的数据。{@link KnowledgeStore#documents()} 返回；{@link IngestPlanner} 拿它和磁盘上的文档比对，决定新增 / 更新 /
+ * 跳过 / 删除；{@code /api/knowledge/stats} 原样展示。
+ *
+ * @param source 来源文件名
+ * @param title 文档标题
+ * @param docVersion 文档版本
+ * @param docHash 入库时的内容哈希；同一篇文档的块正常情况下 docHash 都一样
+ * @param embeddingModel 生成这些块向量的模型
+ * @param chunkCount 库里有几块
+ */
+<span class="fc" id="L22">public record StoredDocument(</span>
+        String source, String title, String docVersion, String docHash, String embeddingModel, int chunkCount) {
+
+    /**
+     * 把若干块的元数据按 source 归并成文档汇总，按 source 排序。memory 与 pgvector 两种库都用它，统计口径一致。
+     *
+     * @param metadataList 每块一个元数据 Map
+     * @return 每个 source 一条
+     */
+    public static List&lt;StoredDocument&gt; summarize(List&lt;Map&lt;String, Object&gt;&gt; metadataList) {
+<span class="fc" id="L32">        Map&lt;String, List&lt;Map&lt;String, Object&gt;&gt;&gt; bySource = new LinkedHashMap&lt;&gt;();</span>
+<span class="pc bpc" id="L33" title="1 of 2 branches missed.">        for (Map&lt;String, Object&gt; metadata : metadataList) {</span>
+<span class="nc" id="L34">            String source = text(metadata, ChunkMetadata.SOURCE);</span>
+<span class="nc" id="L35">            bySource.computeIfAbsent(source, k -&gt; new ArrayList&lt;&gt;()).add(metadata);</span>
+<span class="nc" id="L36">        }</span>
+<span class="fc" id="L37">        return bySource.entrySet().stream()</span>
+<span class="fc" id="L38">                .map(e -&gt; {</span>
+<span class="nc" id="L39">                    Map&lt;String, Object&gt; first = e.getValue().getFirst();</span>
+<span class="nc" id="L40">                    return new StoredDocument(</span>
+<span class="nc" id="L41">                            e.getKey(),</span>
+<span class="nc" id="L42">                            text(first, ChunkMetadata.TITLE),</span>
+<span class="nc" id="L43">                            text(first, ChunkMetadata.DOC_VERSION),</span>
+<span class="nc" id="L44">                            text(first, ChunkMetadata.DOC_HASH),</span>
+<span class="nc" id="L45">                            text(first, ChunkMetadata.EMBEDDING_MODEL),</span>
+<span class="nc" id="L46">                            e.getValue().size());</span>
+                })
+<span class="fc" id="L48">                .sorted(Comparator.comparing(StoredDocument::source))</span>
+<span class="fc" id="L49">                .toList();</span>
+    }
+
+    private static String text(Map&lt;String, Object&gt; metadata, String key) {
+<span class="nc" id="L53">        Object value = metadata.get(key);</span>
+<span class="nc bnc" id="L54" title="All 2 branches missed.">        return value == null ? &quot;&quot; : value.toString();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

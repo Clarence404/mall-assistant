@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>KnowledgeIngestionService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">KnowledgeIngestionService.java</span></div><h1>KnowledgeIngestionService.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.vectorstore.filter.Filter;
+import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
+import org.springframework.stereotype.Service;
+
+/**
+ * 知识入库：读文档 → 判断增量 → 切块、向量化、写入向量库 → 出报告（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：业务层。上游是 {@link KnowledgeController}（{@code POST /api/knowledge/ingest}）和 {@link KnowledgeStartupIngest}
+ * （启动时自动入库）；下游是 {@link MarkdownKnowledgeReader}、{@link IngestPlanner}、{@link ChunkDocumentFactory} 和
+ * {@link KnowledgeStore}（向量化在 {@code VectorStore#add} 里发生：它调向量模型，把文字、元数据和向量一起存下来）。
+ *
+ * &lt;p&gt;&lt;b&gt;幂等&lt;/b&gt;：同样的文档入库几次，库里的内容都一样——没变的跳过；变了的先删旧块再写新块；块 ID 是确定性的，重复写入只会覆盖。
+ * 中途失败（比如删了旧块、写新块时模型挂了）也不怕：库里这篇文档的块没了或不全，下次入库时 docHash 对不上，会重新写一遍。
+ *
+ * &lt;p&gt;方法加了 {@code synchronized}：页面上连点两次「入库」、或者启动时的自动入库还没跑完又手动触发，两次入库交错执行会互相删对方
+ * 刚写的块，所以一次只跑一个。
+ */
+@Service
+public class KnowledgeIngestionService {
+
+<span class="fc" id="L26">    private static final Logger log = LoggerFactory.getLogger(KnowledgeIngestionService.class);</span>
+
+    private final MarkdownKnowledgeReader reader;
+    private final KnowledgeStore store;
+    private final KnowledgeEmbedding embedding;
+    private final KnowledgeProperties properties;
+
+    /**
+     * 创建入库服务。
+     *
+     * @param reader 文档读取器
+     * @param store 知识库存储（memory 或 pgvector）
+     * @param embedding 当前向量模型
+     * @param properties 知识库配置（切块参数）
+     */
+    public KnowledgeIngestionService(
+            MarkdownKnowledgeReader reader,
+            KnowledgeStore store,
+            KnowledgeEmbedding embedding,
+<span class="fc" id="L45">            KnowledgeProperties properties) {</span>
+<span class="fc" id="L46">        this.reader = reader;</span>
+<span class="fc" id="L47">        this.store = store;</span>
+<span class="fc" id="L48">        this.embedding = embedding;</span>
+<span class="fc" id="L49">        this.properties = properties;</span>
+<span class="fc" id="L50">    }</span>
+
+    /**
+     * 入库一次。
+     *
+     * @param rebuild true = 先清空库（内存版清空，pgvector 删表），再全部重新入库；换了模型又指到同一张表、或怀疑库里数据乱了时用
+     * @return 入库报告
+     * @throws KnowledgeException 向量模型或向量库不可用（503），或库里是别的模型生成的向量（409，提示重建）
+     */
+    public synchronized IngestReport ingest(boolean rebuild) {
+<span class="fc" id="L60">        long start = System.nanoTime();</span>
+<span class="fc" id="L61">        List&lt;KnowledgeDocument&gt; documents = reader.read();</span>
+<span class="fc" id="L62">        ChunkDocumentFactory factory = new ChunkDocumentFactory(</span>
+                new MarkdownChunker(
+<span class="fc" id="L64">                        properties.chunk().maxChars(), properties.chunk().overlap()),</span>
+<span class="fc" id="L65">                embedding.modelName(),</span>
+<span class="fc" id="L66">                embedding.profile().documentPrefix());</span>
+        try {
+<span class="fc bfc" id="L68" title="All 2 branches covered.">            if (rebuild) {</span>
+<span class="fc" id="L69">                store.reset();</span>
+            }
+<span class="fc" id="L71">            List&lt;StoredDocument&gt; stored = store.documents();</span>
+<span class="fc" id="L72">            ensureSameModel(stored, embedding, store);</span>
+<span class="fc" id="L73">            IngestPlan plan = new IngestPlanner(factory).plan(documents, stored);</span>
+<span class="fc" id="L74">            List&lt;IngestReport.DocumentChange&gt; changes = apply(plan, factory);</span>
+<span class="fc" id="L75">            store.persist();</span>
+<span class="fc" id="L76">            List&lt;StoredDocument&gt; after = store.documents();</span>
+<span class="fc" id="L77">            IngestReport report = report(rebuild, changes, after, (System.nanoTime() - start) / 1_000_000);</span>
+<span class="fc" id="L78">            log.info(</span>
+                    &quot;知识入库完成：新增 {} / 更新 {} / 跳过 {} / 删除 {} 篇，写入 {} 块、删除 {} 块，库里共 {} 篇 {} 块，耗时 {} ms（{}，{}）&quot;,
+<span class="fc" id="L80">                    report.documentsAdded(),</span>
+<span class="fc" id="L81">                    report.documentsUpdated(),</span>
+<span class="fc" id="L82">                    report.documentsSkipped(),</span>
+<span class="fc" id="L83">                    report.documentsRemoved(),</span>
+<span class="fc" id="L84">                    report.chunksAdded(),</span>
+<span class="fc" id="L85">                    report.chunksRemoved(),</span>
+<span class="fc" id="L86">                    report.totalDocuments(),</span>
+<span class="fc" id="L87">                    report.totalChunks(),</span>
+<span class="fc" id="L88">                    report.durationMs(),</span>
+<span class="fc" id="L89">                    embedding.modelName(),</span>
+<span class="fc" id="L90">                    store.location());</span>
+<span class="fc" id="L91">            return report;</span>
+<span class="nc" id="L92">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L93">            throw KnowledgeException.classify(e, embedding.modelName(), store.location());</span>
+        }
+    }
+
+    /**
+     * 按计划执行，返回每篇文档的处理结果（顺序：新增、更新、跳过、删除，各自保持计划里的顺序）。
+     *
+     * &lt;p&gt;要求（测试按这个写），向量库用 {@code store.vectorStore()}，并且只在真有要写、要删的文档时才取：取的时候要探测维度、
+     * 检查已有数据，全部跳过时不该去连向量模型（重启后文档都没变，模型没启动也能入库成功）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;&lt;b&gt;新增&lt;/b&gt;：{@code factory.toDocuments(文档)}，非空就 {@code add} 进向量库；结果 ADDED，chunksAdded = 块数
+     *   &lt;li&gt;&lt;b&gt;更新&lt;/b&gt;：先按 source 删除旧块（{@link #bySource}），再 {@code add} 新块；结果 UPDATED，chunksAdded = 新块数，
+     *       chunksRemoved = 旧汇总里的块数。为什么不能只 add：新版本切出的块可能比旧版少，按 ID 覆盖会留下多出来的旧块
+     *   &lt;li&gt;&lt;b&gt;跳过&lt;/b&gt;：什么都不做，不调向量模型；结果 SKIPPED，两个块数都是 0
+     *   &lt;li&gt;&lt;b&gt;删除&lt;/b&gt;：按 source 删除；结果 REMOVED，chunksRemoved = 旧汇总里的块数
+     * &lt;/ul&gt;
+     *
+     * 注意 {@code VectorStore#add} 传空列表时 SimpleVectorStore 会抛异常（正文为空的文档切不出块），要先判断。
+     *
+     * @param plan 入库计划
+     * @param factory 切块与元数据
+     * @return 每篇文档的处理结果
+     */
+    List&lt;IngestReport.DocumentChange&gt; apply(IngestPlan plan, ChunkDocumentFactory factory) {
+        // TODO ch04-4 按计划写库：新增直接写，更新先按 source 删再写，删除按 source 删；只在有活干时才取 store.vectorStore()
+<span class="fc" id="L119">        return List.of();</span>
+    }
+
+    /**
+     * 「source 等于某个文件名」的过滤条件。Spring AI 的过滤表达式与具体向量库无关：内存版在 Java 里逐块判断，pgvector 翻译成
+     * {@code metadata::jsonb @@ '$.source == &quot;returns.md&quot;'::jsonpath}。
+     *
+     * @param source 文件名
+     * @return 过滤表达式，传给 {@code VectorStore#delete(Filter.Expression)}
+     */
+    static Filter.Expression bySource(String source) {
+<span class="nc" id="L130">        return new FilterExpressionBuilder().eq(ChunkMetadata.SOURCE, source).build();</span>
+    }
+
+    /**
+     * 库里有别的模型生成的块时拒绝继续（入库和检索都调用）。不同模型的向量不在同一个「坐标系」里，混在一起比较相似度毫无意义，
+     * 维度不同时甚至直接报错；与其悄悄返回乱七八糟的结果，不如明确报 409 让人重建。
+     *
+     * @param stored 库里的文档汇总
+     * @param embedding 当前向量模型
+     * @param store 知识库存储（报错信息里写位置）
+     * @throws KnowledgeException INDEX_MODEL_MISMATCH
+     */
+    static void ensureSameModel(List&lt;StoredDocument&gt; stored, KnowledgeEmbedding embedding, KnowledgeStore store) {
+<span class="fc" id="L143">        List&lt;String&gt; others = stored.stream()</span>
+<span class="fc" id="L144">                .map(StoredDocument::embeddingModel)</span>
+<span class="pc bnc" id="L145" title="All 4 branches missed.">                .filter(m -&gt; !m.isEmpty() &amp;&amp; !m.equals(embedding.modelName()))</span>
+<span class="fc" id="L146">                .distinct()</span>
+<span class="fc" id="L147">                .toList();</span>
+<span class="pc bpc" id="L148" title="1 of 2 branches missed.">        if (!others.isEmpty()) {</span>
+<span class="nc" id="L149">            throw new KnowledgeException(</span>
+                    KnowledgeFailure.INDEX_MODEL_MISMATCH,
+<span class="nc" id="L151">                    &quot;向量库 &quot; + store.location() + &quot; 里的知识块是用 &quot; + String.join(&quot;、&quot;, others) + &quot; 生成的，当前向量模型是 &quot;</span>
+<span class="nc" id="L152">                            + embedding.modelName()</span>
+                            + &quot;：不同模型的向量不能混在一起比较，请重建（POST /api/knowledge/ingest?rebuild=true）。&quot;,
+                    null);
+        }
+<span class="fc" id="L156">    }</span>
+
+    private IngestReport report(
+            boolean rebuild, List&lt;IngestReport.DocumentChange&gt; changes, List&lt;StoredDocument&gt; after, long durationMs) {
+<span class="fc" id="L160">        return new IngestReport(</span>
+<span class="fc" id="L161">                embedding.modelName(),</span>
+<span class="fc" id="L162">                store.type(),</span>
+<span class="fc" id="L163">                store.location(),</span>
+                rebuild,
+<span class="fc" id="L165">                count(changes, IngestReport.Action.ADDED),</span>
+<span class="fc" id="L166">                count(changes, IngestReport.Action.UPDATED),</span>
+<span class="fc" id="L167">                count(changes, IngestReport.Action.SKIPPED),</span>
+<span class="fc" id="L168">                count(changes, IngestReport.Action.REMOVED),</span>
+<span class="fc" id="L169">                changes.stream()</span>
+<span class="fc" id="L170">                        .mapToInt(IngestReport.DocumentChange::chunksAdded)</span>
+<span class="fc" id="L171">                        .sum(),</span>
+<span class="fc" id="L172">                changes.stream()</span>
+<span class="fc" id="L173">                        .mapToInt(IngestReport.DocumentChange::chunksRemoved)</span>
+<span class="fc" id="L174">                        .sum(),</span>
+<span class="fc" id="L175">                after.size(),</span>
+<span class="fc" id="L176">                after.stream().mapToInt(StoredDocument::chunkCount).sum(),</span>
+                durationMs,
+<span class="fc" id="L178">                List.copyOf(changes));</span>
+    }
+
+    private static int count(List&lt;IngestReport.DocumentChange&gt; changes, IngestReport.Action action) {
+<span class="pc bnc" id="L182" title="All 2 branches missed.">        return (int) changes.stream().filter(c -&gt; c.action() == action).count();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

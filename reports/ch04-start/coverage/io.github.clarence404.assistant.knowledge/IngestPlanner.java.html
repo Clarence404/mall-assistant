@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>IngestPlanner.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">IngestPlanner.java</span></div><h1>IngestPlanner.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.util.List;
+
+/**
+ * 增量入库的判断：比对磁盘上的文档和库里已有的文档，产出 {@link IngestPlan}（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：入库流水线。上游是 {@link KnowledgeIngestionService}（传入读到的文档和 {@link KnowledgeStore#documents()}）；
+ * 计划交回给它执行。
+ *
+ * &lt;p&gt;为什么要增量：调向量模型是整个入库里最慢、（用云端模型时）最花钱的一步。文档几十上百篇、一次只改一两篇时，没变的文档不该
+ * 重新向量化。判断「变没变」用内容哈希（{@link ChunkDocumentFactory#docHash}），比比较修改时间可靠：复制、checkout 都会改时间，
+ * 内容没变哈希就不变。
+ */
+public class IngestPlanner {
+
+    private final ChunkDocumentFactory factory;
+
+    /**
+     * 创建判断器。
+     *
+     * @param factory 用它算每篇文档当前的内容哈希
+     */
+<span class="fc" id="L24">    public IngestPlanner(ChunkDocumentFactory factory) {</span>
+<span class="fc" id="L25">        this.factory = factory;</span>
+<span class="fc" id="L26">    }</span>
+
+    /**
+     * 比对并产出计划，按 source（文件名）对应：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;磁盘上有、库里没有 → {@code added}
+     *   &lt;li&gt;两边都有、库里的 docHash 和 {@code factory.docHash(文档)} 不同 → {@code updated}（带上库里的旧汇总）
+     *   &lt;li&gt;两边都有、docHash 相同 → {@code unchanged}
+     *   &lt;li&gt;库里有、磁盘上没有 → {@code removed}
+     * &lt;/ul&gt;
+     *
+     * 各列表内保持输入的顺序（磁盘文档按 source 排序、库里的汇总也按 source 排序）。
+     *
+     * @param documents 磁盘上的全部文档
+     * @param stored 库里已有的文档汇总
+     * @return 入库计划
+     */
+    public IngestPlan plan(List&lt;KnowledgeDocument&gt; documents, List&lt;StoredDocument&gt; stored) {
+        // TODO ch04-3 按 source 比对磁盘上的文档和库里的汇总，分成新增 / 更新 / 跳过 / 删除
+<span class="fc" id="L46">        return new IngestPlan(List.of(), List.of(), List.of(), List.of());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

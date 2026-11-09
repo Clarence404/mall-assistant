@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MallLoginController.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.mall</a> &gt; <span class="el_source">MallLoginController.java</span></div><h1>MallLoginController.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.mall;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * 页面登录的代理接口：{@code POST /api/mall/login}，把手机号和密码转给商城网关的 {@code /api/auth/login}，只把访问令牌还给页面。
+ *
+ * &lt;p&gt;所在层：接口层（第 3 章引入）。上游是 {@code static/index.html} 的登录框；下游是 {@link MallApiClient#login}。
+ *
+ * &lt;p&gt;为什么要经智能客服转一道，而不是页面直接调 9000：页面是从 8088 打开的，直接调 9000 属于跨域，要商城那边开 CORS；
+ * 转一道之后页面只和 8088 打交道。令牌回到页面后，由页面在每次提问时放进 {@code Authorization} 请求头带回来，
+ * 智能客服本身不保存任何人的登录状态（没有会话），重启也不影响。刷新令牌不往外给：页面用不上，少暴露一样东西。
+ */
+@RestController
+public class MallLoginController {
+
+    private final MallApiClient mallApi;
+
+    /**
+     * 创建登录代理接口。
+     *
+     * @param mallApi 商城客户端
+     */
+<span class="fc" id="L32">    public MallLoginController(MallApiClient mallApi) {</span>
+<span class="fc" id="L33">        this.mallApi = mallApi;</span>
+<span class="fc" id="L34">    }</span>
+
+    /**
+     * 登录。
+     *
+     * @param request 手机号与密码，密码不记日志
+     * @return 200 {@code {&quot;accessToken&quot;: &quot;...&quot;, &quot;expiresIn&quot;: 1800}}；手机号或密码错 401；商城不可用 503；均为 ProblemDetail，带 code
+     */
+    @PostMapping(&quot;/api/mall/login&quot;)
+    public ResponseEntity&lt;?&gt; login(@Valid @RequestBody LoginRequest request) {
+<span class="fc" id="L44">        MallResult&lt;MallModels.Tokens&gt; result = mallApi.login(request.phone(), request.password());</span>
+<span class="fc bfc" id="L45" title="All 2 branches covered.">        if (result.isOk()) {</span>
+<span class="fc" id="L46">            return ResponseEntity.ok(</span>
+<span class="fc" id="L47">                    new LoginReply(result.body().accessToken(), result.body().expiresIn()));</span>
+        }
+<span class="fc bfc" id="L49" title="All 2 branches covered.">        if (result.failure() == MallFailure.UNAUTHORIZED) {</span>
+<span class="fc" id="L50">            return problem(HttpStatus.UNAUTHORIZED, &quot;MALL_LOGIN_FAILED&quot;, &quot;手机号或密码错误&quot;);</span>
+        }
+<span class="pc bpc" id="L52" title="1 of 2 branches missed.">        if (result.failure() == MallFailure.REJECTED) {</span>
+<span class="nc" id="L53">            return problem(HttpStatus.BAD_REQUEST, &quot;MALL_LOGIN_REJECTED&quot;, &quot;登录请求不合法，请检查手机号和密码&quot;);</span>
+        }
+<span class="fc" id="L55">        return problem(HttpStatus.SERVICE_UNAVAILABLE, &quot;MALL_UNAVAILABLE&quot;, &quot;商城服务暂时不可用，请确认 mall-evolution 已启动后再试&quot;);</span>
+    }
+
+    private static ResponseEntity&lt;ProblemDetail&gt; problem(HttpStatus status, String code, String detail) {
+<span class="fc" id="L59">        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);</span>
+<span class="fc" id="L60">        problem.setTitle(&quot;商城登录失败&quot;);</span>
+<span class="fc" id="L61">        problem.setProperty(&quot;code&quot;, code);</span>
+<span class="fc" id="L62">        return ResponseEntity.status(status).body(problem);</span>
+    }
+
+    /**
+     * 登录请求。
+     *
+     * @param phone 手机号
+     * @param password 密码
+     */
+<span class="fc" id="L71">    public record LoginRequest(</span>
+            @NotBlank @Size(max = 32) String phone,
+            @NotBlank @Size(max = 64) String password) {}
+
+    /**
+     * 登录成功的响应。
+     *
+     * @param accessToken 商城访问令牌，页面保存在 sessionStorage，提问时放进 Authorization 请求头
+     * @param expiresIn 有效期，秒（商城默认 30 分钟）
+     */
+<span class="fc" id="L81">    public record LoginReply(String accessToken, long expiresIn) {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

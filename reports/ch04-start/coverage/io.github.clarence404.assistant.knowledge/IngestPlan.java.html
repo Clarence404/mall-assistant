@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>IngestPlan.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">IngestPlan.java</span></div><h1>IngestPlan.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.util.List;
+
+/**
+ * 一次增量入库的计划：每篇文档该新增、更新、跳过还是删除（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：入库流水线。{@link IngestPlanner} 产出，{@link KnowledgeIngestionService} 按计划执行。把「决定做什么」和「真的去做」
+ * 分开，决定的逻辑不碰向量库，单独测试很方便。
+ *
+ * @param added 库里没有的文档：切块后写入
+ * @param updated 库里有、但内容哈希变了的文档：先删旧块，再写新块
+ * @param unchanged 库里有、内容哈希也一样的文档：跳过，不调向量模型
+ * @param removed 库里有、磁盘上已经删掉的文档：删掉它的全部块
+ */
+<span class="fc" id="L16">public record IngestPlan(</span>
+        List&lt;KnowledgeDocument&gt; added,
+        List&lt;Replacement&gt; updated,
+        List&lt;KnowledgeDocument&gt; unchanged,
+        List&lt;StoredDocument&gt; removed) {
+
+    /**
+     * 要更新的文档：新内容 + 库里的旧汇总（报告里要写删了几块旧的）。
+     *
+     * @param document 磁盘上的新内容
+     * @param previous 库里的旧汇总
+     */
+<span class="nc" id="L28">    public record Replacement(KnowledgeDocument document, StoredDocument previous) {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>KnowledgeChunk.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">KnowledgeChunk.java</span></div><h1>KnowledgeChunk.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+/**
+ * 切出来的一块（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：知识库的数据。由 {@link MarkdownChunker} 产出；{@link ChunkDocumentFactory} 再给它加上元数据，变成 Spring AI 的
+ * {@code Document} 写进向量库。
+ *
+ * @param index 在整篇文档里的序号，从 0 开始
+ * @param headingPath 标题路径，如 {@code 退换货规则 &gt; 七天无理由退货 &gt; 适用条件}
+ * @param body 正文（不含标题）
+ */
+<span class="nc" id="L13">public record KnowledgeChunk(int index, String headingPath, String body) {}</span>
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

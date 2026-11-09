@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MarkdownChunker.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">MarkdownChunker.java</span></div><h1>MarkdownChunker.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * 切块：先按标题分节，再把超长的节按长度切开，相邻两块带重叠（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：入库流水线的第二步。上游是 {@link MarkdownKnowledgeReader} 读出的 {@link KnowledgeDocument}；下游是
+ * {@link ChunkDocumentFactory}（加元数据）。
+ *
+ * &lt;p&gt;两步切法的理由：
+ *
+ * &lt;ol&gt;
+ *   &lt;li&gt;&lt;b&gt;按标题分节&lt;/b&gt;：规则文档天然按标题组织，一节讲一件事（「七天无理由退货 &gt; 适用条件」），按节切最符合语义，块的边界不会
+ *       把两件事搅在一起。每节记下完整的标题路径，后面写进块文字和元数据
+ *   &lt;li&gt;&lt;b&gt;超长的节再按长度切&lt;/b&gt;：节太长时向量会把好几件事平均掉，检索不准，所以超过 {@code maxChars} 的节再切开。尽量在句号、
+ *       分号、换行处断开，并让相邻两块重叠 {@code overlap} 个字，跨边界的句子在两块里都完整出现
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;局限：只认 ATX 标题（行首 1～6 个 {@code #}），不处理代码块里的 {@code #}、表格等，对本项目的规则文档够用。
+ */
+public class MarkdownChunker {
+
+    /** 行首 1～6 个 # 加空格就是标题：# 的个数是级别，后面是标题文字。 */
+<span class="fc" id="L28">    private static final Pattern HEADING = Pattern.compile(&quot;^(#{1,6})\\s+(.+?)\\s*#*\\s*$&quot;);</span>
+
+    /** 优先在这些字符之后断开：中文句号、问号、叹号、分号，英文的同类标点，以及换行。 */
+    private static final String BOUNDARIES = &quot;。！？；.!?;\n&quot;;
+
+    /** 标题路径各级之间的分隔符。 */
+    public static final String PATH_SEPARATOR = &quot; &gt; &quot;;
+
+    private final int maxChars;
+    private final int overlap;
+
+    /**
+     * 创建切块器。
+     *
+     * @param maxChars 每块正文最多多少个字符
+     * @param overlap 相邻两块重叠多少个字符，须小于 {@code maxChars} 的一半
+     */
+<span class="fc" id="L45">    public MarkdownChunker(int maxChars, int overlap) {</span>
+<span class="fc" id="L46">        this.maxChars = maxChars;</span>
+<span class="fc" id="L47">        this.overlap = overlap;</span>
+<span class="fc" id="L48">    }</span>
+
+    /**
+     * 切块参数的「签名」：参数一变签名就变。它会算进文档的内容哈希（见 {@link ChunkDocumentFactory#docHash}），
+     * 改了切块参数后再入库，所有文档都会按新参数重切，而不是因为「文档没变」被跳过。
+     *
+     * @return 如 {@code md-v1:300:50}
+     */
+    public String signature() {
+<span class="fc" id="L57">        return &quot;md-v1:&quot; + maxChars + &quot;:&quot; + overlap;</span>
+    }
+
+    /**
+     * 切一篇文档：每节先按长度切开，再统一编号。
+     *
+     * @param document 文档
+     * @return 按出现顺序排列的块，序号从 0 连续编号；正文为空的节（标题下直接是下一级标题）不产生块
+     */
+    public List&lt;KnowledgeChunk&gt; chunk(KnowledgeDocument document) {
+<span class="fc" id="L67">        List&lt;KnowledgeChunk&gt; chunks = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L68" title="All 2 branches covered.">        for (Section section : sections(document)) {</span>
+<span class="pc bpc" id="L69" title="1 of 2 branches missed.">            for (String piece : split(section.body())) {</span>
+<span class="nc" id="L70">                chunks.add(new KnowledgeChunk(chunks.size(), section.headingPath(), piece));</span>
+<span class="nc" id="L71">            }</span>
+<span class="fc" id="L72">        }</span>
+<span class="fc" id="L73">        return chunks;</span>
+    }
+
+    /**
+     * 按标题分节：逐行扫描，遇到标题就结束上一节、更新标题栈。标题路径的第一级是文档标题（front matter 的 title），
+     * 和它同名的一级标题（# 退换货规则）不重复计入。
+     *
+     * @param document 文档
+     * @return 各节（含正文为空的节，由调用方跳过）
+     */
+    public List&lt;Section&gt; sections(KnowledgeDocument document) {
+<span class="fc" id="L84">        List&lt;Section&gt; sections = new ArrayList&lt;&gt;();</span>
+        // headings[i] 是第 i+1 级标题；遇到第 n 级标题时，n 级及更深的都要清掉
+<span class="fc" id="L86">        String[] headings = new String[6];</span>
+<span class="fc" id="L87">        StringBuilder body = new StringBuilder();</span>
+<span class="fc" id="L88">        String currentPath = document.title();</span>
+<span class="fc bfc" id="L89" title="All 2 branches covered.">        for (String line : document.body().split(&quot;\n&quot;, -1)) {</span>
+<span class="fc" id="L90">            Matcher heading = HEADING.matcher(line);</span>
+<span class="fc bfc" id="L91" title="All 2 branches covered.">            if (heading.matches()) {</span>
+<span class="fc" id="L92">                sections.add(new Section(currentPath, body.toString().strip()));</span>
+<span class="fc" id="L93">                body.setLength(0);</span>
+<span class="fc" id="L94">                int level = heading.group(1).length();</span>
+<span class="fc" id="L95">                headings[level - 1] = heading.group(2).strip();</span>
+<span class="fc bfc" id="L96" title="All 2 branches covered.">                for (int i = level; i &lt; headings.length; i++) {</span>
+<span class="fc" id="L97">                    headings[i] = null;</span>
+                }
+<span class="fc" id="L99">                currentPath = path(document.title(), headings);</span>
+<span class="fc" id="L100">            } else {</span>
+<span class="fc" id="L101">                body.append(line).append('\n');</span>
+            }
+        }
+<span class="fc" id="L104">        sections.add(new Section(currentPath, body.toString().strip()));</span>
+<span class="fc bfc" id="L105" title="All 2 branches covered.">        return sections.stream().filter(s -&gt; !s.body().isEmpty()).toList();</span>
+    }
+
+    /** 拼标题路径：文档标题 &gt; 各级标题，跳过空级别和与文档标题同名的标题。 */
+    private static String path(String title, String[] headings) {
+<span class="fc" id="L110">        List&lt;String&gt; parts = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L111">        parts.add(title);</span>
+<span class="fc bfc" id="L112" title="All 2 branches covered.">        for (String h : headings) {</span>
+<span class="fc bfc" id="L113" title="All 4 branches covered.">            if (h != null &amp;&amp; !h.equals(title)) {</span>
+<span class="fc" id="L114">                parts.add(h);</span>
+            }
+        }
+<span class="fc" id="L117">        return String.join(PATH_SEPARATOR, parts);</span>
+    }
+
+    /**
+     * 把一节正文按长度切开，相邻两块重叠。
+     *
+     * &lt;p&gt;规则（测试按这个写）：
+     *
+     * &lt;ol&gt;
+     *   &lt;li&gt;先去掉首尾空白；空串返回空列表；长度不超过 {@code maxChars} 原样作为一块
+     *   &lt;li&gt;否则从 {@code start = 0} 开始，每块最多取 {@code maxChars} 个字符，即候选终点 {@code end = start + maxChars}
+     *   &lt;li&gt;不是最后一块时，在 {@code [start + maxChars / 2, end)} 范围内从后往前找断句字符（{@link #BOUNDARIES}：。！？；.!?; 和换行），
+     *       找到就在它&lt;b&gt;之后&lt;/b&gt;断开（标点留在前一块）；找不到就在 {@code end} 硬切
+     *   &lt;li&gt;每块去掉首尾空白后加入结果；切到末尾就结束
+     *   &lt;li&gt;下一块从 {@code 本块终点 - overlap} 开始（往回退 overlap 个字，这就是「重叠」），但至少前进 1 个字符，防止死循环
+     * &lt;/ol&gt;
+     *
+     * @param text 一节的正文
+     * @return 切好的若干块，每块长度不超过 {@code maxChars}
+     */
+    public List&lt;String&gt; split(String text) {
+        // TODO ch04-1 按上面的规则切块：不超过 maxChars、尽量在句末断开、相邻两块重叠 overlap 个字
+<span class="fc" id="L139">        return List.of();</span>
+    }
+
+    /**
+     * 在 {@code [from, to)} 里从后往前找断句字符。
+     *
+     * @return 断句字符之后的位置（作为切分点）；找不到返回 -1
+     */
+    static int lastBoundary(String text, int from, int to) {
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        for (int i = to - 1; i &gt;= from; i--) {</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">            if (BOUNDARIES.indexOf(text.charAt(i)) &gt;= 0) {</span>
+<span class="nc" id="L150">                return i + 1;</span>
+            }
+        }
+<span class="nc" id="L153">        return -1;</span>
+    }
+
+    /**
+     * 一节：标题路径 + 正文。
+     *
+     * @param headingPath 标题路径
+     * @param body 正文，已去掉首尾空白
+     */
+<span class="fc" id="L162">    public record Section(String headingPath, String body) {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
