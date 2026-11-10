@@ -256,6 +256,8 @@
 // 第 7 章：售后 Agent。办事请求（取消订单、改地址、退款）由 Agent 多步办理，每一步作为 step 事件推来，显示在调试面板「Agent 步骤」；
 //   提出写操作时推一个 confirm 事件（阻塞接口在 confirmation 字段），页面画一张确认卡片。只有点卡片上的「确认」才会调
 //   POST /api/agent/confirmations/{id} 真正执行；在聊天里打「确认」不算（服务端会提醒你点按钮）
+// 第 8 章：MCP 客户端（Claude Code、MCP Inspector 等）提出的写操作只拿到一个确认链接 /?confirm=<确认 ID>。打开它时页面用
+//   GET /api/agent/confirmations/{id} 取卡片（要先登录同一个商城账号），点按钮走的还是同一个 POST，只是不带会话 ID（MCP 的操作没有会话）
 (() => {
   const $ = (id) => document.getElementById(id);
   const messages = $('messages');
@@ -342,6 +344,7 @@
       $('password').value = '';
       saveLogin(body.accessToken, phone);
       startNewConversation('已登录，开始新对话');
+      showMcpConfirmation();
     } catch {
       renderLogin('登录失败：网络异常');
     }
@@ -580,12 +583,13 @@
 
   // 第 7 章：确认卡片。卡片上的说明与影响由服务端写好（不是模型说的），过期后按钮点了会提示已过期；
   // 点按钮只发「同意 / 拒绝」和会话 ID，订单号等参数在服务端定死了，页面改不了
-  function addConfirmCard(c, after) {
+  // 第 8 章：fromMcp 为 true 时是 MCP 客户端提出的操作：卡片上注明来源，点按钮时不带会话 ID（它不属于任何会话）
+  function addConfirmCard(c, after, fromMcp) {
     const card = document.createElement('div');
     card.className = 'confirm-card';
     const title = document.createElement('div');
     title.className = 'title';
-    title.textContent = '请确认：' + c.title;
+    title.textContent = (fromMcp ? '请确认（MCP 客户端提出）：' : '请确认：') + c.title;
     const summary = document.createElement('div');
     summary.textContent = c.summary;
     const impact = document.createElement('div');
@@ -615,7 +619,7 @@
         const res = await fetch('/api/agent/confirmations/' + c.id, {
           method: 'POST',
           headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ decision, conversationId })
+          body: JSON.stringify({ decision, conversationId: fromMcp ? null : conversationId })
         });
         if (!res.ok) {
           const p = await problemMessage(res);
@@ -638,6 +642,26 @@
     };
     ok.addEventListener('click', () => decide('approve'));
     no.addEventListener('click', () => decide('reject'));
+  }
+
+  // 第 8 章：打开 MCP 工具给的确认链接 /?confirm=<确认 ID>。没登录先提示登录（登录后自动再取一次）；
+  //   取到的是还没处理的就画卡片，已经处理过 / 过期的只显示结果；不是你的、不存在都是 404
+  const CONFIRM_PARAM = new URLSearchParams(location.search).get('confirm');
+  async function showMcpConfirmation() {
+    if (!CONFIRM_PARAM || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(CONFIRM_PARAM)) return;
+    if (!mallToken) {
+      addMessage('bot', '有一个 MCP 客户端提出的操作等你确认：请先在右上角登录提出它的那个商城账号，登录后这里会显示确认卡片。');
+      return;
+    }
+    try {
+      const res = await fetch('/api/agent/confirmations/' + CONFIRM_PARAM, { headers: authHeaders({}) });
+      if (!res.ok) { addMessage('bot', '确认链接打不开：' + (await problemMessage(res)).message); return; }
+      const snapshot = await res.json();
+      if (snapshot.state === 'PENDING') addConfirmCard(snapshot.confirmation, null, true);
+      else addMessage('bot', snapshot.confirmation.summary + '：' + snapshot.message);
+    } catch {
+      addMessage('bot', '确认链接打不开：网络异常');
+    }
   }
 
   // 非 2xx 时尽量读出 ProblemDetail 的 detail，读不出就给通用提示
@@ -861,9 +885,10 @@
   renderLogin();
   if (conversationId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(conversationId)) {
     setConversation(conversationId);
-    restoreConversation();
+    restoreConversation().finally(showMcpConfirmation);
   } else {
     startNewConversation();
+    showMcpConfirmation();
   }
   form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
   input.addEventListener('input', autosize);

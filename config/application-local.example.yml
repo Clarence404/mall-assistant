@@ -51,3 +51,25 @@ spring:
 # assistant:
 #   after-sales:
 #     store: jdbc
+
+# —— 第 8 章：MCP 客户端示例（默认关闭）——
+# 本应用去连另一个 MCP Server（Streamable HTTP），白名单里的工具加 ext_ 前缀交给对话模型；GET /api/mcp/client/tools 看连上了哪些。
+# 外部工具的说明和结果都是不可信数据：只把信得过、用得着的工具名写进白名单
+# spring:
+#   ai:
+#     mcp:
+#       client:
+#         enabled: true
+#         streamable-http:
+#           connections:
+#             peer:
+#               url: http://<mcp-host>:<port>
+#               endpoint: /mcp
+# assistant:
+#   mcp:
+#     client:
+#       allowed-tools: [searchKnowledge]
+# 确认链接里的地址默认 http://localhost:8088/，换了端口或域名时改这里（MCP 工具返回的 confirmUrl 用它拼）
+# assistant:
+#   mcp:
+#     confirm-url: http://localhost:8088/

@@ -52,6 +52,9 @@ import org.springframework.stereotype.Service;
  *
  * <p>待确认操作存在内存里（{@link ConcurrentHashMap}），只在一个进程里有效：部署多个实例时要放进数据库或 Redis（和第 6 章的「正在回答」标记一样）。
  * 后台定期清掉过期很久的。
+ *
+ * <p><b>第 8 章：MCP 客户端提出的写操作也登记在这里</b>（{@link #createForMcp}）。它们没有会话（会话 ID 为 null），确认的唯一方式仍然是用户在智能客服页面上点按钮：
+ * MCP 工具只拿到确认 ID 和确认链接，页面打开链接时用 {@link #view} 取卡片内容，点按钮走的还是 {@link #decide}——执行只有这一个入口，来源不同、规则相同。
  */
 @Service
 public class ConfirmationService {
@@ -62,6 +65,9 @@ public class ConfirmationService {
 
     /** 过期之后再留多久（这段时间里重复点确认还能拿到原来的结果；再之后就是 404）。 */
     static final Duration RETENTION = Duration.ofHours(1);
+
+    /** 还没确认时的提示（第 8 章，MCP 工具查状态时给对面的模型看）。 */
+    static final String PENDING_MESSAGE = "还没有执行：等用户本人在智能客服页面登录同一个账号后点「确认」，MCP 客户端不能代替用户确认。";
 
     private final MallApiClient mallApi;
     private final AfterSalesStore afterSales;
@@ -105,6 +111,11 @@ public class ConfirmationService {
      * @return 推给页面的待确认操作
      */
     public PendingConfirmation create(PendingAction action, ConversationOwner owner, String conversationId) {
+        return create(action, owner, conversationId, Origin.CHAT);
+    }
+
+    private PendingConfirmation create(
+            PendingAction action, ConversationOwner owner, String conversationId, Origin origin) {
         Instant now = clock.instant();
         Instant expiresAt = now.plus(properties.confirmationTtl());
         String id = UUID.randomUUID().toString();
@@ -118,9 +129,23 @@ public class ConfirmationService {
                 action.impact(),
                 expiresAt,
                 properties.confirmationTtl().toSeconds());
-        entries.put(id, new Entry(id, action, owner.key(), conversationId, expiresAt, view));
-        log.info("待确认操作 {}：{}（{}），{} 前有效", id, action.summary(), owner.key(), expiresAt);
+        entries.put(id, new Entry(id, action, owner.key(), conversationId, expiresAt, view, origin));
+        log.info("待确认操作 {}（{}）：{}（{}），{} 前有效", id, origin, action.summary(), owner.key(), expiresAt);
         return view;
+    }
+
+    /**
+     * 登记一个由 MCP 客户端提出的待确认操作（第 8 章）：没有会话，只绑定到商城用户；确认仍然只能在页面上点按钮（{@link #decide}，会话 ID 为空）。
+     *
+     * <p>为什么单独一个方法、记下来源：页面打开确认链接时（{@link #view}）只认 MCP 来的确认——聊天里生成的确认绑定着会话，应该在那个会话的卡片上点；
+     * 聊天里说「确认」时的提醒（{@link #pendingFor}）也只看聊天来的，不把 MCP 那边的操作混进来。
+     *
+     * @param action 写操作（已经过 {@link WriteActionGuard} 核对）
+     * @param owner 谁提的（商城用户）
+     * @return 待确认操作
+     */
+    public PendingConfirmation createForMcp(PendingAction action, ConversationOwner owner) {
+        return create(action, owner, null, Origin.MCP);
     }
 
     /**
@@ -133,10 +158,47 @@ public class ConfirmationService {
     public Optional<PendingConfirmation> pendingFor(ConversationOwner owner, String conversationId) {
         Instant now = clock.instant();
         return entries.values().stream()
+                .filter(e -> e.origin == Origin.CHAT)
                 .filter(e -> e.ownerKey.equals(owner.key()) && Objects.equals(e.conversationId, conversationId))
                 .filter(e -> e.outcome == null && e.expiresAt.isAfter(now))
                 .map(e -> e.view)
                 .reduce((a, b) -> b);
+    }
+
+    /**
+     * 页面打开确认链接（{@code /?confirm=<ID>}）时取卡片：只有 MCP 来的、是你的确认才给看（第 8 章）。
+     *
+     * @param id 确认 ID
+     * @param mallToken 页面上登录的商城令牌，可以为 null（匿名没有确认，结果是 404）
+     * @return 卡片内容与状态
+     * @throws ConfirmationException 不存在、不是你的、不是 MCP 来的（都是 404）
+     */
+    public ConfirmationSnapshot view(String id, String mallToken) {
+        return snapshot(id, owners.resolve(mallToken));
+    }
+
+    /**
+     * 一个 MCP 来的待确认操作此刻的样子（ch08-7）：页面画卡片、MCP 工具 {@code getConfirmation} 查结果都用它。
+     *
+     * <p>要求（测试按这个写）：
+     *
+     * <ul>
+     *   <li>找不到这个 ID、归属对不上、或者不是 MCP 来的（{@link Origin#MCP}）：抛 {@link ConfirmationException.Failure#CONFIRMATION_NOT_FOUND}
+     *       ——和 {@link #decide} 一样，不是你的和不存在不区分，不让人探测 ID；聊天里生成的确认也不能借这个接口看
+     *   <li>已经有结果：状态按结果（EXECUTED / FAILED / REJECTED），消息是结果的固定话术
+     *   <li>没结果、已过期（现在不早于 expiresAt）：EXPIRED，消息说明「过期了，没有执行」
+     *   <li>没结果、没过期：PENDING，消息提示「等用户在智能客服页面点确认，还没有执行」
+     *   <li>只读：不加锁、不改任何东西（看的那一刻和点的那一刻之间状态可能变，以 {@link #decide} 为准）
+     * </ul>
+     *
+     * @param id 确认 ID
+     * @param owner 谁在看
+     * @return 卡片内容与状态
+     * @throws ConfirmationException 不存在、不是你的、不是 MCP 来的（都是 404）
+     */
+    public ConfirmationSnapshot snapshot(String id, ConversationOwner owner) {
+        // TODO ch08-7：不存在 / 不是 MCP 来的 / 不是你的 → 404；有结果按结果；没结果看过没过期（EXPIRED / PENDING）
+        throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_NOT_FOUND);
     }
 
     /**
@@ -371,6 +433,8 @@ public class ConfirmationService {
         final String conversationId;
         final Instant expiresAt;
         final PendingConfirmation view;
+        /** 第 8 章：从哪来的（聊天里的 Agent / MCP 客户端）。 */
+        final Origin origin;
         /** 每个确认一把锁：并发的两次点击一个接一个处理，第二个看到第一个的结果。用 ReentrantLock 而不是 synchronized：虚拟线程在 synchronized 里等待会占住载体线程（JDK 21）。 */
         final ReentrantLock lock = new ReentrantLock();
 
@@ -382,13 +446,23 @@ public class ConfirmationService {
                 String ownerKey,
                 String conversationId,
                 Instant expiresAt,
-                PendingConfirmation view) {
+                PendingConfirmation view,
+                Origin origin) {
             this.id = id;
             this.action = action;
             this.ownerKey = ownerKey;
             this.conversationId = conversationId;
             this.expiresAt = expiresAt;
             this.view = view;
+            this.origin = origin;
         }
+    }
+
+    /** 待确认操作从哪来（第 8 章）。 */
+    enum Origin {
+        /** 聊天里的 Agent（第 7 章），绑定会话。 */
+        CHAT,
+        /** MCP 客户端调了 propose* 工具（第 8 章），没有会话。 */
+        MCP
     }
 }

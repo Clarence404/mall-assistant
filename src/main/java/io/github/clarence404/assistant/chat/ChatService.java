@@ -7,6 +7,7 @@ import io.github.clarence404.assistant.error.ModelCallException;
 import io.github.clarence404.assistant.intent.Intent;
 import io.github.clarence404.assistant.intent.IntentResult;
 import io.github.clarence404.assistant.intent.IntentService;
+import io.github.clarence404.assistant.mcp.client.ExternalMcpTools;
 import io.github.clarence404.assistant.memory.Conversation;
 import io.github.clarence404.assistant.memory.ConversationMemory;
 import io.github.clarence404.assistant.memory.QuestionCondenser;
@@ -19,12 +20,14 @@ import io.github.clarence404.assistant.tool.ToolCallRecorder;
 import io.github.clarence404.assistant.tool.ToolInvocation;
 import io.github.clarence404.assistant.tool.ToolProperties;
 import io.github.clarence404.assistant.tool.ToolResultGuard;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -117,6 +120,7 @@ public class ChatService {
     private final ConversationMemory memory;
     private final QuestionCondenser condenser;
     private final AgentService agent;
+    private final ExternalMcpTools externalTools;
 
     /**
      * 创建对话服务（Spring 注入）。
@@ -131,6 +135,7 @@ public class ChatService {
      * @param memory 会话记忆（第 6 章）
      * @param condenser 追问改写（第 6 章）
      * @param agent 售后 Agent（第 7 章）
+     * @param externalTools 外部 MCP 服务的工具（第 8 章，默认没有）：和 {@link MallTools} 的一起注册给模型
      */
     @Autowired
     public ChatService(
@@ -143,8 +148,10 @@ public class ChatService {
             RagService ragService,
             ConversationMemory memory,
             QuestionCondenser condenser,
-            AgentService agent) {
+            AgentService agent,
+            ExternalMcpTools externalTools) {
         this.chatClient = chatClient;
+        this.externalTools = externalTools;
         this.properties = properties;
         this.prompts = prompts;
         this.intentService = intentService;
@@ -154,6 +161,45 @@ public class ChatService {
         this.memory = memory;
         this.condenser = condenser;
         this.agent = agent;
+    }
+
+    /**
+     * 不带外部 MCP 工具的对话服务（第 7 章及以前的测试手工 new 它）。
+     *
+     * @param chatClient 共享的 ChatClient
+     * @param properties {@code assistant.chat.*}
+     * @param prompts 系统提示词与拒答话术
+     * @param intentService 意图识别
+     * @param mallTools 查订单、查商品的工具
+     * @param toolProperties {@code assistant.tools.*}
+     * @param ragService 检索增强回答
+     * @param memory 会话记忆
+     * @param condenser 追问改写
+     * @param agent 售后 Agent
+     */
+    public ChatService(
+            ChatClient chatClient,
+            ChatProperties properties,
+            AssistantPrompts prompts,
+            IntentService intentService,
+            MallTools mallTools,
+            ToolProperties toolProperties,
+            RagService ragService,
+            ConversationMemory memory,
+            QuestionCondenser condenser,
+            AgentService agent) {
+        this(
+                chatClient,
+                properties,
+                prompts,
+                intentService,
+                mallTools,
+                toolProperties,
+                ragService,
+                memory,
+                condenser,
+                agent,
+                ExternalMcpTools.none());
     }
 
     /**
@@ -641,7 +687,10 @@ public class ChatService {
         }
         spec = spec.user(message);
         if (toolProperties.nativeCalling()) {
-            spec = spec.tools(recorder.wrap(mallTools.callbacks()).toArray()).toolContext(MallTools.context(mallToken));
+            // 第 8 章：外部 MCP 服务的工具（过了白名单、改了名、不带 ToolContext）和自己的工具一起交给模型；默认没有外部工具
+            List<ToolCallback> tools = new ArrayList<>(mallTools.callbacks());
+            tools.addAll(externalTools.callbacks());
+            spec = spec.tools(recorder.wrap(tools).toArray()).toolContext(MallTools.context(mallToken));
         }
         return spec;
     }

@@ -27,6 +27,7 @@
         <jacoco.version>0.8.13</jacoco.version>
         <victools-jsonschema.version>5.0.0</victools-jsonschema.version>
         <surefire-report-plugin.version>3.5.4</surefire-report-plugin.version>
+        <json-schema-validator.version>3.0.6</json-schema-validator.version>
     </properties>
 
     <dependencyManagement>
@@ -53,6 +54,12 @@
                 <groupId>com.github.victools</groupId>
                 <artifactId>jsonschema-module-swagger-2</artifactId>
                 <version>${victools-jsonschema.version}</version>
+            </dependency>
+            <!-- 第 8 章：Spring AI 2.0.2 的结构化输出用 json-schema-validator 3.0.1，MCP Java SDK 2.1.0 用 3.0.6；统一到较新的 3.0.6（同一大版本），满足 dependencyConvergence -->
+            <dependency>
+                <groupId>com.networknt</groupId>
+                <artifactId>json-schema-validator</artifactId>
+                <version>${json-schema-validator.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -111,6 +118,16 @@
         <dependency>
             <groupId>com.zaxxer</groupId>
             <artifactId>HikariCP</artifactId>
+        </dependency>
+        <!-- 第 8 章：MCP。服务端用 WebMVC 版 Starter（和现有 8088 应用同一个进程、同一个端口，Streamable HTTP 传输，端点 /mcp）；
+             客户端用 JDK HttpClient 版 Starter（不引 WebFlux），默认关闭，只有 spring.ai.mcp.client.enabled=true 时才连外部 MCP Server -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-client</artifactId>
         </dependency>
 
         <dependency>

@@ -2,7 +2,7 @@
 
 Java Doc「AI」模块的配套练习项目：给 [mall-evolution](https://github.com/Clarence404/mall-evolution) 里的示例商城做一个智能客服，一章一章自己动手写出来。
 
-**版本基线**：JDK 21、Spring Boot 4.1.2、Spring AI 2.0.2、Testcontainers 2.0.5、Ollama 0.40（默认对话模型 `qwen2.5:0.5b`，向量模型 `bge-m3`）、pgvector 0.8.1（PostgreSQL 17，可选）。
+**版本基线**：JDK 21、Spring Boot 4.1.2、Spring AI 2.0.2（MCP Java SDK 2.1.0）、Testcontainers 2.0.5、Ollama 0.40（默认对话模型 `qwen2.5:0.5b`，向量模型 `bge-m3`）、pgvector 0.8.1（PostgreSQL 17，可选）。
 
 [![verify](https://github.com/Clarence404/mall-assistant/actions/workflows/verify.yml/badge.svg)](https://github.com/Clarence404/mall-assistant/actions/workflows/verify.yml) [测试报告](https://clarence404.github.io/mall-assistant/)
 
@@ -38,7 +38,7 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 | 5 | RAG | 规则类问题（新增意图 POLICY 与售后）先检索再回答：向量检索 + 关键词检索（BM25）用 RRF 融合，相似度门槛、去重与上下文预算，编号资料拼进提示词（资料是数据不是指令），检索不到不调模型、直接说没找到；`sources` 字段与 `source` 事件返回引用来源，引用编号事后校验；hit@k 检索评测与 RAG 回答录制回放 | [RAG](https://clarence404.github.io/java-doc/ai/4_core_tech/2_rag.html)、[知识入库](https://clarence404.github.io/java-doc/ai/7_practice/4_knowledge_ingest.html)、[Spring AI](https://clarence404.github.io/java-doc/ai/2_frameworks/0_spring_ai.html) | [`ch05-start`](https://github.com/Clarence404/mall-assistant/tree/ch05-start) / [`ch05-done`](https://github.com/Clarence404/mall-assistant/tree/ch05-done) |
 | 6 | 多轮对话与记忆 | 页面生成会话 ID，Spring AI `ChatMemory`（内存 / JDBC 存进 PostgreSQL），按轮数和字数裁剪历史（可选摘要记忆），只存原话与最终回答；追问先改写成独立问题再识别意图和检索（结果校验防跑题），订单号核对与沿用；会话绑定商城用户、别人拿到 ID 也读不到；查看 / 清空接口、刷新恢复历史，流式回答完才写记忆、同一会话并发 409；RAG 门槛按向量模型分别配；多轮录制回放 | [Spring AI](https://clarence404.github.io/java-doc/ai/2_frameworks/0_spring_ai.html)、[RAG 实战](https://clarence404.github.io/java-doc/ai/7_practice/5_rag.html)、[Prompt 工程](https://clarence404.github.io/java-doc/ai/1_concepts/1_prompt.html) | [`ch06-start`](https://github.com/Clarence404/mall-assistant/tree/ch06-start) / [`ch06-done`](https://github.com/Clarence404/mall-assistant/tree/ch06-done) |
 | 7 | Agent | 售后 Agent：自己写的循环（每一步用结构化输出给出「下一步动作」，步数、重复调用、总时长三道刹车），5 个只读工具直接执行（查订单、列订单、查支付单、查商品、查售后规则复用第 5 章检索），3 个写操作（取消待支付订单、改收货地址、提交售后申请）只生成确认卡片；用户在页面上点「确认」才执行，确认绑定用户与会话、5 分钟过期、幂等、参数不可改，聊天里打「确认」不算，结果写回会话记忆；售后申请单 memory / jdbc；`step` / `confirm` 事件与调试面板「Agent 步骤」；Spring AI 原生工具调用循环作对比；Agent 决策录制回放 | [AI Agent](https://clarence404.github.io/java-doc/ai/5_advanced/0_agent.html)、[Function Calling](https://clarence404.github.io/java-doc/ai/1_concepts/2_function_calling.html)、[多轮对话与记忆](https://clarence404.github.io/java-doc/ai/7_practice/6_memory.html) | [`ch07-start`](https://github.com/Clarence404/mall-assistant/tree/ch07-start) / [`ch07-done`](https://github.com/Clarence404/mall-assistant/tree/ch07-done) |
-| 8 | MCP | 把商城能力暴露成 MCP Server | [MCP 协议](https://clarence404.github.io/java-doc/ai/5_advanced/1_mcp.html) | 计划中 |
+| 8 | MCP | 把商城能力暴露成 MCP Server（Spring AI MCP Server，WebMVC + Streamable HTTP，和 8088 同一进程，端点 `/mcp`）：`@McpTool` 暴露查知识库、查商品（不用登录）和列订单、查订单（要登录）；取消订单、改地址、售后只做「提议」——复用第 7 章的提议关与人工确认，返回确认 ID 和确认链接，用户本人在页面上点确认才执行；商城令牌放在 HTTP 头（不做工具参数），按第 6 章问商城确认身份；结果截断、每分钟次数上限、`Origin` 校验；6 篇规则文档作为 MCP 资源；客户端一侧可开关的 MCP Client（白名单、改名、说明与结果截短、不把 ToolContext 发出去）；真 MCP 客户端的协议级测试与回环测试 | [MCP 协议](https://clarence404.github.io/java-doc/ai/5_advanced/1_mcp.html)、[AI Agent](https://clarence404.github.io/java-doc/ai/5_advanced/0_agent.html)、[Agent 实战](https://clarence404.github.io/java-doc/ai/7_practice/7_agent.html) | [`ch08-start`](https://github.com/Clarence404/mall-assistant/tree/ch08-start) / [`ch08-done`](https://github.com/Clarence404/mall-assistant/tree/ch08-done) |
 | 9 | 评估与上线 | 回归评测集、Token 用量、限流与监控 | [LLM 应用评估与上线](https://clarence404.github.io/java-doc/ai/5_advanced/3_llm_eval.html) | 计划中 |
 
 ## 本地运行
@@ -61,6 +61,8 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 第 6 章起是多轮对话：页面生成会话 ID（存在浏览器 localStorage，输入框上方的「新对话」换一个、「清空」删掉服务端的记录），提问时放在请求体的 `conversationId` 里；不带它就和第 5 章一样单轮。配置在 `application.yml` 的 `assistant.memory.*`：记忆存在哪 `store`（默认 `memory`，重启就没了；`jdbc` 存进 PostgreSQL，默认和第 4 章 pgvector 同一个库，在 `config/application-local.yml` 里配好 pgvector 的地址和账号后加 `assistant.memory.store: jdbc` 即可）、会话过期 `ttl`（30 分钟）、每会话最多存几条 `max-messages`、每次带几轮 `window-turns` 和多少字 `budget-chars`、追问改写 `condense.*`、摘要记忆 `summary.*`（默认关）。登录用户的会话绑定到商城用户（问商城 `/api/users/me`），所以查订单的多轮对话需要商城在线。RAG 的相似度门槛第 6 章起按向量模型分别配（`assistant.rag.model-profiles`：bge-m3 0.6、nomic-embed-text 0.72），见 [`docs/ch06.md`](docs/ch06.md)。
 
 第 7 章起是售后 Agent：登录后说「订单 … 买错了，帮我取消」「订单 … 地址填错了，改成 …」「订单 … 东西坏了要退款」，Agent 会一步步查订单、查规则，最后提出一个写操作，页面出现一张确认卡片，**点「确认」才会真正执行**（取消、改地址调商城网关；退款只在本地记一张「待人工审核」的售后申请单，不动钱）。每一步显示在调试面板「Agent 步骤」里。配置在 `application.yml` 的 `assistant.agent.*`：循环方式 `mode`（`loop` 自己写的循环，默认；`native` Spring AI 原生工具调用，命令行模型不支持）、步数上限 `max-steps`（6）、同一调用的次数上限 `max-same-calls`（2）、总时长 `timeout`（120 秒）、每一步的输出上限 `max-output-tokens`（400）、确认卡片的有效期 `confirmation-ttl`（5 分钟）；售后申请单存在哪是 `assistant.after-sales.store`（默认 `memory`，`jdbc` 存进 PostgreSQL 的 `after_sales_application` 表，连接默认沿用第 6 章记忆的），见 [`docs/ch07.md`](docs/ch07.md)。没登录时办不了事，售后类问题照旧走 RAG 回答规则并提示登录。
+
+第 8 章起本应用同时是一个 MCP Server：启动后 MCP 客户端连 `http://localhost:8088/mcp`（Streamable HTTP）就能列出 8 个工具。查知识库、查商品不用登录；查订单要在 MCP 客户端的请求头里带 `Authorization: Bearer <商城令牌>`（令牌不做成工具参数，对面的模型看不到它）；取消订单、改地址、售后申请只能「提议」，返回确认 ID 和确认链接 `http://localhost:8088/?confirm=<ID>`，用户在页面上登录同一个账号点「确认」才执行，`getConfirmation` 查结果。用 MCP Inspector 试：`npx @modelcontextprotocol/inspector --cli http://localhost:8088/mcp --transport http --method tools/list`（带令牌加 `--header "Authorization: Bearer <令牌>"`；订单号这种一串数字的参数要写成 `--tool-arg 'orderNo="…"'`，否则会被当成数字、过不了参数校验）。配置在 `application.yml` 的 `spring.ai.mcp.server.*`（端点、协议，**`protocol: STREAMABLE` 必须写**，不写会按 SSE 装配）与 `assistant.mcp.*`：确认页面地址 `confirm-url`、结果长度 `max-result-chars`（2000）、每分钟次数 `calls-per-minute`（30）、允许的浏览器来源 `allowed-origins`、会话空闲清理 `session-idle-timeout`（10 分钟）。客户端一侧默认关闭（`spring.ai.mcp.client.enabled=false`）；打开后连 `spring.ai.mcp.client.streamable-http.connections.*` 里的外部 MCP Server，只有 `assistant.mcp.client.allowed-tools` 白名单里的工具（加 `ext_` 前缀）会交给对话模型，`GET /api/mcp/client/tools` 可以看连上了哪些，见 [`docs/ch08.md`](docs/ch08.md)。
 
 提示词版本：`assistant.prompt.version`（默认 `v3`，可改回 `v2` / `v1` 对比）；商城名、服务范围等模板变量在 `application.yml` 的 `assistant.prompt.*`。工具调用的两个开关在 `assistant.tools.*`（原生工具调用、按意图直接查询，见 [`docs/ch03.md`](docs/ch03.md)）。
 
@@ -94,6 +96,8 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 注意：这些配置存放在入库的 `.run/*.run.xml` 里，在里面填的值会出现在 `git diff` 中。密钥和内部地址不要填进运行配置，改用下面的本地配置文件。
 
 第 4 章：知识库用 pgvector 时，把 `assistant.knowledge.store: pgvector` 和连接信息写进 `config/application-local.yml`（见 `config/application-local.example.yml` 最后一段），不要写进运行配置；两个命令行模型的运行配置也列了 `OLLAMA_EMBEDDING_MODEL`（命令行工具没有向量模型，知识库用 Ollama 的）。
+
+第 8 章：MCP Server 随应用一起启动，不用另外的运行配置；想关掉用 `--spring.ai.mcp.server.enabled=false`。打开客户端示例（连另一个 MCP Server）写进 `config/application-local.yml`：`spring.ai.mcp.client.enabled: true`、`spring.ai.mcp.client.streamable-http.connections.<名字>.url` 和 `assistant.mcp.client.allowed-tools`（见 `application.yml` 里注释掉的例子）。
 
 第 7 章：售后申请单存进 PostgreSQL 写进 `config/application-local.yml`（`assistant.after-sales.store: jdbc`，连接默认沿用记忆的）；对比方案 A 用 `--assistant.agent.mode=native`，关掉 Agent 用 `--assistant.agent.enabled=false`。
 
@@ -182,10 +186,11 @@ codex 的 `--json` 只在一条消息完整生成后才输出它，没有逐字�
 9. `rag/`（第 5 章）：`RagService`（RAG 主流程：检索 → 拼提示词 → 检索不到就短路）→ `RagRetriever`（向量 + 关键词两路检索、门槛筛选）→ `KeywordIndex` 与 `Terms`（BM25 与中文切词）→ `RrfFusion`（RRF 融合）→ `ContextPacker`（去重、合并相邻块、上下文预算、编号）→ `CitationChecker`（引用校验）；`ChatService#ragAnswer` / `#ragStream` 是对话里的入口，`prompts/rag-v1.st` 是 RAG 的系统提示词
 10. `memory/`（第 6 章）：`ConversationMemory`（打开会话、过期、并发、写回、查看、清空，为什么没用 `MessageChatMemoryAdvisor`）→ `MemoryConfig`（内存 / JDBC 存储与 `MessageWindowChatMemory`）与 `LazyJdbcChatMemoryRepository` → `HistoryWindow`（按轮数和字数裁剪）→ `MemoryMessages`（存什么不存什么）→ `QuestionCondenser`（追问改写与跑题检查）→ `ConversationEntities`（订单号核对与沿用）→ `ConversationOwners`（会话归属与记忆键）→ `ConversationSummarizer`（摘要记忆）；对话里的入口是 `ChatService#begin` / `#chat` / `#answerStream(ChatTurn)`
 11. `agent/`（第 7 章）：`AgentService`（哪些话交给 Agent、聊天里说「确认」怎么办）→ `AgentLoop`（方案 B 的循环与三道刹车）→ `AgentPlanner`（每一步的提示词与结构化输出）→ `AgentDecision` / `AgentAction`（模型的提议与代码的校验）→ `AgentToolbox`（只读工具）→ `OrderRules`（什么状态能办什么）→ `WriteActionGuard`（写操作的提议关）→ `ConfirmationService` 与 `ConfirmationController`（人工确认：归属、过期、幂等、执行、写回记忆）→ `NativeAgentRunner`（方案 A，对比用）；`aftersales/`：售后申请单与 memory / jdbc 两种存储；对话里的入口是 `ChatService#agentAnswer` / `#agentStream`
-12. `chat/ChatClientConfig`：`ChatClient` 怎么由 Spring AI 自动配置的 `ChatModel` 构建出来
-13. `error/`：模型调用失败分成「不可用」和「超时」两类，统一成 `ProblemDetail` 响应（第 4 章起还有知识库的三类错误）
-14. `cli/`（选读）：用本机 Claude Code / Codex 命令行当模型：安全参数、stdin 传参、输出解析、超时杀进程树
-15. `src/test/java`：从 `FakeChatModel` 和 `ChatServiceTest` 读起，再看 `ToolCallingFlowTest`（工具调用的两轮、令牌不进提示词）、`StubMallApi`（假商城网关）、`FakeModelWebTest` 系列接口测试、`IntentReplayTest` / `ToolDecisionReplayTest` 录制回放、`FakeCli` 与 `OllamaChatIT`；第 4 章看 `FakeEmbeddingModel`（字符 n-gram 哈希的假向量模型）、`KnowledgeIngestionServiceTest`（增量）、`PgVectorStoreIT`；第 5 章看 `RagChatFlowTest`（路由、短路、引用校验、流式顺序）、`RagServiceTest`（提示词结构、提示注入）、`RetrievalEval`（hit@k 评测）与 `RagReplayTest`（RAG 回答的录制回放）；第 6 章看 `MemoryFixtures`、`MultiTurnChatFlowTest`（历史在提示词里的位置、存什么、改写、沿用、流式写记忆）、`ConversationMemoryTest`（过期、并发、隔离、摘要）与 `ConversationReplayTest`（多轮对话的录制回放）；第 7 章看 `AgentFixtures`、`AgentLoopTest`（剧本驱动的多步循环与刹车）、`WriteActionGuardTest`、`ConfirmationServiceTest`（确认、过期、幂等、越权）、`AgentChatFlowTest`（路由、聊天里说确认、提示注入、流式顺序）与 `AgentReplayTest`（Agent 决策的录制回放）
+12. `mcp/`（第 8 章）：`MallMcpTools`（8 个 `@McpTool`：说明是写给对面模型的提示词、只读提示、每个方法先进门再调业务、异常不外泄）→ `McpServerConfig`（Streamable HTTP 传输装上身份提取与 `Origin` 校验、规则文档作为资源）→ `McpAuth`（令牌从 HTTP 头进传输上下文）→ `McpGate` 与 `McpRateLimiter`（身份、登录、次数）→ `McpMallService`（查订单、查知识库、提出写操作：复用第 7 章的提议关，只登记不执行）→ `McpResults` / `McpViews`（结果格式与截断）；`agent/ConfirmationService#createForMcp` / `#snapshot` 与 `ConfirmationController` 的 GET（确认链接）；`mcp/client/`：`ExternalMcpTools`（外部工具的白名单、改名、截短）与 `McpClientConfig`（不把 ToolContext 发出去）；对话里的入口是 `ChatService#answerRequest`
+13. `chat/ChatClientConfig`：`ChatClient` 怎么由 Spring AI 自动配置的 `ChatModel` 构建出来
+14. `error/`：模型调用失败分成「不可用」和「超时」两类，统一成 `ProblemDetail` 响应（第 4 章起还有知识库的三类错误）
+15. `cli/`（选读）：用本机 Claude Code / Codex 命令行当模型：安全参数、stdin 传参、输出解析、超时杀进程树
+16. `src/test/java`：从 `FakeChatModel` 和 `ChatServiceTest` 读起，再看 `ToolCallingFlowTest`（工具调用的两轮、令牌不进提示词）、`StubMallApi`（假商城网关）、`FakeModelWebTest` 系列接口测试、`IntentReplayTest` / `ToolDecisionReplayTest` 录制回放、`FakeCli` 与 `OllamaChatIT`；第 4 章看 `FakeEmbeddingModel`（字符 n-gram 哈希的假向量模型）、`KnowledgeIngestionServiceTest`（增量）、`PgVectorStoreIT`；第 5 章看 `RagChatFlowTest`（路由、短路、引用校验、流式顺序）、`RagServiceTest`（提示词结构、提示注入）、`RetrievalEval`（hit@k 评测）与 `RagReplayTest`（RAG 回答的录制回放）；第 6 章看 `MemoryFixtures`、`MultiTurnChatFlowTest`（历史在提示词里的位置、存什么、改写、沿用、流式写记忆）、`ConversationMemoryTest`（过期、并发、隔离、摘要）与 `ConversationReplayTest`（多轮对话的录制回放）；第 7 章看 `AgentFixtures`、`AgentLoopTest`（剧本驱动的多步循环与刹车）、`WriteActionGuardTest`、`ConfirmationServiceTest`（确认、过期、幂等、越权）、`AgentChatFlowTest`（路由、聊天里说确认、提示注入、流式顺序）与 `AgentReplayTest`（Agent 决策的录制回放）；第 8 章看 `McpFixtures`、`McpMallServiceTest`（只提议不执行、页面确认后才执行）、`McpGateTest`、`McpServerProtocolTest`（真的 MCP 客户端走 Streamable HTTP）与 `McpClientLoopbackTest`（客户端连自己的 `/mcp`）
 
 ## 构建与测试
 
@@ -203,6 +208,7 @@ codex 的 `--json` 只在一条消息完整生成后才输出它，没有逐字�
 | RAG | `KeywordIndexTest`、`RrfFusionTest`、`ContextPackerTest`、`CitationCheckerTest`、`RagServiceTest`、`RagChatFlowTest`、`RagApiTest`、`RetrievalEvalTest` | 否 | 假对话模型 + 假向量模型 + 6 篇真实规则文档：BM25 与 RRF 手算对照、门槛、去重合并与预算、按意图路由、检索不到不调模型、提示词里的编号资料、恶意文档只在资料标签里、引用校验、`sources` 字段与 `source` 事件顺序、混合检索的 hit@k 不低于只用向量 |
 | 多轮对话 | `HistoryWindowTest`、`QuestionCondenserTest`、`ConversationEntitiesTest`、`ConversationOwnersTest`、`ConversationMemoryTest`、`MultiTurnChatFlowTest`、`ConversationApiTest` | 否 | 假模型 + 内存记忆 + 可拨动的时钟 + 假商城：窗口与预算裁剪、只存原话、追问改写进入意图识别与检索、订单号核对与沿用、会话归属与越权 404、过期、并发 409、流式完成后才写、摘要记忆、`memory` 字段与事件 |
 | Agent | `AgentActionTest`、`AgentLoopTest`、`AgentToolboxTest`、`WriteActionGuardTest`、`ConfirmationServiceTest`、`AgentChatFlowTest`、`AgentApiTest` | 否 | 假模型按剧本输出每一步 + 假商城（有状态的待支付、已发货订单，取消 / 改地址 / 支付单接口）：步数与重复上限、只读直接执行、写操作只生成确认、确认 / 拒绝 / 过期 / 重复确认 / 别人的确认 404 / 请求里塞参数无效、确认后写回记忆、聊天里说「确认」不执行、恶意资料只能导致一张确认卡片、`step` / `confirm` 事件顺序、方案 A |
+| MCP | `McpAuthTest`、`McpGateTest`、`McpRateLimiterTest`、`McpMallServiceTest`、`MallMcpToolsTest`、`ConfirmationSnapshotTest`、`ExternalMcpToolsTest`、`McpServerProtocolTest`、`McpClientLoopbackTest` | 否 | 单元：令牌只从请求头取、打码、身份与登录、次数（滑动窗口、并发）、查订单打码、知识库带来源、写操作只登记不执行（假商城收不到写请求）、页面确认后才执行、状态（待确认 / 已执行 / 已取消 / 过期）、外部工具的白名单与改名与截短、不带 ToolContext；协议级：MCP Java SDK 的真客户端走 Streamable HTTP 连 `RANDOM_PORT` 起的整个应用（initialize、tools/list 的 Schema 与提示、tools/call、resources、`Origin` 校验、令牌不进结果和日志）；回环：打开 MCP Client 连自己的 `/mcp`，远程工具经假模型的工具调用走一遍，ToolContext 里的令牌没有作为 `_meta` 发出去。MCP Server 不调模型，没有录制回放 |
 | 录制回放 | `IntentReplayTest`、`ToolDecisionReplayTest`、`RagReplayTest`、`ConversationReplayTest`、`AgentReplayTest` | 否 | 回放 `src/test/resources/recordings/` 里真实模型（qwen2.5 0.5b / 1.5b）录下的原样输出：意图识别的 JSON、拿到工具清单后的调用决策、拿到编号资料后的 RAG 回答（连同 bge-m3 检索到的资料一起录）、整段多轮对话的每一次调用、Agent 办事的每一步（连同查规则检索到的资料），验证代码能处理真实输出；重新录制见 [`docs/ch02.md`](docs/ch02.md#录制回放)、[`docs/ch03.md`](docs/ch03.md#录制回放)、[`docs/ch05.md`](docs/ch05.md#录制回放)、[`docs/ch06.md`](docs/ch06.md#录制回放)、[`docs/ch07.md`](docs/ch07.md#录制回放) |
 | 集成测试 | `*IT` | 是 | Testcontainers 起真实 Ollama、拉取 `qwen2.5:0.5b`，走一遍阻塞与流式接口、意图识别和工具调用（商城用假网关）；第 4 章起 `PgVectorStoreIT` 起 `pgvector/pgvector:0.8.1-pg17` 跑真实的 PgVectorStore，`OllamaEmbeddingIT` 用真实的 `nomic-embed-text` 入库、检索并跑第 5 章的 hit@k 评测和第 6 章的相似度门槛扫描，第 6 章起 `JdbcChatMemoryIT` 用同一个 pgvector 镜像跑 JDBC 记忆、第 7 章起 `JdbcAfterSalesStoreIT` 跑售后申请单的 JDBC 存储（没有 Docker 时也可以用环境变量指向现成的服务，见 [`docs/ch04.md`](docs/ch04.md#验收标准)）；录制工具 `IntentRecordingIT`、`ToolDecisionRecordingIT`、`RagRecordingIT`、`ConversationRecordingIT`、`AgentRecordingIT` 只在设置了 `RECORD_OLLAMA_URL` 时运行 |
 
@@ -227,17 +233,18 @@ mall-assistant/
 │   ├── knowledge/            知识库（第 4 章）：读取、切块、元数据、增量入库、memory / pgvector 向量库、相似度检索、调试接口
 │   ├── rag/                  检索增强回答（第 5 章）：混合检索（向量 + BM25，RRF 融合）、门槛、去重与上下文预算、编号资料、引用校验
 │   ├── memory/               多轮对话与记忆（第 6 章）：ChatMemory 存储、窗口裁剪、追问改写、订单号沿用、会话归属、摘要记忆、会话接口
-│   ├── agent/                售后 Agent（第 7 章）：循环与刹车、下一步动作的解析与校验、只读工具、写操作的提议关、人工确认与执行、原生工具调用对比
+│   ├── agent/                售后 Agent（第 7 章）：循环与刹车、下一步动作的解析与校验、只读工具、写操作的提议关、人工确认与执行、原生工具调用对比；第 8 章起确认也登记 MCP 提出的操作
 │   ├── aftersales/           售后申请单（第 7 章）：memory / jdbc 存储、查看接口
+│   ├── mcp/                  MCP（第 8 章）：@McpTool 工具、传输层身份与来源校验、进门（登录与次数）、业务（只读与提议）、资源；client/：外部工具的白名单与截短
 │   ├── cli/                  命令行模型提供方：CliChatModel、claude / codex 的参数与输出解析、进程超时与清理
 │   └── error/                模型失败分类（MODEL_UNAVAILABLE / MODEL_TIMEOUT）与 ProblemDetail
 ├── src/main/resources/
-│   ├── application.yml       公共配置：超时、重试、ProblemDetail、工具调用上限、商城网关地址、知识库（切块、向量库、前缀）、RAG、记忆、Agent 与售后申请单
+│   ├── application.yml       公共配置：超时、重试、ProblemDetail、工具调用上限、商城网关地址、知识库（切块、向量库、前缀）、RAG、记忆、Agent 与售后申请单、MCP Server 与 Client
 │   ├── application-ollama.yml / application-openai.yml   按 profile 切换模型厂商
 │   ├── application-claude-cli.yml / application-codex-cli.yml   用本机命令行工具当模型（可选）
 │   ├── knowledge/            示例商城的规则文档（第 4 章入库的知识）
 │   ├── prompts/              客服人设 system-v1.st / v2 / v3、意图识别 intent-v1.st / v2、拒答话术 refusal.st、RAG 的 rag-v1.st 与固定话术、追问改写 memory-condense.st 与摘要 memory-summary.st、Agent 的 agent-v1.st 与 agent-native-v1.st
-│   └── static/index.html     聊天页面（原生 HTML/CSS/JS，第 3 章起带登录框，第 4 章起带知识库调试区，第 5 章起回答里的引用编号可点，第 6 章起带会话 ID、刷新恢复历史，第 7 章起带 Agent 步骤与确认卡片）
+│   └── static/index.html     聊天页面（原生 HTML/CSS/JS，第 3 章起带登录框，第 4 章起带知识库调试区，第 5 章起回答里的引用编号可点，第 6 章起带会话 ID、刷新恢复历史，第 7 章起带 Agent 步骤与确认卡片，第 8 章起能打开 MCP 的确认链接）
 ├── src/test/java/            FakeChatModel、StubMallApi、FakeEmbeddingModel、单元与接口测试、录制回放、RAG 评测、OllamaChatIT、PgVectorStoreIT
 ├── src/test/resources/recordings/   真实模型的录制输出（录制回放用）
 ├── src/test/resources/rag/          检索评测集（口语化问题 → 应命中的一节）

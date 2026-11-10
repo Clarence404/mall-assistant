@@ -231,8 +231,13 @@ public class AgentToolbox {
         return observation.length() <= max ? observation : observation.substring(0, max) + "…（结果太长，已截断）";
     }
 
-    /** 收货信息：「张三 138****0000 杭州市西湖区」，手机号中间打码。 */
-    static String receiver(MallModels.Receiver receiver) {
+    /**
+     * 收货信息：「张三 138****0000 杭州市西湖区」，手机号中间打码。第 8 章的 MCP 工具也用它（所以是 public）。
+     *
+     * @param receiver 商城的收货信息，可以为 null
+     * @return 打码后的一行；null 时为 null
+     */
+    public static String receiver(MallModels.Receiver receiver) {
         if (receiver == null) {
             return null;
         }
@@ -246,7 +251,13 @@ public class AgentToolbox {
         return value == null ? "" : value;
     }
 
-    private static String summarize(List<MallModels.OrderItem> items) {
+    /**
+     * 商品摘要：「青柚 ×1、红心柚 ×2」。第 8 章的 MCP 工具也用它（所以是 public）。
+     *
+     * @param items 商品行，可以为 null
+     * @return 摘要；没有商品时为 null
+     */
+    public static String summarize(List<MallModels.OrderItem> items) {
         if (items == null || items.isEmpty()) {
             return null;
         }

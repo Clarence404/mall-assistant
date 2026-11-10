@@ -35,6 +35,36 @@ spring:
         max-total-tool-calls: 4          # 所有工具合计（默认 150）
         max-calls-per-tool-default: 2    # 单个工具（默认 40）
         on-limit-exceeded: return-error-response   # 超了不抛异常，而是告诉模型「超过次数了」，让它用已有结果回答
+    mcp:                     # 第 8 章：MCP（见 docs/ch08.md）
+      server:                # 把商城能力暴露成 MCP Server：和 8088 的聊天接口同一个进程、同一个端口，端点 http://localhost:8088/mcp
+        enabled: true
+        name: mall-assistant   # initialize 时告诉客户端「我是谁」
+        version: 1.0.0
+        type: SYNC           # 工具方法是普通的阻塞方法（调商城、调检索），跑在 Spring MVC 的虚拟线程上
+        protocol: STREAMABLE # 必须写：Spring AI 2.0.2 不写这一项时按 SSE 传输装配（/sse），尽管 McpServerProperties 的默认值是 STREAMABLE。Streamable HTTP：一个端点收发全部 JSON-RPC 消息（2025-03 版协议起取代 SSE 传输）；另有 sse / stateless
+        instructions: "示例商城的智能客服工具。查规则用 searchKnowledge；查订单要在请求头带 Authorization: Bearer <商城令牌>；取消订单、改地址、售后只能提出（propose*），要用户本人在智能客服页面点确认才执行"
+        tool-callback-converter: false   # 不把容器里的 ToolCallback（如第 3 章的 @Tool）自动变成 MCP 工具：只暴露显式标了 @McpTool 的方法
+        capabilities:
+          tool: true
+          resource: true     # 6 篇规则文档原文（mall://knowledge/*.md）
+          prompt: false      # 提示词模板这一章没做
+          completion: false
+        streamable-http:
+          mcp-endpoint: /mcp
+          keep-alive-interval: 30s   # 每 30 秒给长连接发一次 ping，及时发现断开的客户端
+      client:                # 客户端示例：本应用去连别人的 MCP Server，把（白名单里的）工具交给对话模型用。默认关闭，一个外部服务都不连
+        enabled: false
+        name: mall-assistant-client
+        type: SYNC
+        initialized: false   # 启动时不连（外部服务没启动也不影响本应用启动），第一次用到时再连
+        request-timeout: 10s # 一次 tools/call 最多等多久
+        # 打开的例子（写进 config/application-local.yml）：
+        # enabled: true
+        # streamable-http:
+        #   connections:
+        #     peer:                       # 连接名，随便起
+        #       url: http://localhost:8089   # 对方的地址（不含 /mcp）
+        #       endpoint: /mcp
     retry:                   # 默认会重试 10 次、指数退避，模型挂了要等好几分钟才报错；客服场景快速失败
       # Spring AI 2.0 把这个值当作「失败后再重试几次」（交给 RetryPolicy.maxRetries），1 = 最多共调 2 次；改成 0 就完全不重试。
       # 只对 Ollama 的阻塞调用生效（流式调用不经过它），重试连接失败（ResourceAccessException）和厂商返回的临时性错误
@@ -46,7 +76,7 @@ spring:
 
 # 本项目自己的配置，分别绑定到 ChatProperties（assistant.chat）、PromptProperties（assistant.prompt）、
 # ToolProperties（assistant.tools）、MallApiProperties（assistant.mall）、KnowledgeProperties（assistant.knowledge）、
-# RagProperties（assistant.rag）与 MemoryProperties（assistant.memory）
+# RagProperties（assistant.rag）、MemoryProperties（assistant.memory）、AgentProperties（assistant.agent）与 McpProperties（assistant.mcp）
 assistant:
   chat:
     stream-timeout: 30s      # 流式：首段和相邻两段之间最多等多久
@@ -147,6 +177,19 @@ assistant:
     confirmation-ttl: 5m     # 确认卡片的有效期：过期再点返回 410，要重新说一次（订单状态可能已经变了）
     prompt: agent-v1         # 方案 B 的系统提示词：prompts/agent-v1.st
     native-prompt: agent-native-v1   # 方案 A 的系统提示词：prompts/agent-native-v1.st
+  mcp:                       # 第 8 章：MCP 的本项目配置（见 McpProperties）；Spring AI 自己的 MCP 配置在上面的 spring.ai.mcp.*
+    confirm-url: ${ASSISTANT_MCP_CONFIRM_URL:http://localhost:8088/}   # 确认页面：写操作只返回 <confirm-url>?confirm=<确认 ID>，用户在这个页面登录后点确认
+    max-result-chars: 2000   # 每个工具结果最多多少字，超了截断（结果要进对面模型的上下文）
+    calls-per-minute: 30     # 同一个调用方（商城用户；匿名整体算一个）每分钟最多调几次工具：对面的模型失控时不至于把商城打满
+    allowed-origins:         # 浏览器发起的连接（带 Origin 头）只放行这些来源，防 DNS 重绑定；命令行、桌面客户端不带 Origin，不受影响
+      - http://localhost:*
+      - http://127.0.0.1:*
+    session-idle-timeout: 10m   # MCP 会话多久没有动静就清掉（Inspector 命令行模式等客户端退出时不发 DELETE；Spring AI 默认永不清理）
+    client:                  # 客户端一侧（spring.ai.mcp.client.enabled=true 时）：外部工具说明和结果都是不可信数据
+      allowed-tools: []      # 交给对话模型的外部工具白名单（外部服务里的原名）；为空 = 一个都不交给模型，只能在 GET /api/mcp/client/tools 里看
+      tool-prefix: ext_      # 交给模型时加的前缀，和自己的工具区分开，外部工具也不能顶替 queryOrderStatus
+      max-description-chars: 200   # 外部工具说明最多保留多少字
+      max-result-chars: 1500 # 外部工具结果最多交给模型多少字
   after-sales:               # 第 7 章：售后申请单（mall-evolution 没有用户侧的售后接口，智能客服只记一张「待人工审核」的单，不动钱）
     store: ${ASSISTANT_AFTER_SALES_STORE:memory}   # memory（默认，重启就没了）或 jdbc（PostgreSQL 的 after_sales_application 表，第一次用到时自动建）
     jdbc:                    # store=jdbc 时：默认沿用第 6 章记忆的连接（也就是第 4 章 pgvector 的那个库），真实地址和密码写进 config/application-local.yml

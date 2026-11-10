@@ -60,6 +60,10 @@ class IndexPageTest extends FakeModelWebTest {
                 .contains("'confirm'")
                 .contains("body.confirmation")
                 .contains("/api/agent/confirmations/")
-                .contains("confirm-card");
+                .contains("confirm-card")
+                // 第 8 章：打开 MCP 工具给的确认链接 /?confirm=<ID>，GET 取卡片，点按钮时不带会话 ID
+                .contains("get('confirm')")
+                .contains("showMcpConfirmation")
+                .contains("fromMcp ? null : conversationId");
     }
 }
