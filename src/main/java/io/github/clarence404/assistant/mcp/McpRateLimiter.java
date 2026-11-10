@@ -3,6 +3,7 @@ package io.github.clarence404.assistant.mcp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -56,7 +57,18 @@ public class McpRateLimiter {
      * @return 放行时为 true
      */
     public boolean tryAcquire(String key) {
-        // TODO ch08-3：每个 key 一个 ArrayDeque；同步它；扔掉不在窗口里的；没满才记下现在并放行
-        return true;
+        Instant now = clock.instant();
+        Instant cutoff = now.minus(WINDOW);
+        Deque<Instant> window = calls.computeIfAbsent(key, k -> new ArrayDeque<>());
+        synchronized (window) {
+            while (!window.isEmpty() && !window.peekFirst().isAfter(cutoff)) {
+                window.pollFirst();
+            }
+            if (window.size() >= properties.callsPerMinute()) {
+                return false;
+            }
+            window.addLast(now);
+            return true;
+        }
     }
 }

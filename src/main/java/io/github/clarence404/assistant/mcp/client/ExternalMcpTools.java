@@ -3,7 +3,9 @@ package io.github.clarence404.assistant.mcp.client;
 import io.github.clarence404.assistant.mcp.McpProperties;
 import io.github.clarence404.assistant.mcp.McpResults;
 import io.github.clarence404.assistant.tool.MallTools;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -186,8 +188,27 @@ public class ExternalMcpTools {
      * @return 交给模型的工具，顺序同 {@code discovered}
      */
     static List<ToolCallback> guard(ToolCallback[] discovered, McpProperties.Client client, Set<String> reserved) {
-        // TODO ch08-8：只留白名单里的 → 加前缀、跳过重名 → 说明 = ORIGIN_NOTE + 截短的原说明 → new Guarded(原工具, 新定义, 结果上限)
-        return List.of();
+        List<ToolCallback> result = new ArrayList<>();
+        Set<String> used = new HashSet<>(reserved);
+        for (ToolCallback callback : discovered) {
+            ToolDefinition original = callback.getToolDefinition();
+            if (!client.allowedTools().contains(original.name())) {
+                continue;
+            }
+            String name = client.toolPrefix() + original.name();
+            if (!used.add(name)) {
+                log.warn("外部 MCP 工具 {} 改名后和已有工具重名，跳过", original.name());
+                continue;
+            }
+            ToolDefinition definition = ToolDefinition.builder()
+                    .name(name)
+                    .description(ORIGIN_NOTE
+                            + McpResults.limit(String.valueOf(original.description()), client.maxDescriptionChars()))
+                    .inputSchema(original.inputSchema())
+                    .build();
+            result.add(new Guarded(callback, definition, client.maxResultChars()));
+        }
+        return List.copyOf(result);
     }
 
     /**

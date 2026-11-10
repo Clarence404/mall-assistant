@@ -2,6 +2,7 @@ package io.github.clarence404.assistant.mcp;
 
 import io.github.clarence404.assistant.agent.AgentAction;
 import io.github.clarence404.assistant.agent.AgentDecision;
+import io.github.clarence404.assistant.agent.AgentRun;
 import io.github.clarence404.assistant.agent.AgentTask;
 import io.github.clarence404.assistant.agent.AgentTool;
 import io.github.clarence404.assistant.agent.AgentToolbox;
@@ -9,12 +10,16 @@ import io.github.clarence404.assistant.agent.ConfirmationException;
 import io.github.clarence404.assistant.agent.ConfirmationService;
 import io.github.clarence404.assistant.agent.ConfirmationSnapshot;
 import io.github.clarence404.assistant.agent.OrderRules;
+import io.github.clarence404.assistant.agent.PendingConfirmation;
 import io.github.clarence404.assistant.agent.WriteActionGuard;
 import io.github.clarence404.assistant.mall.MallApiClient;
+import io.github.clarence404.assistant.mall.MallModels;
 import io.github.clarence404.assistant.mall.MallResult;
 import io.github.clarence404.assistant.memory.ConversationIds;
+import io.github.clarence404.assistant.rag.RagPlan;
 import io.github.clarence404.assistant.rag.RagService;
 import io.github.clarence404.assistant.rag.RagSource;
+import io.github.clarence404.assistant.rag.RagTrace;
 import io.github.clarence404.assistant.tool.OrderStatusText;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -109,8 +114,28 @@ public class McpMallService {
      * @return 订单
      */
     public McpViews.Order queryOrder(McpCaller caller, String orderNo) {
-        // TODO ch08-4：校验订单号 → mallApi.getOrder → 转成 McpViews.Order（中文状态、打码的收货信息、proposals、orderNote）
-        return McpViews.Order.notFound(orderNo, "TODO ch08-4：查订单还没写");
+        String no = orderNo == null ? "" : orderNo.replaceAll("\\s", "");
+        if (!ORDER_NO.matcher(no).matches()) {
+            return McpViews.Order.notFound(orderNo, BAD_ORDER_NO);
+        }
+        MallResult<MallModels.Order> result = mallApi.getOrder(caller.token(), no);
+        if (!result.isOk()) {
+            return McpViews.Order.notFound(no, failure(no, result));
+        }
+        MallModels.Order order = result.body();
+        List<String> proposals = proposals(order.status());
+        return new McpViews.Order(
+                true,
+                null,
+                order.orderNo(),
+                OrderStatusText.describe(order.status()),
+                order.status(),
+                order.payAmount(),
+                AgentToolbox.summarize(order.items()),
+                AgentToolbox.receiver(order.receiver()),
+                time(order.createdAt()),
+                proposals,
+                orderNote(proposals));
     }
 
     /**
@@ -120,8 +145,27 @@ public class McpMallService {
      * @return 订单列表
      */
     public McpViews.OrderList listMyOrders(McpCaller caller) {
-        // TODO ch08-4：mallApi.listOrders(令牌, LIST_SIZE) → 每笔转成 Brief（带 proposals）；空列表也算查成
-        return new McpViews.OrderList(false, "TODO ch08-4：列订单还没写", List.of(), null);
+        MallResult<MallModels.OrderPage> result = mallApi.listOrders(caller.token(), LIST_SIZE);
+        if (!result.isOk()) {
+            return new McpViews.OrderList(false, failure(null, result), List.of(), null);
+        }
+        List<MallModels.OrderListItem> items =
+                result.body().items() == null ? List.of() : result.body().items();
+        List<McpViews.OrderList.Brief> orders = items.stream()
+                .limit(LIST_SIZE)
+                .map(item -> new McpViews.OrderList.Brief(
+                        item.orderNo(),
+                        OrderStatusText.describe(item.status()),
+                        item.status(),
+                        item.payAmount(),
+                        time(item.createdAt()),
+                        proposals(item.status())))
+                .toList();
+        return new McpViews.OrderList(
+                true,
+                null,
+                orders,
+                orders.isEmpty() ? "这个账号还没有订单" : "列表里没有商品明细；要看某一笔的商品和收货信息，用 queryOrder 查那一笔。用户要办的是哪一笔不清楚时，先问用户");
     }
 
     /**
@@ -140,8 +184,24 @@ public class McpMallService {
      * @return 检索结果
      */
     public McpViews.Knowledge searchKnowledge(String query) {
-        // TODO ch08-5：空问题 → 截短 → ragService.plan → 短路给原因 / 每条资料一段 Snippet（带 source）+ KNOWLEDGE_NOTE
-        return new McpViews.Knowledge(false, "TODO ch08-5：查知识库还没写", List.of(), null);
+        String q = query == null ? "" : query.strip();
+        if (q.isEmpty()) {
+            return new McpViews.Knowledge(false, "query 不能为空：传一句要查的规则，如「七天无理由退货的条件」", List.of(), null);
+        }
+        if (q.length() > MAX_QUERY_CHARS) {
+            q = q.substring(0, MAX_QUERY_CHARS);
+        }
+        RagPlan plan = ragService.plan(q);
+        if (plan.shortCircuited()) {
+            String reason = RagTrace.KNOWLEDGE_UNAVAILABLE.equals(plan.trace().shortCircuit())
+                    ? "知识库暂时不可用，请不要凭常识编规则，可以建议用户联系人工客服"
+                    : "知识库里没有找到相关规定，请不要凭常识编规则";
+            return new McpViews.Knowledge(false, reason, List.of(), null);
+        }
+        List<McpViews.Knowledge.Snippet> snippets = plan.sources().stream()
+                .map(s -> new McpViews.Knowledge.Snippet(s.index(), s.title(), s.headingPath(), s.source(), body(s)))
+                .toList();
+        return new McpViews.Knowledge(true, null, snippets, KNOWLEDGE_NOTE);
     }
 
     /**
@@ -171,10 +231,52 @@ public class McpMallService {
      * @return 提议结果
      */
     public McpViews.Proposal propose(McpCaller caller, AgentTool tool, String orderNo, String input) {
-        // TODO ch08-6：缺 address / reason 先拦 → AgentAction.parse → AgentTask + AgentRun → 服务端查订单并 observe → guard.check
-        // → confirmations.createForMcp
-        //  返回确认 ID、confirmUrl、说明、影响、过期时间与 PROPOSAL_NOTE；executed 永远是 false
-        return McpViews.Proposal.rejected("TODO ch08-6：提出写操作还没写");
+        if (tool == AgentTool.CHANGE_ADDRESS && blank(input)) {
+            return McpViews.Proposal.rejected("需要 address：新的详细地址，照抄用户的原话，不要补全或改写");
+        }
+        if (tool == AgentTool.APPLY_AFTER_SALES && blank(input)) {
+            return McpViews.Proposal.rejected("需要 reason：用户说的售后原因，照抄用户的话");
+        }
+        AgentAction.Parsed parsed = AgentAction.parse(new AgentDecision(null, tool.toolName(), orderNo, input));
+        if (!parsed.valid()) {
+            return McpViews.Proposal.rejected(forMcp(parsed.error()));
+        }
+        AgentAction action = parsed.action();
+        String message = tool == AgentTool.CHANGE_ADDRESS ? action.argument("address") : MCP_MESSAGE;
+        AgentRun run =
+                new AgentRun(new AgentTask(message, List.of(), caller.token(), caller.owner(), null), event -> {});
+        String no = action.argument("orderNo");
+        MallResult<MallModels.Order> result = mallApi.getOrder(caller.token(), no);
+        if (!result.isOk()) {
+            return McpViews.Proposal.rejected(failure(no, result));
+        }
+        MallModels.Order order = result.body();
+        run.observe(new AgentRun.ObservedOrder(
+                order.orderNo(),
+                order.status(),
+                OrderStatusText.describe(order.status()),
+                AgentToolbox.summarize(order.items()),
+                order.payAmount()));
+        WriteActionGuard.Proposal proposal = guard.check(run, action);
+        if (!proposal.accepted()) {
+            return McpViews.Proposal.rejected(forMcp(proposal.rejection()));
+        }
+        PendingConfirmation pending = confirmations.createForMcp(proposal.action(), caller.owner());
+        log.info(
+                "MCP 提出写操作 {}：{}（{}），等用户在页面确认",
+                pending.id(),
+                pending.summary(),
+                caller.owner().key());
+        return new McpViews.Proposal(
+                true,
+                false,
+                null,
+                pending.id(),
+                confirmUrl(pending.id()),
+                pending.summary(),
+                pending.impact(),
+                pending.expiresAt(),
+                PROPOSAL_NOTE);
     }
 
     /**

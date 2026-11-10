@@ -75,8 +75,17 @@ public class McpGate {
      * @throws McpRejection 被拦下（原因给对面的模型看）
      */
     public McpCaller enter(McpTransportContext context, String tool, boolean loginRequired) {
-        // TODO ch08-2：取令牌 → 有令牌就问商城是谁（resolve）→ 要登录而是匿名就拦 → limiter.tryAcquire → 记一行不带令牌的日志
-        throw new McpRejection("TODO ch08-2：进门（身份、登录、次数）还没写");
+        String token = McpAuth.token(context);
+        McpCaller caller = token == null ? McpCaller.ANONYMOUS : new McpCaller(resolve(token), token);
+        if (loginRequired && !caller.loggedIn()) {
+            throw new McpRejection(LOGIN_REQUIRED);
+        }
+        if (!limiter.tryAcquire(caller.owner().key())) {
+            log.warn("MCP 调用太频繁：{} 调 {}", caller.owner().key(), tool);
+            throw new McpRejection(TOO_MANY_CALLS.formatted(properties.callsPerMinute()));
+        }
+        log.info("MCP 工具调用：{}（{}）", tool, caller.owner().key());
+        return caller;
     }
 
     /** 令牌 → 归属；失败翻成给对面看的原因。 */

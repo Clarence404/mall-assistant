@@ -197,8 +197,21 @@ public class ConfirmationService {
      * @throws ConfirmationException 不存在、不是你的、不是 MCP 来的（都是 404）
      */
     public ConfirmationSnapshot snapshot(String id, ConversationOwner owner) {
-        // TODO ch08-7：不存在 / 不是 MCP 来的 / 不是你的 → 404；有结果按结果；没结果看过没过期（EXPIRED / PENDING）
-        throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_NOT_FOUND);
+        Entry entry = entries.get(id);
+        if (entry == null || entry.origin != Origin.MCP || !entry.ownerKey.equals(owner.key())) {
+            throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_NOT_FOUND);
+        }
+        ConfirmationOutcome outcome = entry.outcome;
+        if (outcome != null) {
+            return new ConfirmationSnapshot(
+                    entry.view,
+                    ConfirmationSnapshot.State.valueOf(outcome.status().name()),
+                    outcome.message());
+        }
+        if (!clock.instant().isBefore(entry.expiresAt)) {
+            return new ConfirmationSnapshot(entry.view, ConfirmationSnapshot.State.EXPIRED, "这个确认已经过期，没有执行；要办的话请重新提出。");
+        }
+        return new ConfirmationSnapshot(entry.view, ConfirmationSnapshot.State.PENDING, PENDING_MESSAGE);
     }
 
     /**

@@ -2,6 +2,8 @@ package io.github.clarence404.assistant.mcp;
 
 import io.github.clarence404.assistant.mall.MallToken;
 import io.modelcontextprotocol.common.McpTransportContext;
+import java.util.Map;
+import org.springframework.http.HttpHeaders;
 import org.springframework.web.servlet.function.ServerRequest;
 
 /**
@@ -42,9 +44,10 @@ public final class McpAuth {
      * @return 传输上下文
      */
     public static McpTransportContext extract(ServerRequest request) {
-        // TODO ch08-1：读 Authorization 请求头 → MallToken.fromAuthorizationHeader → 有令牌就放进
-        // McpTransportContext.create(Map.of(CREDENTIAL, new Credential(令牌)))
-        return McpTransportContext.EMPTY;
+        String token = MallToken.fromAuthorizationHeader(request.headers().firstHeader(HttpHeaders.AUTHORIZATION));
+        return token == null
+                ? McpTransportContext.EMPTY
+                : McpTransportContext.create(Map.of(CREDENTIAL, new Credential(token)));
     }
 
     /**
@@ -54,8 +57,10 @@ public final class McpAuth {
      * @return 令牌；匿名时为 null
      */
     public static String token(McpTransportContext context) {
-        // TODO ch08-1：context 为 null 时返回 null；context.get(CREDENTIAL) 是 Credential 时取出令牌，别的东西不认
-        return null;
+        if (context == null) {
+            return null;
+        }
+        return context.get(CREDENTIAL) instanceof Credential credential ? credential.token() : null;
     }
 
     /**
