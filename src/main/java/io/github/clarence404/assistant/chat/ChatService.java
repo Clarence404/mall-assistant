@@ -763,9 +763,14 @@ public class ChatService {
      * @return 降级回答；不降级时为 null
      */
     String degrade(RagPlan plan, ModelCallException failure) {
-        // TODO ch09-8：degrade 为 null、没开（degrade.enabled()）、或者 plan.sources() 为空 → 返回 null；
-        // 否则记一条 warn 日志（failure.failure()），返回 degradedText(plan.sources(), degrade.excerptChars())
-        return null;
+        if (degrade == null || !degrade.enabled() || plan.sources().isEmpty()) {
+            return null;
+        }
+        log.warn(
+                "RAG：模型不可用（{}），降级为直接给出 {} 段规则原文",
+                failure.failure(),
+                plan.sources().size());
+        return degradedText(plan.sources(), degrade.excerptChars());
     }
 
     /**
@@ -777,9 +782,22 @@ public class ChatService {
      * @return 文字
      */
     static String degradedText(List<RagSource> sources, int excerptChars) {
-        // TODO ch09-8：DEGRADED_HEAD，然后每条资料：空一行、「[编号] 标题路径」、换行、正文
-        // （content 去掉第一行的标题路径、strip，超过 excerptChars 个字截断加「…」）
-        return DEGRADED_HEAD;
+        StringBuilder text = new StringBuilder(DEGRADED_HEAD);
+        for (RagSource source : sources) {
+            String content = source.content();
+            int newline = content.indexOf('\n');
+            String body = (newline < 0 ? content : content.substring(newline + 1)).strip();
+            if (body.length() > excerptChars) {
+                body = body.substring(0, excerptChars) + "…";
+            }
+            text.append("\n\n[")
+                    .append(source.index())
+                    .append("] ")
+                    .append(source.headingPath())
+                    .append('\n')
+                    .append(body);
+        }
+        return text.toString();
     }
 
     /** RAG 结果记进账本的名字：调了模型是 HIT，否则是短路原因。 */

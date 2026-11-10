@@ -6,6 +6,7 @@ import io.github.clarence404.assistant.knowledge.KnowledgeException;
 import io.github.clarence404.assistant.ops.ChatMetrics;
 import io.github.clarence404.assistant.ops.UsageAdvisor;
 import io.github.clarence404.assistant.prompt.AssistantPrompts;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -270,10 +271,19 @@ public class RagService {
      * @return 留下的与被挡的
      */
     static Screened screen(List<RagSource> sources, InjectionFilter filter) {
-        // TODO ch09-2：按顺序 filter.check(source.content())；
-        // 挡下的记 new BlockedSource(来源文件, 标题路径, verdict.rules(), 第一条命中的 reason, excerpt)；
-        // 留下的 renumber(source, 已经留下的块数 + 1)；最后返回 new Screened(留下的, 挡下的)
-        return new Screened(sources, List.of());
+        List<RagSource> kept = new ArrayList<>();
+        List<BlockedSource> blocked = new ArrayList<>();
+        for (RagSource source : sources) {
+            InjectionFilter.Verdict verdict = filter.check(source.content());
+            if (verdict.blocked()) {
+                InjectionFilter.Hit first = verdict.hits().getFirst();
+                blocked.add(new BlockedSource(
+                        source.source(), source.headingPath(), verdict.rules(), first.reason(), first.excerpt()));
+            } else {
+                kept.add(renumber(source, kept.size() + 1));
+            }
+        }
+        return new Screened(List.copyOf(kept), List.copyOf(blocked));
     }
 
     /**

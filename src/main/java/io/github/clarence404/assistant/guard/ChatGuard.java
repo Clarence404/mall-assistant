@@ -7,6 +7,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -86,15 +87,36 @@ public class ChatGuard {
      * @throws ChatRejection 被挡下
      */
     public Permit admit(String caller) {
-        // TODO ch09-6：
-        // ① 预算：ledger.dailyBudget() > 0 且 ledger.usedToday(caller) 不小于它
-        //    → 抛 TOKEN_BUDGET_EXCEEDED（retryAfter = ledger.untilReset()）
-        // ② properties.enabled() 为 false → 返回 Permit.NONE
-        // ③ limiter.tryAcquire(caller) 不放行 → 抛 RATE_LIMITED（retryAfter = limiter.retryAfter(caller)）
-        // ④ slots.tryAcquire(acquireTimeout 的毫秒数, TimeUnit.MILLISECONDS) 等不到（被中断要恢复中断标记）
-        //    → 抛 TOO_BUSY（retryAfter = BUSY_RETRY_AFTER）
-        // ⑤ inflight 加一，返回一个只释放一次的 Permit（AtomicBoolean）：close 时 inflight 减一、slots.release()
-        return Permit.NONE;
+        long budget = ledger.dailyBudget();
+        if (budget > 0 && ledger.usedToday(caller) >= budget) {
+            throw new ChatRejection(ChatRejection.Reason.TOKEN_BUDGET_EXCEEDED, ledger.untilReset());
+        }
+        if (!properties.enabled()) {
+            return Permit.NONE;
+        }
+        if (!limiter.tryAcquire(caller)) {
+            log.info("对话限流：{} 一分钟内超过 {} 次", caller, properties.requestsPerMinute());
+            throw new ChatRejection(ChatRejection.Reason.RATE_LIMITED, limiter.retryAfter(caller));
+        }
+        boolean acquired;
+        try {
+            acquired = slots.tryAcquire(properties.acquireTimeout().toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            acquired = false;
+        }
+        if (!acquired) {
+            log.warn("对话并发已满（{}），{} 等了 {} 没有空位", properties.maxConcurrent(), caller, properties.acquireTimeout());
+            throw new ChatRejection(ChatRejection.Reason.TOO_BUSY, BUSY_RETRY_AFTER);
+        }
+        inflight.incrementAndGet();
+        AtomicBoolean released = new AtomicBoolean();
+        return () -> {
+            if (released.compareAndSet(false, true)) {
+                inflight.decrementAndGet();
+                slots.release();
+            }
+        };
     }
 
     /** 正在处理几轮（测试与指标用）。 */

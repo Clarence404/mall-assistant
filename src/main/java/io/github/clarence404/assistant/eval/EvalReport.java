@@ -1,5 +1,7 @@
 package io.github.clarence404.assistant.eval;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -81,11 +83,46 @@ public record EvalReport(
      * @return 汇总
      */
     public static Summary summarize(List<EvalResult> results) {
-        // TODO ch09-10：总数、通过数、rate(通过, 总数)；
-        // 按 EvalCase.Category.values() 的顺序算出现过的类别（LinkedHashMap，键是 name()）；
-        // durationMs 排序后 percentile(…, 0.50 / 0.95) 和最大值；Token 求和、有一条估算就 true；
-        // judgeScore 不为 null 的条数与平均分（保留 2 位小数，没有就 null）
-        return new Summary(results.size(), 0, 0, Map.of(), 0, 0, 0, 0, 0, false, 0, null);
+        int passed = (int) results.stream().filter(EvalResult::passed).count();
+        Map<String, CategoryScore> categories = new LinkedHashMap<>();
+        for (EvalCase.Category category : EvalCase.Category.values()) {
+            List<EvalResult> mine =
+                    results.stream().filter(r -> r.category() == category).toList();
+            if (!mine.isEmpty()) {
+                int ok = (int) mine.stream().filter(EvalResult::passed).count();
+                categories.put(category.name(), new CategoryScore(mine.size(), ok, rate(ok, mine.size())));
+            }
+        }
+        List<Long> durations = new ArrayList<>(
+                results.stream().map(EvalResult::durationMs).sorted().toList());
+        long input = results.stream().mapToLong(EvalResult::inputTokens).sum();
+        long output = results.stream().mapToLong(EvalResult::outputTokens).sum();
+        boolean estimated = results.stream().anyMatch(EvalResult::estimated);
+        List<Integer> scores = results.stream()
+                .map(EvalResult::judgeScore)
+                .filter(s -> s != null)
+                .toList();
+        Double average = scores.isEmpty()
+                ? null
+                : Math.round(scores.stream()
+                                        .mapToInt(Integer::intValue)
+                                        .average()
+                                        .orElse(0)
+                                * 100)
+                        / 100.0;
+        return new Summary(
+                results.size(),
+                passed,
+                rate(passed, results.size()),
+                categories,
+                percentile(durations, 0.50),
+                percentile(durations, 0.95),
+                durations.isEmpty() ? 0 : durations.getLast(),
+                input,
+                output,
+                estimated,
+                scores.size(),
+                average);
     }
 
     /**

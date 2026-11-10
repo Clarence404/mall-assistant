@@ -98,18 +98,40 @@ public class ModelCircuitBreaker {
      * @return 放行时为 true
      */
     public synchronized boolean tryAcquire() {
-        // TODO ch09-7：没开 → true；CLOSED → true；
-        // OPEN：还没到 openedAt + openDuration → false；到了就转 HALF_OPEN、probeStartedAt = 现在、true；
-        // HALF_OPEN：probeStartedAt + openDuration 之前 → false（已经有一个在试）；之后当它丢了，
-        // probeStartedAt = 现在、true
-        return true;
+        if (!properties.enabled()) {
+            return true;
+        }
+        Instant now = clock.instant();
+        return switch (state) {
+            case CLOSED -> true;
+            case OPEN -> {
+                if (now.isBefore(openedAt.plus(properties.openDuration()))) {
+                    yield false;
+                }
+                state = State.HALF_OPEN;
+                probeStartedAt = now;
+                log.info("模型熔断：{} 已过，放一个请求去试（半开）", properties.openDuration());
+                yield true;
+            }
+            case HALF_OPEN -> {
+                if (now.isBefore(probeStartedAt.plus(properties.openDuration()))) {
+                    yield false;
+                }
+                probeStartedAt = now;
+                yield true;
+            }
+        };
     }
 
     /**
      * 一次模型调用成功（ch09-7 之二）：连续失败清零；半开时试成了，回到 CLOSED。
      */
     public synchronized void onSuccess() {
-        // TODO ch09-7：回到 CLOSED，连续失败次数清零
+        if (state != State.CLOSED) {
+            log.info("模型熔断：试探成功，恢复正常");
+        }
+        state = State.CLOSED;
+        consecutiveFailures = 0;
     }
 
     /**
@@ -119,8 +141,25 @@ public class ModelCircuitBreaker {
      * {@code failureThreshold} 就转成 OPEN（{@code openedAt = 现在}）并记一条 warn 日志；已经是 OPEN 时（熔断前就发出去的请求陆续失败）不用管。
      */
     public synchronized void onFailure() {
-        // TODO ch09-7：HALF_OPEN → OPEN（openedAt = 现在）；
-        // CLOSED → 连续失败次数加一，到了 failureThreshold 就 OPEN（openedAt = 现在）并记 warn 日志；OPEN 时不用管
+        Instant now = clock.instant();
+        switch (state) {
+            case HALF_OPEN -> {
+                state = State.OPEN;
+                openedAt = now;
+                log.warn("模型熔断：试探失败，再熔断 {}", properties.openDuration());
+            }
+            case CLOSED -> {
+                consecutiveFailures++;
+                if (consecutiveFailures >= properties.failureThreshold()) {
+                    state = State.OPEN;
+                    openedAt = now;
+                    log.warn("模型熔断：连续失败 {} 次，{} 内不再调模型", consecutiveFailures, properties.openDuration());
+                }
+            }
+            case OPEN -> {
+                // 熔断前就发出去的请求陆续失败：已经是 OPEN 了，不重新计时
+            }
+        }
     }
 
     /**

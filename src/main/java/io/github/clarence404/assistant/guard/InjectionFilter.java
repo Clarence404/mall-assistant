@@ -4,6 +4,7 @@ import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -174,11 +175,22 @@ public final class InjectionFilter {
      * @return 判定结果
      */
     public Verdict check(String text) {
-        // TODO ch09-1：过滤器关着、text 为 null 或空白 → Verdict.CLEAN；否则先 normalize(text)，
-        // 按顺序对每条规则 rule.pattern().matcher(归一化后的文字).find()，命中就记
-        // new Hit(rule.id(), rule.reason(), 从 matcher.start() 起最多 EXCERPT_CHARS 个字)，同一个 id 只记一次；
-        // 有命中返回 new Verdict(true, List.copyOf(hits))，没有返回 Verdict.CLEAN
-        return Verdict.CLEAN;
+        if (!enabled || text == null || text.isBlank()) {
+            return Verdict.CLEAN;
+        }
+        String normalized = normalize(text);
+        List<Hit> hits = new ArrayList<>();
+        for (Rule rule : rules) {
+            if (hits.stream().anyMatch(h -> h.rule().equals(rule.id()))) {
+                continue;
+            }
+            Matcher matcher = rule.pattern().matcher(normalized);
+            if (matcher.find()) {
+                int end = Math.min(normalized.length(), matcher.start() + EXCERPT_CHARS);
+                hits.add(new Hit(rule.id(), rule.reason(), normalized.substring(matcher.start(), end)));
+            }
+        }
+        return hits.isEmpty() ? Verdict.CLEAN : new Verdict(true, List.copyOf(hits));
     }
 
     /**

@@ -7,6 +7,7 @@ import io.github.clarence404.assistant.tool.MallTools;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -235,8 +236,11 @@ public class ExternalMcpTools {
             if (!client.allowedTools().contains(original.name())) {
                 continue;
             }
-            // TODO ch09-3：filter.check(String.valueOf(original.description()))，
-            // 挡下就记一条 warn 日志（工具名、命中的规则）并 continue（不交给模型）
+            InjectionFilter.Verdict poisoned = filter.check(String.valueOf(original.description()));
+            if (poisoned.blocked()) {
+                log.warn("外部 MCP 工具 {} 的说明疑似提示注入（{}），不交给模型", original.name(), poisoned.rules());
+                continue;
+            }
             String name = client.toolPrefix() + original.name();
             if (!used.add(name)) {
                 log.warn("外部 MCP 工具 {} 改名后和已有工具重名，跳过", original.name());
@@ -278,10 +282,17 @@ public class ExternalMcpTools {
      * @return 原结果，或拦下的说明
      */
     static String screenResult(String toolName, String result, InjectionFilter filter) {
-        // TODO ch09-3：filter.check(result) 没挡就原样返回；挡了记一条 warn 日志（工具名、规则，不打原文），
-        // 返回 JSON {"blocked":true,"tool":toolName,"rules":[…],"message":BLOCKED_RESULT}
-        // （用 LinkedHashMap 保持字段顺序，JSON.writeValueAsString）
-        return result;
+        InjectionFilter.Verdict verdict = filter.check(result);
+        if (!verdict.blocked()) {
+            return result;
+        }
+        log.warn("外部 MCP 工具 {} 的结果疑似提示注入（{}），已拦下", toolName, verdict.rules());
+        Map<String, Object> blocked = new LinkedHashMap<>();
+        blocked.put("blocked", true);
+        blocked.put("tool", toolName);
+        blocked.put("rules", verdict.rules());
+        blocked.put("message", BLOCKED_RESULT);
+        return JSON.writeValueAsString(blocked);
     }
 
     /**

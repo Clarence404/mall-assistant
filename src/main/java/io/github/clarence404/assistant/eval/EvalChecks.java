@@ -1,7 +1,10 @@
 package io.github.clarence404.assistant.eval;
 
 import io.github.clarence404.assistant.chat.ChatReply;
+import io.github.clarence404.assistant.rag.RagSource;
+import io.github.clarence404.assistant.rag.RagTrace;
 import io.github.clarence404.assistant.tool.ToolInvocation;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -40,9 +43,88 @@ public final class EvalChecks {
      * @return 没满足的期望；全部满足时为空列表
      */
     public static List<String> judge(EvalCase c, ChatReply reply) {
-        // TODO ch09-9：只判 c.expect() 里写了的项（见上面的要求），每一项没满足就加一句带「期望 / 实际」的原因；
-        // 全满足返回空列表
-        return List.of("TODO ch09-9：还没有判定");
+        EvalCase.Expect e = c.expect();
+        List<String> failures = new ArrayList<>();
+        String text = reply.reply() == null ? "" : reply.reply();
+        List<ToolInvocation> tools = reply.tools() == null ? List.of() : reply.tools();
+        List<RagSource> sources = reply.sources() == null ? List.of() : reply.sources();
+        RagTrace rag = reply.rag();
+
+        if (e.intent() != null) {
+            String actual =
+                    reply.intent() == null ? null : reply.intent().intent().name();
+            if (!e.intent().equals(actual)) {
+                failures.add("意图应为 " + e.intent() + "，实际 " + actual);
+            }
+        }
+        if (e.tool() != null && tools.stream().noneMatch(t -> e.tool().equals(t.name()))) {
+            failures.add("应调用工具 " + e.tool() + "，实际 " + toolNames(tools));
+        }
+        if (Boolean.TRUE.equals(e.noTool()) && !tools.isEmpty()) {
+            failures.add("不应调用工具，实际 " + toolNames(tools));
+        }
+        if (e.toolArgContains() != null
+                && tools.stream()
+                        .noneMatch(t -> t.arguments() != null && t.arguments().contains(e.toolArgContains()))) {
+            failures.add("没有哪次工具调用的参数含「" + e.toolArgContains() + "」，实际 " + toolNames(tools));
+        }
+        if (e.source() != null || e.heading() != null) {
+            boolean hit = sources.stream()
+                    .anyMatch(s -> (e.source() == null || e.source().equals(s.source()))
+                            && (e.heading() == null
+                                    || (s.headingPath() != null
+                                            && s.headingPath().contains(e.heading()))));
+            if (!hit) {
+                failures.add("资料里没有 " + nullToEmpty(e.source()) + "「" + nullToEmpty(e.heading()) + "」，实际 "
+                        + sources.stream()
+                                .map(s -> s.source() + "「" + s.headingPath() + "」")
+                                .toList());
+            }
+        }
+        if (Boolean.TRUE.equals(e.cited())
+                && (rag == null
+                        || rag.cited().isEmpty()
+                        || !rag.invalidCitations().isEmpty())) {
+            failures.add("回答应引用有效的资料编号，实际 "
+                    + (rag == null ? "没走 RAG" : "引用 " + rag.cited() + "，对不上的 " + rag.invalidCitations()));
+        }
+        if (e.shortCircuit() != null && (rag == null || !e.shortCircuit().equals(rag.shortCircuit()))) {
+            failures.add("RAG 应短路为 " + e.shortCircuit() + "，实际 " + (rag == null ? "没走 RAG" : rag.shortCircuit()));
+        }
+        if (!e.condensedContains().isEmpty()) {
+            String condensed = reply.memory() == null ? null : reply.memory().condensedQuestion();
+            for (String word : e.condensedContains()) {
+                if (condensed == null || !condensed.contains(word)) {
+                    failures.add("改写后的问题应含「" + word + "」，实际 " + condensed);
+                }
+            }
+        }
+        if (e.proposal() != null) {
+            String actual =
+                    reply.confirmation() == null ? null : reply.confirmation().action();
+            if (!e.proposal().equals(actual)) {
+                failures.add("应提出 " + e.proposal() + "，实际 " + actual);
+            }
+        }
+        if (e.blocked() != null
+                && (rag == null
+                        || rag.blocked().stream().noneMatch(b -> e.blocked().equals(b.source())))) {
+            failures.add("应挡下 " + e.blocked() + "，实际挡下 "
+                    + (rag == null
+                            ? "[]"
+                            : rag.blocked().stream().map(b -> b.source()).toList()));
+        }
+        for (String must : e.mustContain()) {
+            if (!text.contains(must)) {
+                failures.add("回答应含「" + must + "」");
+            }
+        }
+        for (String mustNot : e.mustNotContain()) {
+            if (text.contains(mustNot)) {
+                failures.add("回答不应含「" + mustNot + "」");
+            }
+        }
+        return failures;
     }
 
     private static List<String> toolNames(List<ToolInvocation> tools) {

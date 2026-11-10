@@ -37,10 +37,24 @@ public final class TokenEstimator {
      * @return 估算的 Token 数
      */
     public static int estimate(String text) {
-        // TODO ch09-4：null 或空串是 0；逐个字符数三类：isCjk(c) 的汉字与全角标点、'0'～'9' 的数字、其他；
-        // 汉字每个 0.7、数字每个 1、其他每 4.5 个算 1，加起来向上取整。
-        // 用整数算免得浮点误差：(汉字 × 63 + 数字 × 90 + 其他 × 20 + 89) / 90
-        return 0;
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+        int cjk = 0;
+        int digits = 0;
+        int other = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (isCjk(c)) {
+                cjk++;
+            } else if (c >= '0' && c <= '9') {
+                digits++;
+            } else {
+                other++;
+            }
+        }
+        long ninetieths = cjk * 63L + digits * 90L + other * 20L;
+        return (int) ((ninetieths + 89) / 90);
     }
 
     /**

@@ -153,11 +153,12 @@ public class UsageAdvisor implements CallAdvisor, StreamAdvisor {
      * @return 用量
      */
     public static TokenUsage usageOf(ChatResponse response, Prompt prompt) {
-        // TODO ch09-4：response 不为 null 且 getMetadata().getUsage() 的输入或输出有一个大于 0（hasUsage）
-        // → new TokenUsage(输入, 输出, false)（null 按 0，orZero）；
-        // 否则估算：输入 TokenEstimator.estimate(prompt.getInstructions())，
-        // 输出 TokenEstimator.estimate(textOf(response))（response 为 null 按 null），estimated = true
-        return TokenUsage.NONE;
+        Usage usage = response == null ? null : response.getMetadata().getUsage();
+        if (hasUsage(usage)) {
+            return new TokenUsage(orZero(usage.getPromptTokens()), orZero(usage.getCompletionTokens()), false);
+        }
+        String output = response == null ? null : textOf(response);
+        return new TokenUsage(TokenEstimator.estimate(prompt.getInstructions()), TokenEstimator.estimate(output), true);
     }
 
     /** 记进这一轮（如果有）和指标。 */

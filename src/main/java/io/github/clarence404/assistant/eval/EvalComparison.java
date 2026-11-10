@@ -1,5 +1,6 @@
 package io.github.clarence404.assistant.eval;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -64,10 +65,40 @@ public record EvalComparison(
      * @return 比较结果
      */
     public static EvalComparison compare(EvalReport baseline, EvalReport current, Thresholds thresholds) {
-        // TODO ch09-10：版本不同 → 一条「评测集版本不同」的退化说明，不比通过率；
-        // 否则总通过率、每个类别（以基线为准，这次没有按 0）掉得超过阈值（加 EPSILON）各加一条说明；
-        // 按用例编号对出 newlyFailing / newlyPassing；passed = 没有退化说明
-        return new EvalComparison(false, List.of("TODO ch09-10：还没有和基线比"), List.of(), List.of());
+        List<String> regressions = new ArrayList<>();
+        if (!baseline.evalSetVersion().equals(current.evalSetVersion())) {
+            regressions.add("评测集版本不同（基线 " + baseline.evalSetVersion() + "，这次 " + current.evalSetVersion()
+                    + "）：通过率没法比，先用同一份评测集重新生成基线");
+        } else {
+            double drop = baseline.summary().passRate() - current.summary().passRate();
+            if (drop > thresholds.maxPassRateDrop() + EPSILON) {
+                regressions.add("总通过率从 " + percent(baseline.summary().passRate()) + " 掉到 "
+                        + percent(current.summary().passRate()) + "，超过允许的 " + percent(thresholds.maxPassRateDrop()));
+            }
+            Map<String, EvalReport.CategoryScore> now = current.summary().categories();
+            baseline.summary().categories().forEach((name, before) -> {
+                EvalReport.CategoryScore after = now.get(name);
+                double rate = after == null ? 0 : after.passRate();
+                if (before.passRate() - rate > thresholds.maxCategoryDrop() + EPSILON) {
+                    regressions.add("类别 " + name.toLowerCase(Locale.ROOT) + " 的通过率从 " + percent(before.passRate())
+                            + " 掉到 " + percent(rate) + "，超过允许的 " + percent(thresholds.maxCategoryDrop()));
+                }
+            });
+        }
+        Map<String, Boolean> before = byId(baseline);
+        Map<String, Boolean> after = byId(current);
+        List<String> newlyFailing = new ArrayList<>();
+        List<String> newlyPassing = new ArrayList<>();
+        after.forEach((id, ok) -> {
+            Boolean was = before.get(id);
+            if (Boolean.TRUE.equals(was) && !ok) {
+                newlyFailing.add(id);
+            } else if (Boolean.FALSE.equals(was) && ok) {
+                newlyPassing.add(id);
+            }
+        });
+        return new EvalComparison(
+                regressions.isEmpty(), List.copyOf(regressions), List.copyOf(newlyFailing), List.copyOf(newlyPassing));
     }
 
     /**

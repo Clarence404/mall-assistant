@@ -92,10 +92,21 @@ public class UsageLedger {
      * @param record 这一轮
      */
     public synchronized void commit(TurnRecord record) {
-        // TODO ch09-5：record.markCommitted() 为 false、或调用方是 TurnRecord.UNATTRIBUTED 就返回；先 rollover()；
-        // record.usage() 记成 new Tally(1, 输入, 输出, 有估算 ? 1 : 0)，用 merge(键, tally, Tally::plus) 合进
-        // byCaller（调用方）、byIntent（意图，null 记 NO_INTENT）、
-        // byConversation（有会话 ID 时，键是「调用方/会话 ID」）；今天超预算了记一行 info 日志
+        if (!record.markCommitted() || TurnRecord.UNATTRIBUTED.equals(record.caller())) {
+            return;
+        }
+        rollover();
+        UsageTrace usage = record.usage();
+        Tally tally = new Tally(1, usage.inputTokens(), usage.outputTokens(), usage.estimated() ? 1 : 0);
+        byCaller.merge(record.caller(), tally, Tally::plus);
+        byIntent.merge(record.intent() == null ? NO_INTENT : record.intent(), tally, Tally::plus);
+        if (record.conversationId() != null) {
+            byConversation.merge(record.caller() + "/" + record.conversationId(), tally, Tally::plus);
+        }
+        long used = byCaller.get(record.caller()).tokens();
+        if (properties.dailyTokenBudget() > 0 && used >= properties.dailyTokenBudget()) {
+            log.info("{} 今天的 Token 用量 {} 已到预算 {}，之后的提问会被拒", record.caller(), used, properties.dailyTokenBudget());
+        }
     }
 
     /**
@@ -105,8 +116,9 @@ public class UsageLedger {
      * @return 今天的输入 + 输出 Token
      */
     public synchronized long usedToday(String caller) {
-        // TODO ch09-5：rollover()，再从 byCaller 里取这个调用方的 tokens()，没有记录是 0
-        return 0;
+        rollover();
+        Tally tally = byCaller.get(caller);
+        return tally == null ? 0 : tally.tokens();
     }
 
     /** 每日预算；0 = 不限。 */
