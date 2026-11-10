@@ -1,6 +1,7 @@
 package io.github.clarence404.assistant.agent;
 
 import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.ops.UsageAdvisor;
 import io.github.clarence404.assistant.prompt.AssistantPrompts;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -106,6 +107,7 @@ public class NativeAgentRunner {
                     .tools(callbacks.toArray())
                     .toolContext(Map.of(RUN, run))
                     .options(ChatOptions.builder().temperature(0.0))
+                    .advisors(UsageAdvisor.stage("agent")) // 第 9 章：Token 记账时标明这是 Agent（方案 A）
                     .call()
                     .content();
         } catch (RuntimeException e) {

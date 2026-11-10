@@ -107,6 +107,9 @@
   .msg.summary { align-self: stretch; max-width: none; color: var(--muted); font-size: 13px; border: 1px dashed var(--border); }
   .rag-note { color: var(--muted); margin: 4px 0; }
   .rag-note.warn { color: var(--err-fg); }
+  /* 第 9 章：被提示注入过滤挡下的资料 */
+  .sources li.blocked { color: #b42318; }
+  .sources li.blocked .meta { color: #b42318; }
   /* 第 7 章：Agent 的确认卡片（写操作要用户点按钮）与调试面板的 Agent 步骤 */
   .confirm-card {
     align-self: flex-start; max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 14px;
@@ -178,6 +181,7 @@
           <dt>总耗时</dt><dd id="dbgTotal">-</dd>
           <dt>片段数</dt><dd id="dbgChunks">-</dd>
           <dt>错误码</dt><dd id="dbgError">-</dd>
+          <dt>traceId</dt><dd id="dbgTrace">-</dd>
         </dl>
       </section>
       <section>
@@ -214,9 +218,10 @@
         <div class="rag-note" id="dbgRag">-</div>
         <ol class="sources" id="dbgSources"></ol>
       </section>
-      <section>
+      <section class="wide">
         <h3>Token 用量</h3>
-        <p class="placeholder">第 9 章评估与上线时，这里显示输入 / 输出 token 数。</p>
+        <div class="rag-note" id="dbgUsageNote">-</div>
+        <ol class="tools" id="dbgUsage"></ol>
       </section>
     </div>
   </details>
@@ -258,6 +263,10 @@
 //   POST /api/agent/confirmations/{id} 真正执行；在聊天里打「确认」不算（服务端会提醒你点按钮）
 // 第 8 章：MCP 客户端（Claude Code、MCP Inspector 等）提出的写操作只拿到一个确认链接 /?confirm=<确认 ID>。打开它时页面用
 //   GET /api/agent/confirmations/{id} 取卡片（要先登录同一个商城账号），点按钮走的还是同一个 POST，只是不带会话 ID（MCP 的操作没有会话）
+// 第 9 章：调试面板「Token 用量」逐行列出这一轮每次模型调用（哪一步、输入 / 输出 Token、是否估算、耗时）与今日用量 / 预算
+//   （阻塞接口在 usage 字段，流式接口在 done 事件的 usage 里；GET /api/usage/me 查今天一共用了多少）；「引用来源」里红色的是被提示注入过滤挡下的资料；
+//   「本次请求」里的 traceId 来自响应头 X-Trace-Id，报障时拿它去日志里搜。被限流 / 太忙 / 额度用完时错误码是 RATE_LIMITED / TOO_BUSY / TOKEN_BUDGET_EXCEEDED，
+//   模型熔断中是 MODEL_CIRCUIT_OPEN；规则类问题在模型不可用时会直接给出检索到的原文（降级）
 (() => {
   const $ = (id) => document.getElementById(id);
   const messages = $('messages');
@@ -281,7 +290,7 @@
   function debug(values) {
     const map = {
       endpoint: 'dbgEndpoint', status: 'dbgStatus', first: 'dbgFirst', total: 'dbgTotal', chunks: 'dbgChunks', error: 'dbgError',
-      intent: 'dbgIntent', confidence: 'dbgConfidence', orderNo: 'dbgOrderNo', sku: 'dbgSku'
+      intent: 'dbgIntent', confidence: 'dbgConfidence', orderNo: 'dbgOrderNo', sku: 'dbgSku', trace: 'dbgTrace'
     };
     for (const [k, v] of Object.entries(values)) $(map[k]).textContent = v;
   }
@@ -461,7 +470,9 @@
   // 第 5 章：RAG 的引用来源。每条：编号、标题路径、来源文件、分数、片段（完整内容放在悬停提示里）
   const SHORT_CIRCUIT_LABELS = {
     NO_MATCH: '没有相关资料（全部低于门槛），没调模型，直接回固定话术',
-    KNOWLEDGE_UNAVAILABLE: '知识库不可用，没调模型，直接回固定话术'
+    KNOWLEDGE_UNAVAILABLE: '知识库不可用，没调模型，直接回固定话术',
+    ALL_BLOCKED: '检索到的资料全部疑似提示注入、被挡下了，没调模型，直接回固定话术',
+    MODEL_UNAVAILABLE: '模型不可用，降级：直接给出检索到的原文'
   };
 
   function resetSources() {
@@ -504,9 +515,58 @@
       warn = true;
     }
     if (trace.uncited === true) { parts.push('回答没有引用任何资料'); warn = true; }
+    if (trace.blocked && trace.blocked.length) {
+      parts.push('挡下 ' + trace.blocked.length + ' 块疑似提示注入的资料（红色）');
+      warn = true;
+    }
     el.className = 'rag-note' + (warn ? ' warn' : '');
     el.textContent = parts.join('；');
     if (!sources.length && !trace.shortCircuit) el.textContent += '；没有引用来源';
+    (trace.blocked || []).forEach(addBlocked);
+  }
+
+  // 第 9 章：被提示注入过滤挡下的资料：没有交给模型，列在引用来源下面，写明命中的规则和片段
+  function addBlocked(b) {
+    const li = document.createElement('li');
+    li.className = 'blocked';
+    li.textContent = '已挡下：' + b.headingPath;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = b.source + '  ' + (b.rules || []).join('+') + '：' + b.reason + '「' + b.excerpt + '」';
+    li.appendChild(meta);
+    $('dbgSources').appendChild(li);
+  }
+
+  // 第 9 章：Token 用量。每次模型调用一行：步骤、输入 / 输出、是否估算、耗时；上面一行是合计与今日用量 / 预算
+  const STAGE_LABELS = {
+    intent: '意图识别', condense: '追问改写', answer: '回答', rag: 'RAG 回答', agent: 'Agent 一步', summary: '摘要记忆', other: '其他'
+  };
+
+  function resetUsage() {
+    $('dbgUsage').innerHTML = '';
+    $('dbgUsageNote').className = 'rag-note';
+    $('dbgUsageNote').textContent = '-';
+  }
+
+  function showUsage(usage) {
+    resetUsage();
+    if (!usage) return;
+    const parts = ['合计 输入 ' + usage.inputTokens + ' / 输出 ' + usage.outputTokens + ' Token，' + usage.calls.length + ' 次模型调用'];
+    if (usage.estimated) parts.push('含估算（模型没报告用量时按字数估）');
+    if (typeof usage.todayTokens === 'number') {
+      parts.push('今天一共 ' + usage.todayTokens + (usage.dailyBudget > 0 ? ' / 预算 ' + usage.dailyBudget : '（不限预算）'));
+    }
+    $('dbgUsageNote').textContent = parts.join('；');
+    for (const c of usage.calls) {
+      const li = document.createElement('li');
+      li.textContent = (STAGE_LABELS[c.stage] || c.stage) + '：输入 ' + c.inputTokens + ' / 输出 ' + c.outputTokens
+        + (c.estimated ? '（估算）' : '');
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = (c.model || '模型未报告') + '，' + c.durationMs + ' ms';
+      li.appendChild(meta);
+      $('dbgUsage').appendChild(li);
+    }
   }
 
   // 把回答里的 [n] 换成可悬停、可点击的引用标记；对不上来源的编号标灰（流式回答收不回来，只能标出来）。
@@ -682,8 +742,10 @@
       headers: authHeaders({ 'Content-Type': 'application/json', 'Accept': 'application/json' }),
       body: JSON.stringify({ message: text, conversationId })
     });
+    debug({ trace: res.headers.get('X-Trace-Id') || '-' });
     if (!res.ok) throw await problemMessage(res);
     const body = await res.json();
+    showUsage(body.usage);
     showIntent(body.intent);
     showMemory(body.memory);
     (body.tools || []).forEach(addTool);
@@ -708,6 +770,7 @@
       headers: authHeaders({ 'Content-Type': 'application/json', 'Accept': 'text/event-stream' }),
       body: JSON.stringify({ message: text, conversationId })
     });
+    debug({ trace: res.headers.get('X-Trace-Id') || '-' });
     if (!res.ok) throw await problemMessage(res);
 
     const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -729,6 +792,11 @@
         addStep(JSON.parse(data));
       } else if (event === 'confirm') {
         addConfirmCard(JSON.parse(data), bubble);
+      } else if (event === 'blocked') {
+        // 第 9 章：被提示注入过滤挡下的资料（没交给模型）
+        addBlocked(JSON.parse(data));
+        $('dbgRag').className = 'rag-note warn';
+        $('dbgRag').textContent = '挡下了疑似提示注入的资料（红色），没有交给模型';
       } else if (event === 'source') {
         const src = JSON.parse(data);
         sources.push(src);
@@ -744,6 +812,7 @@
       } else if (event === 'done') {
         finished = true;
         renderCitations(bubble, answer, sources);
+        showUsage(JSON.parse(data).usage);
         debug({ status: 'done' });
       } else if (event === 'error') {
         finished = true;
@@ -787,6 +856,8 @@
     resetSources();
     resetMemory();
     resetSteps();
+    resetUsage();
+    debug({ trace: '-' });
     const t0 = performance.now();
     try {
       if (streamMode.checked) await askStreaming(text, bubble, t0);

@@ -2,6 +2,7 @@ package io.github.clarence404.assistant.chat;
 
 import io.github.clarence404.assistant.intent.IntentResult;
 import io.github.clarence404.assistant.memory.Conversation;
+import io.github.clarence404.assistant.ops.TurnRecord;
 
 /**
  * 一轮对话：用户这一句、识别出的意图、商城令牌，以及这一轮的会话句柄（第 6 章引入）。
@@ -13,5 +14,20 @@ import io.github.clarence404.assistant.memory.Conversation;
  * @param intent 意图（可能补上了从历史沿用的订单号 / SKU）
  * @param mallToken 商城令牌，可以为 null；只在工具里用，不进任何发给模型的文字，也不进记忆
  * @param conversation 会话句柄；单轮时是 {@link Conversation#none()}
+ * @param record 第 9 章：这一轮的账本（Token、RAG 结果、Agent 步数）；流式回答时交给模型调用的 advisor
  */
-public record ChatTurn(String message, IntentResult intent, String mallToken, Conversation conversation) {}
+public record ChatTurn(
+        String message, IntentResult intent, String mallToken, Conversation conversation, TurnRecord record) {
+
+    /**
+     * 第 8 章及以前的写法：不属于任何调用方的账本。
+     *
+     * @param message 用户原文
+     * @param intent 意图
+     * @param mallToken 商城令牌
+     * @param conversation 会话句柄
+     */
+    public ChatTurn(String message, IntentResult intent, String mallToken, Conversation conversation) {
+        this(message, intent, mallToken, conversation, TurnRecord.detached());
+    }
+}

@@ -3,6 +3,7 @@ package io.github.clarence404.assistant.chat;
 import io.github.clarence404.assistant.agent.AgentStep;
 import io.github.clarence404.assistant.agent.PendingConfirmation;
 import io.github.clarence404.assistant.memory.MemoryTrace;
+import io.github.clarence404.assistant.rag.BlockedSource;
 import io.github.clarence404.assistant.rag.RagSource;
 import io.github.clarence404.assistant.tool.ToolInvocation;
 
@@ -59,4 +60,11 @@ public sealed interface AnswerPart {
      * @param confirmation 待确认操作
      */
     record Confirm(PendingConfirmation confirmation) implements AnswerPart {}
+
+    /**
+     * 一块被提示注入过滤挡下的资料（第 9 章）：RAG 流式回答里，在引用来源之后、文字之前推出，页面调试面板用红色列出。阻塞接口在 {@code rag.blocked} 里。
+     *
+     * @param source 被挡下的资料
+     */
+    record Blocked(BlockedSource source) implements AnswerPart {}
 }

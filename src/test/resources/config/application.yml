@@ -1,0 +1,16 @@
+# 测试专用的覆盖配置（第 9 章引入）：Spring Boot 除了 classpath:/application.yml，还会加载 classpath:/config/application.yml（后者优先），
+# 这个文件只在测试的 classpath 上，所以只影响测试，不影响 ./mvnw spring-boot:run。
+#
+# 为什么要它：前八章的接口测试（FakeModelWebTest 的子类）共用一个 Spring 上下文、全部从 127.0.0.1 发请求，还会故意让假模型连续失败——
+# 按线上的默认值，它们会被限流（每分钟 20 次）、被熔断（连续 5 次失败）、被每日预算挡住，模型失败时规则类问题还会被降级成原文，
+# 测的就不是它们本来要测的东西了。
+# 这里把这几样调宽 / 关掉；第 9 章自己的接口测试（GuardApiTest）用 @TestPropertySource 按需要打开。
+assistant:
+  guard:
+    enabled: false           # 不限次数、不限并发
+    circuit:
+      enabled: false         # 不熔断
+    degrade:
+      enabled: false         # 不降级：模型调用失败时和前几章一样返回 503（前几章的测试按这个写）
+  usage:
+    daily-token-budget: 0    # 不限预算

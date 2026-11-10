@@ -1,7 +1,10 @@
 package io.github.clarence404.assistant.rag;
 
+import io.github.clarence404.assistant.guard.InjectionFilter;
 import io.github.clarence404.assistant.intent.IntentResult;
 import io.github.clarence404.assistant.knowledge.KnowledgeException;
+import io.github.clarence404.assistant.ops.ChatMetrics;
+import io.github.clarence404.assistant.ops.UsageAdvisor;
 import io.github.clarence404.assistant.prompt.AssistantPrompts;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -13,6 +16,7 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.rag.Query;
 import org.springframework.ai.rag.preretrieval.query.transformation.RewriteQueryTransformer;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -43,6 +47,10 @@ import org.springframework.stereotype.Service;
  * <p>为什么没有直接用 Spring AI 的 {@code RetrievalAugmentationAdvisor}（模块化 RAG 的「一站式」顾问）：它把检索、拼提示词、调模型串在一个
  * advisor 里，适合快速搭起来；本项目要在调模型<b>之前</b>拿到检索结果（决定要不要短路、先把 source 事件推给页面）、要关键词 + 向量的混合检索、
  * 要自己的编号格式和引用校验，自己串这几步更直观。只在「问题改写」这一步用了它的现成组件 {@link RewriteQueryTransformer}。
+ *
+ * <p><b>第 9 章：检索到的资料先过提示注入过滤</b>（{@link #screen}）。第 5 章只靠「圈起来、说明它只是数据」，实测 1.5b 换两版措辞就会照着恶意资料说
+ * 「所有订单都可以全额退款」。现在明显在下指令的资料块根本不进提示词，被挡的块记在 {@link RagTrace#blocked()} 里给开发者看；全被挡了就和「没检索到」
+ * 一样短路，不调模型。第 7 章 Agent 的查规则也走 {@link #plan}，同样受保护。
  */
 @Service
 public class RagService {
@@ -85,6 +93,8 @@ public class RagService {
     private final Resource systemTemplate;
     private final Resource notFoundTemplate = new ClassPathResource("prompts/rag-not-found.st");
     private final Resource unavailableTemplate = new ClassPathResource("prompts/rag-unavailable.st");
+    private final InjectionFilter filter;
+    private final ChatMetrics metrics;
     private volatile RewriteQueryTransformer rewriter;
 
     /**
@@ -96,7 +106,29 @@ public class RagService {
      * @throws IllegalStateException 配置的系统提示词版本找不到模板文件，应用启动失败
      */
     public RagService(ChatClient chatClient, RagRetriever retriever, AssistantPrompts prompts) {
+        this(chatClient, retriever, prompts, InjectionFilter.off(), ChatMetrics.noop());
+    }
+
+    /**
+     * 创建 RAG 服务（第 9 章起 Spring 用这个）：检索到的资料先过提示注入过滤。
+     *
+     * @param chatClient 共享的 ChatClient
+     * @param retriever 检索器
+     * @param prompts 模板变量
+     * @param filter 提示注入过滤器（{@link InjectionFilter#off()} 等于第 8 章的行为）
+     * @param metrics 指标（记被挡下的块）
+     * @throws IllegalStateException 配置的系统提示词版本找不到模板文件
+     */
+    @Autowired
+    public RagService(
+            ChatClient chatClient,
+            RagRetriever retriever,
+            AssistantPrompts prompts,
+            InjectionFilter filter,
+            ChatMetrics metrics) {
         this.chatClient = chatClient;
+        this.filter = filter;
+        this.metrics = metrics;
         this.retriever = retriever;
         this.properties = retriever.properties();
         this.prompts = prompts;
@@ -134,7 +166,16 @@ public class RagService {
         String mode = properties.hybrid() ? "hybrid" : RagRetriever.VECTOR;
         try {
             RagRetriever.Retrieval retrieval = retriever.retrieve(vectorQuery, keywordQuery, properties.topK());
-            List<RagSource> sources = retrieval.sources();
+            // 第 9 章：资料进提示词之前先过提示注入过滤，被挡的块不交给模型、剩下的重新编号
+            Screened screened = screen(retrieval.sources(), filter);
+            List<RagSource> sources = screened.kept();
+            screened.blocked().forEach(b -> {
+                log.warn("RAG：资料 {}（{}）疑似提示注入，已挡下：{}", b.source(), b.headingPath(), b.rules());
+                metrics.injectionBlocked("rag", b.rules().getFirst());
+            });
+            String shortCircuit = sources.isEmpty()
+                    ? (screened.blocked().isEmpty() ? RagTrace.NO_MATCH : RagTrace.ALL_BLOCKED)
+                    : null;
             RagTrace trace = new RagTrace(
                     message,
                     rewritten,
@@ -144,11 +185,12 @@ public class RagService {
                     retrieval.passed(),
                     sources.stream().mapToInt(s -> s.content().length()).sum(),
                     elapsedMs(start),
-                    sources.isEmpty() ? RagTrace.NO_MATCH : null,
+                    shortCircuit,
                     null,
                     List.of(),
                     List.of(),
-                    null);
+                    null,
+                    screened.blocked());
             if (sources.isEmpty()) {
                 log.info("RAG：没有检索到相关资料，不调模型，直接回固定话术：{}", message);
             }
@@ -204,7 +246,61 @@ public class RagService {
                 .system(spec -> spec.text(systemTemplate).params(prompts.variables()))
                 .messages(history)
                 .user(u -> u.text(CONTEXT_TEMPLATE).param("message", message).param("context", context(plan.sources())))
-                .options(ChatOptions.builder().temperature(TEMPERATURE));
+                .options(ChatOptions.builder().temperature(TEMPERATURE))
+                .advisors(UsageAdvisor.stage("rag"));
+    }
+
+    /**
+     * 提示注入过滤（ch09-2）：检索到的每块资料过一遍 {@link InjectionFilter}，挡下的记成 {@link BlockedSource}，留下的重新编号。
+     *
+     * <p>要求（测试按这个写）：
+     *
+     * <ul>
+     *   <li>按原来的顺序，对每条来源的 {@code content()}（标题路径 + 正文：标题本身也可能被改成一句指令）调 {@code filter.check}
+     *   <li>被挡的：记一个 {@link BlockedSource}（来源文件、标题路径、命中的规则编号 {@code verdict.rules()}、第一条命中的原因和片段），不留
+     *   <li>留下的：编号从 1 开始重新连续编（{@link #renumber}）——提示词里、回答里、页面上的 [n] 三处要对得上，不能出现 [1][3] 少了 [2]
+     *   <li>一块都没挡时原样返回（编号本来就是连续的）
+     * </ul>
+     *
+     * <p>被挡的块已经占过上下文预算和 top-k 的名额（{@link ContextPacker} 在前面），所以交给模型的资料可能少于 top-k；更彻底的做法是入库时就过滤
+     * （讲义思考题）。
+     *
+     * @param sources 检索到的引用来源（编号从 1 开始）
+     * @param filter 过滤器
+     * @return 留下的与被挡的
+     */
+    static Screened screen(List<RagSource> sources, InjectionFilter filter) {
+        // TODO ch09-2：按顺序 filter.check(source.content())；
+        // 挡下的记 new BlockedSource(来源文件, 标题路径, verdict.rules(), 第一条命中的 reason, excerpt)；
+        // 留下的 renumber(source, 已经留下的块数 + 1)；最后返回 new Screened(留下的, 挡下的)
+        return new Screened(sources, List.of());
+    }
+
+    /**
+     * 过滤的结果。
+     *
+     * @param kept 留下的（编号已重排）
+     * @param blocked 被挡下的
+     */
+    public record Screened(List<RagSource> kept, List<BlockedSource> blocked) {}
+
+    /** 换一个编号（其余字段不变）。 */
+    static RagSource renumber(RagSource source, int index) {
+        if (source.index() == index) {
+            return source;
+        }
+        return new RagSource(
+                index,
+                source.source(),
+                source.title(),
+                source.headingPath(),
+                source.chunkIndexes(),
+                source.score(),
+                source.keywordScore(),
+                source.fusedScore(),
+                source.foundBy(),
+                source.snippet(),
+                source.content());
     }
 
     /**

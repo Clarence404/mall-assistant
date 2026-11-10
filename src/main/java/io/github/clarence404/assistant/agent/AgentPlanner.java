@@ -1,6 +1,7 @@
 package io.github.clarence404.assistant.agent;
 
 import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.ops.UsageAdvisor;
 import io.github.clarence404.assistant.prompt.AssistantPrompts;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -117,6 +118,7 @@ public class AgentPlanner {
                             .param("step", String.valueOf(run.nextIndex()))
                             .param("maxSteps", String.valueOf(properties.maxSteps())))
                     .options(ChatOptions.builder().temperature(TEMPERATURE).maxTokens(properties.maxOutputTokens()))
+                    .advisors(UsageAdvisor.stage("agent")) // 第 9 章：Token 记账时标明这是 Agent 的一步
                     .call()
                     .entity(AgentDecision.class, spec -> spec.useProviderStructuredOutput());
         } catch (JacksonException e) {

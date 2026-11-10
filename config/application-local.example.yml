@@ -73,3 +73,20 @@ spring:
 # assistant:
 #   mcp:
 #     confirm-url: http://localhost:8088/
+
+# —— 第 9 章：上线保护与监控（默认值见 application.yml 的 assistant.guard / assistant.usage / management）——
+# 本机调试时嫌限流碍事可以放宽；生产上按流量和模型服务的能力调，并把 Actuator 放到只有内网能访问的端口
+# assistant:
+#   guard:
+#     requests-per-minute: 60      # 每个调用方每分钟最多问几次
+#     max-concurrent: 4            # 同时最多处理几轮（共享开发机上的 Ollama 只有 CPU，一次算不了几个）
+#   usage:
+#     daily-token-budget: 0        # 每个调用方每天的 Token 上限，0 = 不限
+# management:
+#   server:
+#     port: 9088                   # Actuator（/actuator/prometheus、/actuator/tokens）单独的端口
+# 结构化日志（JSON 一行一条，带 traceId / spanId 字段）：设环境变量 LOGGING_STRUCTURED_FORMAT_CONSOLE=logstash，或写在这里
+# logging:
+#   structured:
+#     format:
+#       console: logstash

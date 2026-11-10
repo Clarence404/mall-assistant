@@ -10,6 +10,8 @@ spring:
   threads:
     virtual:
       enabled: true          # 请求跑在虚拟线程上：调模型动辄等几秒到几十秒，线程大部分时间在干等，虚拟线程让「等」几乎不占资源
+  reactor:
+    context-propagation: auto   # 第 9 章：流式回答在 Reactor 的线程之间切换，自动带上 traceId（日志 MDC），流式那一路的日志也能按 traceId 串起来
   mvc:
     problemdetails:
       enabled: true          # 参数校验失败等 MVC 自带异常也返回 ProblemDetail
@@ -76,7 +78,8 @@ spring:
 
 # 本项目自己的配置，分别绑定到 ChatProperties（assistant.chat）、PromptProperties（assistant.prompt）、
 # ToolProperties（assistant.tools）、MallApiProperties（assistant.mall）、KnowledgeProperties（assistant.knowledge）、
-# RagProperties（assistant.rag）、MemoryProperties（assistant.memory）、AgentProperties（assistant.agent）与 McpProperties（assistant.mcp）
+# RagProperties（assistant.rag）、MemoryProperties（assistant.memory）、AgentProperties（assistant.agent）、McpProperties（assistant.mcp）、
+# 第 9 章的 GuardProperties（assistant.guard）与 UsageProperties（assistant.usage）
 assistant:
   chat:
     stream-timeout: 30s      # 流式：首段和相邻两段之间最多等多久
@@ -190,6 +193,25 @@ assistant:
       tool-prefix: ext_      # 交给模型时加的前缀，和自己的工具区分开，外部工具也不能顶替 queryOrderStatus
       max-description-chars: 200   # 外部工具说明最多保留多少字
       max-result-chars: 1500 # 外部工具结果最多交给模型多少字
+  guard:                     # 第 9 章：上线保护（见 GuardProperties 与 docs/ch09.md）。测试里统一调宽：src/test/resources/config/application.yml
+    enabled: true            # 限流与并发上限的总开关（熔断、注入过滤、降级、每日预算各有自己的开关）
+    requests-per-minute: 20  # 每个调用方（登录用户按商城用户 ID，匿名按 IP）每分钟最多问几次，超了 429 RATE_LIMITED
+    max-concurrent: 8        # 整个实例同时最多处理几轮对话：模型服务一次只能算几个（Ollama 默认并行 1～4），排队太长大家一起超时
+    acquire-timeout: 2s      # 没有空位时最多等多久，等不到 503 TOO_BUSY（快速失败比慢慢超时好）
+    circuit:                 # 模型熔断（见 ModelCircuitBreaker）
+      enabled: true
+      failure-threshold: 5   # 连续失败几次就熔断：之后直接返回 MODEL_CIRCUIT_OPEN，不再让每个用户等一个超时
+      open-duration: 30s     # 熔断多久之后放一个请求去试（半开），成功就恢复
+    injection:               # 提示注入过滤（见 InjectionFilter）：知识库资料、外部 MCP 工具的说明与结果进提示词之前先过一遍
+      enabled: true
+      extra-patterns: []     # 追加的正则，写在归一化之后的文字上（小写、全角转半角、去掉空格），如 "(不需要|无需)用户确认"
+    degrade:                 # 降级：规则类问题调模型失败时（熔断、连不上、超时），直接把检索到的原文给用户，而不是 503
+      enabled: true
+      excerpt-chars: 200     # 每段原文最多多少字
+  usage:                     # 第 9 章：Token 用量（见 UsageProperties、UsageLedger）
+    daily-token-budget: ${ASSISTANT_DAILY_TOKEN_BUDGET:100000}   # 每个调用方每天最多用多少 Token（输入 + 输出），0 = 不限；超了 429 TOKEN_BUDGET_EXCEEDED，零点恢复。一轮 RAG 约 1500，一件 Agent 的事约 6000～10000
+    zone: Asia/Shanghai      # 「一天」按哪个时区算
+    max-conversations: 500   # 按会话汇总时最多记多少个会话
   after-sales:               # 第 7 章：售后申请单（mall-evolution 没有用户侧的售后接口，智能客服只记一张「待人工审核」的单，不动钱）
     store: ${ASSISTANT_AFTER_SALES_STORE:memory}   # memory（默认，重启就没了）或 jdbc（PostgreSQL 的 after_sales_application 表，第一次用到时自动建）
     jdbc:                    # store=jdbc 时：默认沿用第 6 章记忆的连接（也就是第 4 章 pgvector 的那个库），真实地址和密码写进 config/application-local.yml
@@ -198,6 +220,33 @@ assistant:
       password: ${AFTER_SALES_JDBC_PASSWORD:${assistant.memory.jdbc.password}}
       initialize-schema: true   # 第一次用到时建表（CREATE TABLE IF NOT EXISTS）
       max-pool-size: 2       # 只有提交售后申请时才用，两个连接够了
+
+# 第 9 章：监控。Actuator 端点（/actuator/health、/actuator/prometheus、/actuator/tokens……）与链路 ID
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,tokens   # 默认只暴露 health；tokens 是本项目的 Token 用量汇总（TokenUsageEndpoint），里面有用户 ID 和 IP
+  endpoint:
+    health:
+      probes:
+        enabled: true        # /actuator/health/liveness 与 /readiness：给 Kubernetes 等编排系统的存活 / 就绪探针用
+  # server:
+  #   port: 9088             # 生产上把 Actuator 放到单独的端口（只有内网 / Prometheus 能访问），不和对外的 8088 混在一起
+  metrics:
+    tags:
+      application: ${spring.application.name}   # 每个指标都带上应用名，多个服务进同一个 Prometheus 时分得开
+  tracing:
+    sampling:
+      probability: 1.0       # 每个请求都生成 traceId / spanId（没配 exporter，不往外发，只用来串日志）；接了 Zipkin / OTLP 再按量调低
+
+# 第 9 章：日志。默认是人看的格式，traceId 在 [mall-assistant,traceId,spanId] 里；生产上换成结构化（JSON 一行一条，ELK / Loki 直接按字段查）：
+#   设环境变量 LOGGING_STRUCTURED_FORMAT_CONSOLE=logstash（或 ecs），traceId、spanId 是单独的字段
+logging:
+  structured:
+    json:
+      add:
+        app: ${spring.application.name}
 
 server:
   port: ${SERVER_PORT:8088}    # 与 mall-evolution（8080 / 8082 / 8083 / 9000）错开，两个项目可以同时运行

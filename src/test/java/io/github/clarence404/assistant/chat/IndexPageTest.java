@@ -64,6 +64,12 @@ class IndexPageTest extends FakeModelWebTest {
                 // 第 8 章：打开 MCP 工具给的确认链接 /?confirm=<ID>，GET 取卡片，点按钮时不带会话 ID
                 .contains("get('confirm')")
                 .contains("showMcpConfirmation")
-                .contains("fromMcp ? null : conversationId");
+                .contains("fromMcp ? null : conversationId")
+                // 第 9 章：调试面板的 Token 用量（阻塞在 usage 字段、流式在 done 事件里）、响应头里的 traceId、被注入过滤挡下的资料
+                .contains("dbgUsage")
+                .contains("showUsage")
+                .contains("X-Trace-Id")
+                .contains("addBlocked")
+                .contains("'blocked'");
     }
 }

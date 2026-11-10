@@ -1,0 +1,89 @@
+# 第 9 章：mall-assistant 的告警规则示例（Prometheus 规则文件格式）。指标名见 ChatMetrics 的类注释和 docs/ch09.md「监控」一节。
+# 阈值是给本地小模型的示例值，上线前按自己的流量和 SLO 调；告警发到哪里（钉钉、企业微信、邮件）由 Alertmanager 决定，不在这里。
+# 校验：promtool check rules monitoring/prometheus/alerts.yml
+groups:
+  - name: mall-assistant
+    rules:
+      - alert: MallAssistantDown
+        expr: up{job="mall-assistant"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 智能客服实例 {{ $labels.instance }} 抓不到指标
+          description: 进程挂了或网络不通，连续 1 分钟 /actuator/prometheus 没有响应。
+
+      - alert: MallAssistantModelCircuitOpen
+        expr: max by (instance) (assistant_model_circuit_state) == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 模型熔断中（{{ $labels.instance }}）
+          description: 模型服务连续失败，智能客服已停止调用模型：规则类问题降级给原文，其余返回 MODEL_CIRCUIT_OPEN。先看 Ollama / 模型网关是否正常。
+
+      - alert: MallAssistantHighModelErrorRate
+        expr: |
+          sum by (instance) (rate(assistant_chat_requests_total{outcome=~"MODEL_.*"}[5m]))
+            / clamp_min(sum by (instance) (rate(assistant_chat_requests_total[5m])), 1e-9) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 模型错误率超过 20%（{{ $labels.instance }}）
+          description: 5 分钟内超过两成的对话以 MODEL_UNAVAILABLE / MODEL_TIMEOUT / MODEL_CIRCUIT_OPEN 结束。
+
+      - alert: MallAssistantSlowResponses
+        expr: |
+          histogram_quantile(0.95, sum by (le, instance) (rate(assistant_chat_duration_seconds_bucket{endpoint="chat"}[10m]))) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 阻塞接口 p95 超过 30 秒（{{ $labels.instance }}）
+          description: 模型服务排队或变慢；看「正在处理的对话」是否顶到并发上限，以及各意图的耗时。
+
+      - alert: MallAssistantTooBusy
+        expr: sum by (instance) (rate(assistant_guard_rejections_total{reason="TOO_BUSY"}[5m])) * 60 > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 并发名额经常满（{{ $labels.instance }}）
+          description: 每分钟超过 5 个请求因为 TOO_BUSY 被拒，考虑扩容模型服务，或调整 assistant.guard.max-concurrent。
+
+      - alert: MallAssistantRateLimitSpike
+        expr: sum by (instance) (rate(assistant_guard_rejections_total{reason="RATE_LIMITED"}[5m])) * 60 > 30
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: 限流次数激增（{{ $labels.instance }}）
+          description: 可能有脚本在刷接口，去 /actuator/tokens 看是哪个调用方。
+
+      - alert: MallAssistantTokenBurn
+        expr: sum(increase(assistant_model_tokens_total[1h])) > 2000000
+        labels:
+          severity: warning
+        annotations:
+          summary: 一小时消耗超过 200 万 Token
+          description: 按量计费的模型要关注成本；看 /actuator/tokens 里用得最多的调用方与意图。
+
+      - alert: MallAssistantInjectionBlocked
+        expr: sum by (where, rule) (increase(assistant_injection_blocked_total[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: 提示注入过滤挡下了内容（{{ $labels.where }} / {{ $labels.rule }}）
+          description: 知识库文档或外部 MCP 服务的输出里出现了像指令的文字：可能被人改了，也可能是规则误杀，都要人去看日志里的来源文件。
+
+      - alert: MallAssistantRagNoMatchHigh
+        expr: |
+          sum(rate(assistant_rag_retrievals_total{result="NO_MATCH"}[1h]))
+            / clamp_min(sum(rate(assistant_rag_retrievals_total[1h])), 1e-9) > 0.5
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: 一半以上的规则类问题检索不到资料
+          description: 知识库缺内容，或者向量模型 / 相似度门槛变了；把没找到的问题收集起来补文档。

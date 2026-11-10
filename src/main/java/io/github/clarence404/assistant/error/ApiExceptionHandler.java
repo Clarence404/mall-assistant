@@ -1,6 +1,7 @@
 package io.github.clarence404.assistant.error;
 
 import io.github.clarence404.assistant.agent.ConfirmationException;
+import io.github.clarence404.assistant.guard.ChatRejection;
 import io.github.clarence404.assistant.knowledge.KnowledgeException;
 import io.github.clarence404.assistant.knowledge.KnowledgeFailure;
 import io.github.clarence404.assistant.memory.ConversationException;
@@ -30,6 +31,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * <p>第 6 章起还处理会话的 {@link ConversationException}：会话不存在 404、正在回答 409、登录失效 401、商城或记忆库不可用 503。
  *
  * <p>第 7 章起还处理确认接口的 {@link ConfirmationException}：确认不存在或不是你的 404、过期 410、已经做过相反的决定 409。
+ *
+ * <p>第 9 章起还处理对话接口进门时的 {@link ChatRejection}：太频繁、今日额度用完 429，太忙 503，都带 {@code Retry-After}；模型熔断中
+ * （MODEL_CIRCUIT_OPEN）和第 1 章的两类一样是 503。
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -95,6 +99,28 @@ public class ApiExceptionHandler {
         ResponseEntity.BodyBuilder response = ResponseEntity.status(failure.status());
         if (failure.status() == HttpStatus.SERVICE_UNAVAILABLE) {
             response.header(HttpHeaders.RETRY_AFTER, "5");
+        }
+        return response.body(problem);
+    }
+
+    /**
+     * 对话请求在进门时被挡下 → ProblemDetail（第 9 章）：429（太频繁、今日额度用完）或 503（太忙），{@code Retry-After} 是建议的等待秒数
+     * （HTTP 标准头，客户端和网关都认得）。
+     *
+     * @param e 被挡下的原因
+     * @return 对应状态码的响应
+     */
+    @ExceptionHandler(ChatRejection.class)
+    public ResponseEntity<ProblemDetail> handleRejection(ChatRejection e) {
+        ChatRejection.Reason reason = e.reason();
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(reason.status(), reason.message());
+        problem.setTitle(reason.title());
+        problem.setProperty("code", reason.name());
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(reason.status());
+        if (e.retryAfter() != null) {
+            response.header(
+                    HttpHeaders.RETRY_AFTER,
+                    String.valueOf(Math.max(1, e.retryAfter().toSeconds())));
         }
         return response.body(problem);
     }

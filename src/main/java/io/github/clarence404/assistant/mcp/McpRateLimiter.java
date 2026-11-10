@@ -1,12 +1,8 @@
 package io.github.clarence404.assistant.mcp;
 
+import io.github.clarence404.assistant.guard.SlidingWindowLimiter;
 import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;
 
 /**
@@ -27,9 +23,8 @@ public class McpRateLimiter {
     /** 窗口长度。 */
     static final Duration WINDOW = Duration.ofMinutes(1);
 
-    private final McpProperties properties;
-    private final Clock clock;
-    private final Map<String, Deque<Instant>> calls = new ConcurrentHashMap<>();
+    /** 第 9 章：算法抽成了通用的 {@link SlidingWindowLimiter}（对话接口的限流也用它），这里只是填上 MCP 的上限和窗口。 */
+    private final SlidingWindowLimiter limiter;
 
     /**
      * 创建。
@@ -38,14 +33,13 @@ public class McpRateLimiter {
      * @param clock 时钟（测试里拨动它）
      */
     public McpRateLimiter(McpProperties properties, Clock clock) {
-        this.properties = properties;
-        this.clock = clock;
+        this.limiter = new SlidingWindowLimiter(properties::callsPerMinute, WINDOW, clock);
     }
 
     /**
      * 这个调用方现在能不能再调一次；能的话记下这一次（ch08-3）。
      *
-     * <p>要求（测试按这个写）：
+     * <p>第 9 章起委托给 {@link SlidingWindowLimiter#tryAcquire}，下面是第 8 章写它时的要求（测试按这个写）：
      *
      * <ul>
      *   <li>每个 key 一个队列，存最近的调用时间；先从队头扔掉不在窗口里的（时间早于或等于「现在 - 1 分钟」）
@@ -57,18 +51,6 @@ public class McpRateLimiter {
      * @return 放行时为 true
      */
     public boolean tryAcquire(String key) {
-        Instant now = clock.instant();
-        Instant cutoff = now.minus(WINDOW);
-        Deque<Instant> window = calls.computeIfAbsent(key, k -> new ArrayDeque<>());
-        synchronized (window) {
-            while (!window.isEmpty() && !window.peekFirst().isAfter(cutoff)) {
-                window.pollFirst();
-            }
-            if (window.size() >= properties.callsPerMinute()) {
-                return false;
-            }
-            window.addLast(now);
-            return true;
-        }
+        return limiter.tryAcquire(key);
     }
 }

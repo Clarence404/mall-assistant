@@ -1,5 +1,6 @@
 package io.github.clarence404.assistant.memory;
 
+import io.github.clarence404.assistant.ops.UsageAdvisor;
 import io.github.clarence404.assistant.rag.Terms;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -126,6 +127,7 @@ public class QuestionCondenser {
                     .user(u ->
                             u.text(USER_TEMPLATE).param("history", transcript).param("question", message))
                     .options(ChatOptions.builder().temperature(TEMPERATURE))
+                    .advisors(UsageAdvisor.stage("condense")) // 第 9 章：Token 记账时标明这是追问改写
                     .call()
                     .content();
             String condensed = clean(output);

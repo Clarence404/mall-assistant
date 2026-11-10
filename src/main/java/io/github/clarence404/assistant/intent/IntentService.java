@@ -1,6 +1,7 @@
 package io.github.clarence404.assistant.intent;
 
 import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.ops.UsageAdvisor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -124,6 +125,7 @@ public class IntentService {
                     .system(intentPrompt)
                     .user(u -> u.text(template).param("message", message))
                     .options(ChatOptions.builder().temperature(TEMPERATURE).maxTokens(MAX_TOKENS))
+                    .advisors(UsageAdvisor.stage("intent")) // 第 9 章：Token 记账时标明这是意图识别
                     .call()
                     .entity(IntentResult.class, spec -> spec.useProviderStructuredOutput());
         } catch (JacksonException e) {

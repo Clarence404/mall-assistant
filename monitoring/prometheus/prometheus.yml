@@ -1,0 +1,14 @@
+# 第 9 章：最小的 Prometheus 抓取配置示例。本仓库不部署 Prometheus / Grafana，这份配置给已经有监控系统的人参考
+# 启动：prometheus --config.file=monitoring/prometheus/prometheus.yml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+rule_files:
+  - alerts.yml                 # 同目录下的告警规则
+
+scrape_configs:
+  - job_name: mall-assistant
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['localhost:8088']   # 生产上 Actuator 放在单独的管理端口（management.server.port），这里写那个端口

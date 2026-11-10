@@ -41,6 +41,16 @@ jobs:
           else
             ./mvnw -B verify
           fi
+      # 第 9 章：评测门禁。EvalGateTest 在上一步的 verify 里跑：不连模型，回放录下来的 qwen2.5:1.5b 真实输出跑整份评测集
+      # （src/test/resources/eval/），和基线比，退化了 verify 就失败；这里把它的报告贴进运行摘要，提交页面上就能看到这次的通过率
+      - name: 评测门禁报告
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f target/eval/report-replay.md ]; then
+            cat target/eval/report-replay.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "没有评测报告：EvalGateTest 没跑到（编译失败或被跳过）" >> "$GITHUB_STEP_SUMMARY"
+          fi
       # 容器以 root 写入模型文件，改回 runner 用户，actions/cache 才能打包保存
       - name: 修正模型缓存目录属主
         if: ${{ !cancelled() }}

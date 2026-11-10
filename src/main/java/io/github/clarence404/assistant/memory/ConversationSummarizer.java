@@ -1,5 +1,6 @@
 package io.github.clarence404.assistant.memory;
 
+import io.github.clarence404.assistant.ops.UsageAdvisor;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -96,6 +97,7 @@ public class ConversationSummarizer {
                             .param("maxChars", properties.summary().maxChars()))
                     .user(u -> u.text(USER_TEMPLATE).param("dialogue", text))
                     .options(ChatOptions.builder().temperature(TEMPERATURE))
+                    .advisors(UsageAdvisor.stage("summary")) // 第 9 章：Token 记账时标明这是摘要记忆
                     .call()
                     .content();
             String cleaned = summary == null ? "" : summary.strip();

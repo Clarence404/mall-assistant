@@ -4,6 +4,7 @@ import io.github.clarence404.assistant.agent.AgentEvent;
 import io.github.clarence404.assistant.agent.AgentResult;
 import io.github.clarence404.assistant.agent.AgentService;
 import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.guard.GuardProperties;
 import io.github.clarence404.assistant.intent.Intent;
 import io.github.clarence404.assistant.intent.IntentResult;
 import io.github.clarence404.assistant.intent.IntentService;
@@ -11,10 +12,14 @@ import io.github.clarence404.assistant.mcp.client.ExternalMcpTools;
 import io.github.clarence404.assistant.memory.Conversation;
 import io.github.clarence404.assistant.memory.ConversationMemory;
 import io.github.clarence404.assistant.memory.QuestionCondenser;
+import io.github.clarence404.assistant.ops.TurnRecord;
+import io.github.clarence404.assistant.ops.UsageAdvisor;
 import io.github.clarence404.assistant.prompt.AssistantPrompts;
 import io.github.clarence404.assistant.rag.CitationChecker;
 import io.github.clarence404.assistant.rag.RagPlan;
 import io.github.clarence404.assistant.rag.RagService;
+import io.github.clarence404.assistant.rag.RagSource;
+import io.github.clarence404.assistant.rag.RagTrace;
 import io.github.clarence404.assistant.tool.MallTools;
 import io.github.clarence404.assistant.tool.ToolCallRecorder;
 import io.github.clarence404.assistant.tool.ToolInvocation;
@@ -24,6 +29,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ToolContext;
@@ -41,7 +49,7 @@ import tools.jackson.databind.json.JsonMapper;
  * 调用失败统一转成 {@link ModelCallException}。
  *
  * <p>所在层：业务层（第 1 章引入 {@link #reply} / {@link #stream}，第 2 章加上意图识别与拒答，第 3 章加上工具调用，第 5 章加上 RAG，
- * 第 6 章加上多轮对话与记忆，第 7 章加上售后 Agent）。上游是 {@link ChatController}；下游是 {@link IntentService}（识别意图）、{@link AssistantPrompts}（系统提示词与拒答话术）、
+ * 第 6 章加上多轮对话与记忆，第 7 章加上售后 Agent，第 9 章加上 Token 记账与降级）。上游是 {@link ChatController}；下游是 {@link IntentService}（识别意图）、{@link AssistantPrompts}（系统提示词与拒答话术）、
  * {@link MallTools}（查订单、查商品）、{@link RagService}（检索知识库、拼带资料的提示词）、{@link ConversationMemory}（会话历史）、
  * {@link QuestionCondenser}（追问改写）、{@link AgentService}（第 7 章：办售后的事）和 {@link ChatClient}（真正调模型）。
  *
@@ -78,6 +86,11 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * 模型会把系统消息当作优先级更高的指令。把规则放进系统消息而不是拼在用户消息前面，用户就更难用「忽略上面的规则」之类的话改掉人设。
  *
+ * <p>第 9 章：每一轮带着一个 {@link TurnRecord}（由 {@link ChatController} 开好）。阻塞的模型调用在同一个线程上，{@link TurnRecord#bind()}
+ * 一下 Token 记账的 advisor 就找得到它；流式调用在别的线程上推数据，拼请求时用 {@link UsageAdvisor#stage(String, TurnRecord)} 把它放进请求上下文；
+ * Agent 的流式回答在 {@code boundedElastic} 线程上跑，进去之后再绑定一次。RAG 的结果、Agent 的步数也记在里面，这一轮结束时由 Controller 记账、记指标。
+ * 规则类问题调模型失败时（熔断、连不上、超时），检索到的资料还在，降级成直接把原文给用户（{@link #degrade}，ch09-8）。
+ *
  * <p>第 3 章的回答流程（{@link #answerRequest}）：
  *
  * <ol>
@@ -110,6 +123,11 @@ public class ChatService {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
+    private static final Logger log = LoggerFactory.getLogger(ChatService.class);
+
+    /** 第 9 章：降级回答的开头（模型不可用时，规则类问题直接给检索到的原文）。 */
+    static final String DEGRADED_HEAD = "智能客服暂时连不上模型，先把找到的相关规定原文发给你（没有经过整理，以原文为准；需要进一步帮助请稍后再问或联系人工客服）：";
+
     private final ChatClient chatClient;
     private final ChatProperties properties;
     private final AssistantPrompts prompts;
@@ -121,6 +139,7 @@ public class ChatService {
     private final QuestionCondenser condenser;
     private final AgentService agent;
     private final ExternalMcpTools externalTools;
+    private final GuardProperties.Degrade degrade;
 
     /**
      * 创建对话服务（Spring 注入）。
@@ -136,6 +155,7 @@ public class ChatService {
      * @param condenser 追问改写（第 6 章）
      * @param agent 售后 Agent（第 7 章）
      * @param externalTools 外部 MCP 服务的工具（第 8 章，默认没有）：和 {@link MallTools} 的一起注册给模型
+     * @param guard 第 9 章：{@code assistant.guard.*}，这里只用降级的配置
      */
     @Autowired
     public ChatService(
@@ -149,8 +169,10 @@ public class ChatService {
             ConversationMemory memory,
             QuestionCondenser condenser,
             AgentService agent,
-            ExternalMcpTools externalTools) {
+            ExternalMcpTools externalTools,
+            GuardProperties guard) {
         this.chatClient = chatClient;
+        this.degrade = guard == null ? null : guard.degrade();
         this.externalTools = externalTools;
         this.properties = properties;
         this.prompts = prompts;
@@ -161,6 +183,48 @@ public class ChatService {
         this.memory = memory;
         this.condenser = condenser;
         this.agent = agent;
+    }
+
+    /**
+     * 不降级的对话服务（第 8 章的写法，测试手工 new 它）：模型不可用时规则类问题和第 5 章一样抛 {@link ModelCallException}。
+     *
+     * @param chatClient 共享的 ChatClient
+     * @param properties {@code assistant.chat.*}
+     * @param prompts 系统提示词与拒答话术
+     * @param intentService 意图识别
+     * @param mallTools 查订单、查商品的工具
+     * @param toolProperties {@code assistant.tools.*}
+     * @param ragService 检索增强回答
+     * @param memory 会话记忆
+     * @param condenser 追问改写
+     * @param agent 售后 Agent
+     * @param externalTools 外部 MCP 服务的工具
+     */
+    public ChatService(
+            ChatClient chatClient,
+            ChatProperties properties,
+            AssistantPrompts prompts,
+            IntentService intentService,
+            MallTools mallTools,
+            ToolProperties toolProperties,
+            RagService ragService,
+            ConversationMemory memory,
+            QuestionCondenser condenser,
+            AgentService agent,
+            ExternalMcpTools externalTools) {
+        this(
+                chatClient,
+                properties,
+                prompts,
+                intentService,
+                mallTools,
+                toolProperties,
+                ragService,
+                memory,
+                condenser,
+                agent,
+                externalTools,
+                null);
     }
 
     /**
@@ -291,14 +355,31 @@ public class ChatService {
      * @throws io.github.clarence404.assistant.memory.ConversationException 同一个会话的上一条还没回答完（409）
      */
     public ChatReply chat(String message, String conversationId, String mallToken) {
-        ChatTurn turn = begin(message, conversationId, mallToken);
-        try (Conversation conversation = turn.conversation()) {
-            IntentResult intent = turn.intent();
-            ChatReply reply = shouldRefuse(intent)
-                    ? new ChatReply(prompts.refusal(), intent, List.of())
-                    : answer(message, intent, mallToken, conversation);
-            conversation.save(message, reply.reply());
-            return reply.withMemory(conversation.trace());
+        return chat(message, conversationId, mallToken, TurnRecord.detached());
+    }
+
+    /**
+     * 阻塞接口的完整流程，带上这一轮的账本（第 9 章，{@link ChatController} 调这个）：同 {@link #chat(String, String, String)}，整轮都绑定在
+     * 当前线程上，每次模型调用的 Token 记进 {@code record}，返回的回答带上 {@code usage}。
+     *
+     * @param message 用户原文
+     * @param conversationId 会话 ID，可以为 null
+     * @param mallToken 商城访问令牌，可以为 null
+     * @param record 这一轮的账本
+     * @return 回答，带 usage 字段
+     * @throws ModelCallException 模型调用失败（规则类问题开了降级时不抛，给原文）
+     */
+    public ChatReply chat(String message, String conversationId, String mallToken, TurnRecord record) {
+        try (TurnRecord.Binding bound = record.bind()) {
+            ChatTurn turn = begin(message, conversationId, mallToken, record);
+            try (Conversation conversation = turn.conversation()) {
+                IntentResult intent = turn.intent();
+                ChatReply reply = shouldRefuse(intent)
+                        ? new ChatReply(prompts.refusal(), intent, List.of())
+                        : answer(message, intent, mallToken, conversation, record);
+                conversation.save(message, reply.reply());
+                return reply.withMemory(conversation.trace()).withUsage(record.usage());
+            }
         }
     }
 
@@ -316,14 +397,58 @@ public class ChatService {
      * @throws io.github.clarence404.assistant.memory.ConversationException 会话正忙（409）
      */
     public ChatTurn begin(String message, String conversationId, String mallToken) {
-        Conversation conversation = memory == null ? Conversation.none() : memory.open(conversationId, mallToken);
+        return begin(message, conversationId, mallToken, TurnRecord.detached());
+    }
+
+    /**
+     * 一轮对话的开头，带上这一轮的账本（第 9 章）：同 {@link #begin(String, String, String)}；追问改写和意图识别这两次模型调用期间把账本绑定在
+     * 当前线程上，识别出的意图记进账本（Token 按意图汇总、指标按意图分）。
+     *
+     * @param message 用户原文
+     * @param conversationId 会话 ID，可以为 null
+     * @param mallToken 商城访问令牌，可以为 null
+     * @param record 这一轮的账本
+     * @return 这一轮
+     */
+    public ChatTurn begin(String message, String conversationId, String mallToken, TurnRecord record) {
+        try (TurnRecord.Binding bound = record.bind()) {
+            Conversation conversation = memory == null ? Conversation.none() : memory.open(conversationId, mallToken);
+            try {
+                String question = condense(message, conversation);
+                IntentResult intent = conversation.carryOver(classify(question), message);
+                record.intent(intent.intent().name());
+                return new ChatTurn(message, intent, mallToken, conversation, record);
+            } catch (RuntimeException e) {
+                conversation.close();
+                throw e;
+            }
+        }
+    }
+
+    /**
+     * 识别意图；第 9 章：模型不可用时（连不上、超时、熔断中），开了降级就先拿原话去知识库检索一次——检索到了相关规定，就当规则类问题处理
+     * （后面回答这一步同样调不了模型，由 {@link #degrade} 直接给原文）；检索不到就照旧抛出。
+     *
+     * <p>为什么要这一步：模型整个挂掉时，第一个失败的就是意图识别，降级如果只放在「回答」那一步，就永远轮不到它。检索只用向量模型和关键词索引，
+     * 不用对话模型，往往还活着。被当成规则类问题的这一轮，意图的把握记为 0，调试面板里一看就知道是降级来的。
+     *
+     * @param question 用户的问题（有历史时是改写后的）
+     * @return 意图
+     * @throws ModelCallException 模型不可用，而且没开降级或检索不到
+     */
+    private IntentResult classify(String question) {
         try {
-            String question = condense(message, conversation);
-            IntentResult intent = conversation.carryOver(intentService.classify(question), message);
-            return new ChatTurn(message, intent, mallToken, conversation);
-        } catch (RuntimeException e) {
-            conversation.close();
-            throw e;
+            return intentService.classify(question);
+        } catch (ModelCallException e) {
+            IntentResult policy = new IntentResult(Intent.POLICY, 0.0, null, null);
+            if (degrade == null || !degrade.enabled() || !ragService.handles(policy)) {
+                throw e;
+            }
+            if (ragService.plan(question).shortCircuited()) {
+                throw e;
+            }
+            log.warn("意图识别时模型不可用（{}），但知识库里检索到了相关规定：按规则类问题处理，回答时降级给原文", e.failure());
+            return policy;
         }
     }
 
@@ -355,23 +480,34 @@ public class ChatService {
      * @throws ModelCallException 模型调用失败
      */
     ChatReply answer(String message, IntentResult intent, String mallToken, Conversation conversation) {
+        TurnRecord current = TurnRecord.current();
+        return answer(message, intent, mallToken, conversation, current != null ? current : TurnRecord.detached());
+    }
+
+    /** 意图已知时的阻塞回答，带上这一轮的账本（第 9 章）。 */
+    private ChatReply answer(
+            String message, IntentResult intent, String mallToken, Conversation conversation, TurnRecord record) {
         if (agent != null) {
             String guard = agent.chatConfirmationReply(message, mallToken, conversation.conversationId());
             if (guard != null) {
                 return new ChatReply(guard, intent, List.of());
             }
             if (agent.handles(intent, message, mallToken)) {
-                return agentAnswer(message, intent, mallToken, conversation);
+                ChatReply reply = agentAnswer(message, intent, mallToken, conversation);
+                record.agent(
+                        reply.agent().steps().size(), reply.agent().stopReason().name());
+                return reply;
             }
         }
         if (ragService.handles(intent)) {
-            ChatReply reply = ragAnswer(message, intent, conversation);
+            ChatReply reply = ragAnswer(message, intent, conversation, record);
             String hint = agent == null ? null : agent.loginHint(intent, message, mallToken);
             return hint == null ? reply : reply.withReply(reply.reply() + "\n\n" + hint);
         }
         ToolCallRecorder recorder = new ToolCallRecorder();
         try {
             String content = answerRequest(message, intent, mallToken, recorder, conversation.history())
+                    .advisors(UsageAdvisor.stage("answer"))
                     .call()
                     .content();
             List<ToolInvocation> tools = recorder.invocations();
@@ -413,6 +549,7 @@ public class ChatService {
      */
     public Flux<AnswerPart> answerStream(ChatTurn turn) {
         Conversation conversation = turn.conversation();
+        TurnRecord record = turn.record();
         Flux<AnswerPart> parts;
         String guard = agent == null
                 ? null
@@ -426,8 +563,9 @@ public class ChatService {
         } else if (ragService.handles(turn.intent())) {
             String hint = agent == null ? null : agent.loginHint(turn.intent(), turn.message(), turn.mallToken());
             parts = hint == null
-                    ? ragStream(turn.message(), conversation)
-                    : ragStream(turn.message(), conversation).concatWith(Flux.just(new AnswerPart.Text("\n\n" + hint)));
+                    ? ragStream(turn.message(), conversation, record)
+                    : ragStream(turn.message(), conversation, record)
+                            .concatWith(Flux.just(new AnswerPart.Text("\n\n" + hint)));
         } else {
             parts = Flux.concat(memoryPart(conversation), toolStream(turn, conversation));
         }
@@ -437,7 +575,12 @@ public class ChatService {
                         reply.append(text.text());
                     }
                 })
-                .concatWith(Mono.<AnswerPart>fromRunnable(() -> conversation.save(turn.message(), reply.toString()))
+                .concatWith(Mono.<AnswerPart>fromRunnable(() -> {
+                            // 第 9 章：写记忆时可能要做摘要（一次模型调用），在别的线程上，再绑定一次账本
+                            try (TurnRecord.Binding bound = record.bind()) {
+                                conversation.save(turn.message(), reply.toString());
+                            }
+                        })
                         .subscribeOn(Schedulers.boundedElastic()))
                 .doFinally(signal -> conversation.close());
     }
@@ -484,15 +627,22 @@ public class ChatService {
      */
     Flux<AnswerPart> agentStream(ChatTurn turn, Conversation conversation) {
         return Flux.<AnswerPart>create(sink -> {
-                    AgentResult result = agent.run(
-                            turn.message(),
-                            conversation.history(),
-                            turn.mallToken(),
-                            conversation.conversationId(),
-                            event -> sink.next(toPart(event)),
-                            sink::isCancelled);
-                    sink.next(new AnswerPart.Text(result.reply()));
-                    sink.complete();
+                    // 第 9 章：这里已经在 boundedElastic 线程上了，Agent 每一步的模型调用要找得到这一轮的账本，先绑定
+                    try (TurnRecord.Binding bound = turn.record().bind()) {
+                        AgentResult result = agent.run(
+                                turn.message(),
+                                conversation.history(),
+                                turn.mallToken(),
+                                conversation.conversationId(),
+                                event -> sink.next(toPart(event)),
+                                sink::isCancelled);
+                        turn.record()
+                                .agent(
+                                        result.trace().steps().size(),
+                                        result.trace().stopReason().name());
+                        sink.next(new AnswerPart.Text(result.reply()));
+                        sink.complete();
+                    }
                 })
                 .subscribeOn(Schedulers.boundedElastic())
                 .onErrorMap(ModelCallException::from);
@@ -512,6 +662,7 @@ public class ChatService {
                     ToolCallRecorder recorder = new ToolCallRecorder();
                     return answerRequest(
                                     turn.message(), turn.intent(), turn.mallToken(), recorder, conversation.history())
+                            .advisors(UsageAdvisor.stage("answer", turn.record()))
                             .stream()
                             .content()
                             .timeout(properties.streamTimeout())
@@ -551,12 +702,13 @@ public class ChatService {
      * @throws ModelCallException 模型调用失败
      */
     ChatReply ragAnswer(String message, IntentResult intent) {
-        return ragAnswer(message, intent, Conversation.none());
+        return ragAnswer(message, intent, Conversation.none(), TurnRecord.detached());
     }
 
-    private ChatReply ragAnswer(String message, IntentResult intent, Conversation conversation) {
+    private ChatReply ragAnswer(String message, IntentResult intent, Conversation conversation, TurnRecord record) {
         String question = conversation.question(message);
         RagPlan plan = ragService.plan(question);
+        record.rag(ragResult(plan.trace()), plan.trace().blocked().size());
         if (plan.shortCircuited()) {
             return new ChatReply(plan.fallback(), intent, List.of(), List.of(), plan.trace());
         }
@@ -574,8 +726,65 @@ public class ChatService {
                     plan.sources(),
                     plan.trace().withCitations(check));
         } catch (RuntimeException e) {
-            throw ModelCallException.from(e);
+            ModelCallException failure = ModelCallException.from(e);
+            String degraded = degrade(plan, failure);
+            if (degraded == null) {
+                throw failure;
+            }
+            record.rag(RagTrace.MODEL_UNAVAILABLE, plan.trace().blocked().size());
+            return new ChatReply(
+                    degraded,
+                    intent,
+                    List.of(),
+                    plan.sources(),
+                    plan.trace()
+                            .withShortCircuit(
+                                    RagTrace.MODEL_UNAVAILABLE,
+                                    failure.failure().name()));
         }
+    }
+
+    /**
+     * 降级（ch09-8）：规则类问题调模型失败时，检索到的资料还在手里，不如直接把原文给用户，而不是一句「稍后再试」。
+     *
+     * <p>要求（测试按这个写）：
+     *
+     * <ul>
+     *   <li>没开降级（{@code degrade} 为 null，即手工 new 的旧构造器；或 {@code assistant.guard.degrade.enabled=false}）、或者没有资料：返回 null，
+     *       调用方照旧抛出异常（和第 5 章一样）
+     *   <li>否则记一条 warn 日志（错误码），返回 {@link #degradedText}（每段截到 {@code degrade.excerptChars} 字）
+     * </ul>
+     *
+     * <p>为什么只降级规则类问题：查订单、Agent 办事离不开模型理解和组织，硬给一段 JSON 用户看不懂；规则原文本来就是写给人看的，直接给也看得懂。
+     * 这就是降级的思路——<b>功能变少，但不是什么都没有</b>。
+     *
+     * @param plan 检索计划（有资料）
+     * @param failure 模型调用失败
+     * @return 降级回答；不降级时为 null
+     */
+    String degrade(RagPlan plan, ModelCallException failure) {
+        // TODO ch09-8：degrade 为 null、没开（degrade.enabled()）、或者 plan.sources() 为空 → 返回 null；
+        // 否则记一条 warn 日志（failure.failure()），返回 degradedText(plan.sources(), degrade.excerptChars())
+        return null;
+    }
+
+    /**
+     * 降级回答的文字（ch09-8）：{@link #DEGRADED_HEAD}，然后每条资料一段（空一行隔开）：{@code [编号] 标题路径}，换行，正文（{@link RagSource#content()}
+     * 去掉第一行标题路径；超过 {@code excerptChars} 个字截断并加「…」）。编号和 {@code sources} 一致，页面上的引用来源照样对得上。
+     *
+     * @param sources 引用来源
+     * @param excerptChars 每段正文最多多少字
+     * @return 文字
+     */
+    static String degradedText(List<RagSource> sources, int excerptChars) {
+        // TODO ch09-8：DEGRADED_HEAD，然后每条资料：空一行、「[编号] 标题路径」、换行、正文
+        // （content 去掉第一行的标题路径、strip，超过 excerptChars 个字截断加「…」）
+        return DEGRADED_HEAD;
+    }
+
+    /** RAG 结果记进账本的名字：调了模型是 HIT，否则是短路原因。 */
+    private static String ragResult(RagTrace trace) {
+        return trace.shortCircuit() == null ? "HIT" : trace.shortCircuit();
     }
 
     /**
@@ -600,18 +809,51 @@ public class ChatService {
      * @return 记忆情况、引用来源与文字片段的序列
      */
     Flux<AnswerPart> ragStream(String message, Conversation conversation) {
+        return ragStream(message, conversation, TurnRecord.detached());
+    }
+
+    /**
+     * RAG 的流式回答，带上这一轮的账本（第 9 章）：同 {@link #ragStream(String, Conversation)}；模型一个字都还没说就失败了（熔断、连不上）时，
+     * 开了降级就推一段 {@link #degrade} 的原文代替错误（已经推了一半才失败的，只能照旧以错误结束：前半段已经给用户了）。
+     *
+     * @param message 用户原文
+     * @param conversation 会话句柄
+     * @param record 这一轮的账本
+     * @return 记忆情况、引用来源与文字片段的序列
+     */
+    Flux<AnswerPart> ragStream(String message, Conversation conversation, TurnRecord record) {
         return Flux.defer(() -> {
                     String question = conversation.question(message);
                     RagPlan plan = ragService.plan(question);
+                    record.rag(ragResult(plan.trace()), plan.trace().blocked().size());
+                    // 第 9 章：被注入过滤挡下的资料也推给页面（调试面板用红色列出），在引用来源之后、文字之前
+                    Flux<AnswerPart> blocked =
+                            Flux.fromIterable(plan.trace().blocked()).map(AnswerPart.Blocked::new);
                     if (plan.shortCircuited()) {
-                        return Flux.concat(memoryPart(conversation), Flux.just(new AnswerPart.Text(plan.fallback())));
+                        return Flux.concat(
+                                memoryPart(conversation), blocked, Flux.just(new AnswerPart.Text(plan.fallback())));
                     }
                     Flux<AnswerPart> sources = Flux.fromIterable(plan.sources()).map(AnswerPart.Source::new);
-                    Flux<AnswerPart> text = ragService.request(question, plan, conversation.history()).stream()
+                    AtomicBoolean spoke = new AtomicBoolean();
+                    Flux<AnswerPart> text = ragService
+                            .request(question, plan, conversation.history())
+                            .advisors(UsageAdvisor.stage("rag", record))
+                            .stream()
                             .content()
                             .timeout(properties.streamTimeout())
-                            .map(AnswerPart.Text::new);
-                    return Flux.concat(memoryPart(conversation), sources, text);
+                            .doOnNext(t -> spoke.set(true))
+                            .<AnswerPart>map(AnswerPart.Text::new)
+                            .onErrorResume(e -> {
+                                String degraded = spoke.get() ? null : degrade(plan, ModelCallException.from(e));
+                                if (degraded == null) {
+                                    return Flux.error(e);
+                                }
+                                record.rag(
+                                        RagTrace.MODEL_UNAVAILABLE,
+                                        plan.trace().blocked().size());
+                                return Flux.just(new AnswerPart.Text(degraded));
+                            });
+                    return Flux.concat(memoryPart(conversation), sources, blocked, text);
                 })
                 .onErrorMap(ModelCallException::from);
     }
@@ -767,6 +1009,7 @@ public class ChatService {
                     .prompt()
                     .system(prompts::applySystem)
                     .user(message)
+                    .advisors(UsageAdvisor.stage("answer"))
                     .call()
                     .content();
             return Objects.requireNonNullElse(content, "");

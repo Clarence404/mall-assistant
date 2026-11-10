@@ -1,5 +1,7 @@
 package io.github.clarence404.assistant.chat;
 
+import io.github.clarence404.assistant.ops.UsageTrace;
+
 /**
  * 流式接口 {@code POST /api/chat/stream} 推给前端的 SSE 事件，data 都是 JSON。
  *
@@ -16,14 +18,18 @@ package io.github.clarence404.assistant.chat;
  *       不走 Agent 时没有
  *   <li>{@code event: confirm}，data 为 {@code PendingConfirmation}：第 7 章新增，Agent 提出写操作（取消订单、改地址、提交售后）时推一个，
  *       紧跟在提出它的那个 step 之后；页面据此画确认卡片，点按钮调 {@code POST /api/agent/confirmations/{id}}
+ *   <li>{@code event: blocked}，data 为 {@code BlockedSource}：第 9 章新增，RAG 检索到、但被提示注入过滤挡下的资料（没交给模型），在 source 之后、
+ *       文字之前推出，0 到多个；页面调试面板用红色列出
  *   <li>{@code event: token}，data 为 {@link Token}：一段增量文本，前端按顺序拼接
- *   <li>{@code event: done}，data 为 {@link Done}：回答结束，之后连接关闭
+ *   <li>{@code event: done}，data 为 {@link Done}：回答结束，之后连接关闭；第 9 章起 data 里多一个 {@code usage}（这一轮每次模型调用的 Token、合计、
+ *       今日用量与预算），只认 {@code reason} 的旧前端不受影响
  *   <li>{@code event: error}，data 为 {@link Error}：出错，之后连接关闭，不再有 done
  * </ul>
  *
  * <p>顺序：{@code intent → tool* → token* → done | error}（第 3 章起 tool 也可能夹在 token 之间：模型先说了几句再调工具时）；
  * 走 RAG 时是 {@code intent → source* → token* → done | error}（第 5 章，RAG 不用工具）；第 6 章起带了会话 ID 时，intent 之后紧跟一个 memory 事件；
- * 第 7 章走 Agent 时是 {@code intent → memory? → step* → confirm? → token → done | error}（Agent 的回答是整段一个 token）。
+ * 第 7 章走 Agent 时是 {@code intent → memory? → step* → confirm? → token → done | error}（Agent 的回答是整段一个 token）；
+ * 第 9 章起进门就被挡下（限流、太忙、超预算）时只有一个 error，连 intent 都没有。
  *
  * <p>data 用 JSON 而不是纯文本：增量文本里常有换行和前导空格，纯文本 SSE 会把换行拆成多行 data、 把行首空格吃掉。
  *
@@ -40,6 +46,7 @@ public final class StreamEvents {
     public static final String MEMORY = "memory";
     public static final String STEP = "step";
     public static final String CONFIRM = "confirm";
+    public static final String BLOCKED = "blocked";
     public static final String TOKEN = "token";
     public static final String DONE = "done";
     public static final String ERROR = "error";
@@ -57,12 +64,23 @@ public final class StreamEvents {
      * 正常结束。
      *
      * @param reason 结束原因，目前只有 {@code stop}（模型自然说完）
+     * @param usage 第 9 章：这一轮的 Token 用量；没有统计时为 null
      */
-    public record Done(String reason) {
+    public record Done(String reason, UsageTrace usage) {
 
-        /** 模型自然说完。 */
+        /** 模型自然说完（没有用量统计）。 */
         public static Done stop() {
-            return new Done("stop");
+            return new Done("stop", null);
+        }
+
+        /**
+         * 模型自然说完，带上这一轮的用量（第 9 章）。
+         *
+         * @param usage 用量
+         * @return 结束事件的数据
+         */
+        public static Done stop(UsageTrace usage) {
+            return new Done("stop", usage);
         }
     }
 

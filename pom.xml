@@ -129,6 +129,25 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-mcp-client</artifactId>
         </dependency>
+        <!-- 第 9 章：监控。Actuator 提供 /actuator/health、/actuator/prometheus 等端点；Micrometer 的 Prometheus 注册表把指标写成
+             Prometheus 文本格式（Spring AI 自带的 gen_ai.client.* 指标也一起出来）；Brave 桥接给每个请求生成 traceId / spanId 并放进日志的 MDC，
+             不配 exporter，只为日志能按 traceId 串起来（要看调用链再加 Zipkin / OTLP 的 exporter） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-micrometer-tracing-brave</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-brave</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
