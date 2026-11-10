@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ChatTurn.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.chat</a> &gt; <span class="el_source">ChatTurn.java</span></div><h1>ChatTurn.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.chat;
+
+import io.github.clarence404.assistant.intent.IntentResult;
+import io.github.clarence404.assistant.memory.Conversation;
+
+/**
+ * 一轮对话：用户这一句、识别出的意图、商城令牌，以及这一轮的会话句柄（第 6 章引入）。
+ *
+ * &lt;p&gt;所在层：业务层的中间结果。{@link ChatService#begin} 生成（打开会话、识别意图、沿用订单号），流式接口先把 intent 推给页面，
+ * 再交给 {@link ChatService#answerStream(ChatTurn)} 回答；阻塞接口在 {@link ChatService#chat(String, String, String)} 里一口气走完。
+ *
+ * @param message 用户原文
+ * @param intent 意图（可能补上了从历史沿用的订单号 / SKU）
+ * @param mallToken 商城令牌，可以为 null；只在工具里用，不进任何发给模型的文字，也不进记忆
+ * @param conversation 会话句柄；单轮时是 {@link Conversation#none()}
+ */
+<span class="fc" id="L17">public record ChatTurn(String message, IntentResult intent, String mallToken, Conversation conversation) {}</span>
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

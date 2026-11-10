@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>HistoryWindow.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.memory</a> &gt; <span class="el_source">HistoryWindow.java</span></div><h1>HistoryWindow.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.memory;
+
+import java.util.ArrayList;
+import java.util.List;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.MessageType;
+
+/**
+ * 提示词窗口：从记忆里取出「这一轮要带给模型的历史」——最近几轮、总字数在预算以内，超出时从最早的一轮开始丢（第 6 章引入）。
+ *
+ * &lt;p&gt;所在层：业务层的纯函数（不调模型、不碰存储），{@link ConversationMemory#open} 打开会话时调用一次。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么要裁&lt;/b&gt;：模型本身没有记忆，每次请求都是独立的；所谓「记得上文」，是我们每次都把历史消息一起发过去。历史越积越长，提示词就越长：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;上下文窗口（模型一次能读的 token 数）有上限，qwen2.5 是 32K，超过就报错或被截断
+ *   &lt;li&gt;输入越长越慢、越贵（按 token 计费的接口），本地 CPU 上的小模型尤其明显
+ *   &lt;li&gt;小模型「注意力」有限，前面聊过的无关话题会把它带偏；「迷失在中间」：太长的上下文里，中间部分最容易被忽略
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;&lt;b&gt;两道限制&lt;/b&gt;：先按轮数（{@code windowTurns}），再按字数（{@code budgetChars}）。只按轮数不够——一轮可能是一句「谢谢」，也可能是
+ * 五百字的长回答；只按字数又可能带上十几轮零碎的寒暄。字数是 token 的粗略估算：中文大致一两个字一个 token，精确计数要用模型自己的分词器。
+ *
+ * &lt;p&gt;&lt;b&gt;按「轮」丢，不按「条」丢&lt;/b&gt;：只丢一轮里的用户消息、留下助手的回答，模型会看到一句没头没尾的回答；所以一问一答总是一起保留、一起丢。
+ * Spring AI 的 {@code MessageWindowChatMemory} 在存储层裁剪时也是这个思路（切点往后挪到下一条用户消息）。
+ *
+ * &lt;p&gt;系统提示词不在这里面：它不进记忆，每次请求时现渲染，&lt;b&gt;永远保留&lt;/b&gt;，不参与裁剪。
+ */
+public final class HistoryWindow {
+
+    private HistoryWindow() {}
+
+    /**
+     * 裁剪结果。
+     *
+     * @param summary 会话里的早期对话摘要（开了摘要记忆才有），没有时为 null；不参与轮数和字数的裁剪（它自己有长度上限）
+     * @param messages 带给模型的历史消息，按时间从早到晚，一问一答成对
+     * @param keptTurns 带了几轮
+     * @param droppedTurns 因为轮数或字数限制丢掉了几轮（存储里还在，只是这一轮不发给模型）
+     * @param chars 带上的历史一共多少个字
+     */
+    public record Window(String summary, List&lt;Message&gt; messages, int keptTurns, int droppedTurns, int chars) {
+
+        /** 空窗口：新会话或者没有会话。 */
+<span class="fc" id="L45">        public static final Window EMPTY = new Window(null, List.of(), 0, 0, 0);</span>
+
+        /** 防御性复制。 */
+<span class="fc" id="L48">        public Window {</span>
+<span class="fc" id="L49">            messages = List.copyOf(messages);</span>
+<span class="fc" id="L50">        }</span>
+    }
+
+    /**
+     * 按轮数和字数裁剪历史。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ol&gt;
+     *   &lt;li&gt;系统消息（{@link MemoryMessages#isSummary}）是摘要：取最后一条的文字放进 {@code summary}，不算轮数、不算字数
+     *   &lt;li&gt;其余消息按「轮」分组（{@link #turns}）：每条用户消息开始新的一轮，后面的助手消息归进这一轮
+     *   &lt;li&gt;只留最后 {@code maxTurns} 轮
+     *   &lt;li&gt;再从最早的一轮开始丢，直到剩下的总字数（每条消息文字的长度之和）不超过 {@code budgetChars}；最近的一轮本身就超预算时，也丢掉（一轮都不带）
+     *   &lt;li&gt;{@code droppedTurns} = 总轮数 − 留下的轮数；{@code chars} = 留下的总字数
+     * &lt;/ol&gt;
+     *
+     * @param stored 记忆里的全部消息，按时间从早到晚
+     * @param maxTurns 最多带几轮，0 表示不带历史
+     * @param budgetChars 历史最多多少个字
+     * @return 裁剪结果
+     */
+    public static Window trim(List&lt;Message&gt; stored, int maxTurns, int budgetChars) {
+<span class="fc" id="L72">        String summary = null;</span>
+<span class="fc" id="L73">        List&lt;Message&gt; dialogue = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L74" title="All 2 branches covered.">        for (Message message : stored) {</span>
+<span class="fc bfc" id="L75" title="All 2 branches covered.">            if (MemoryMessages.isSummary(message)) {</span>
+<span class="fc" id="L76">                summary = MemoryMessages.text(message);</span>
+            } else {
+<span class="fc" id="L78">                dialogue.add(message);</span>
+            }
+<span class="fc" id="L80">        }</span>
+<span class="fc" id="L81">        List&lt;List&lt;Message&gt;&gt; turns = turns(dialogue);</span>
+<span class="fc" id="L82">        int from = Math.max(0, turns.size() - maxTurns);</span>
+<span class="fc" id="L83">        int chars = 0;</span>
+<span class="fc bfc" id="L84" title="All 2 branches covered.">        for (int i = from; i &lt; turns.size(); i++) {</span>
+<span class="fc" id="L85">            chars += chars(turns.get(i));</span>
+        }
+<span class="fc bfc" id="L87" title="All 4 branches covered.">        while (from &lt; turns.size() &amp;&amp; chars &gt; budgetChars) {</span>
+<span class="fc" id="L88">            chars -= chars(turns.get(from));</span>
+<span class="fc" id="L89">            from++;</span>
+        }
+<span class="fc" id="L91">        List&lt;Message&gt; kept = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L92">        turns.subList(from, turns.size()).forEach(kept::addAll);</span>
+<span class="fc" id="L93">        return new Window(summary, kept, turns.size() - from, from, chars);</span>
+    }
+
+    /**
+     * 把消息按「轮」分组：遇到用户消息就开始新的一轮，其余消息（助手的回答）归进当前这一轮；开头如果是助手消息（没有对应的提问），自成一轮。
+     *
+     * @param messages 不含摘要的消息，按时间从早到晚
+     * @return 每一轮的消息
+     */
+    public static List&lt;List&lt;Message&gt;&gt; turns(List&lt;Message&gt; messages) {
+<span class="fc" id="L103">        List&lt;List&lt;Message&gt;&gt; turns = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L104" title="All 2 branches covered.">        for (Message message : messages) {</span>
+<span class="fc bfc" id="L105" title="All 4 branches covered.">            if (message.getMessageType() == MessageType.USER || turns.isEmpty()) {</span>
+<span class="fc" id="L106">                turns.add(new ArrayList&lt;&gt;());</span>
+            }
+<span class="fc" id="L108">            turns.getLast().add(message);</span>
+<span class="fc" id="L109">        }</span>
+<span class="fc" id="L110">        return turns;</span>
+    }
+
+    /** 一轮的总字数。 */
+    static int chars(List&lt;Message&gt; turn) {
+<span class="fc" id="L115">        return turn.stream().mapToInt(m -&gt; MemoryMessages.text(m).length()).sum();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MemoryTrace.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.memory</a> &gt; <span class="el_source">MemoryTrace.java</span></div><h1>MemoryTrace.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.memory;
+
+/**
+ * 一轮对话的记忆调试信息：带了几轮历史、裁掉几轮、追问改写成了什么、沿用了哪个订单号（第 6 章引入）。
+ *
+ * &lt;p&gt;所在层：接口层的数据。{@link Conversation#trace()} 生成；阻塞接口放在响应的 {@code memory} 字段（请求没带会话 ID 时为 null），
+ * 流式接口作为 {@code memory} 事件在回答文字之前推出；页面调试面板「记忆」一栏显示。
+ *
+ * @param conversationId 页面传来的会话 ID
+ * @param store 记忆库类型：{@code memory} 或 {@code jdbc}
+ * @param active 这一轮是否用上了记忆（读了历史、回答完会写回去）；降级成单轮时为 false，原因见 warning
+ * @param historyTurns 带给模型几轮历史
+ * @param droppedTurns 因为轮数窗口或字数预算没带上的轮数（还在存储里，只是这一轮不发给模型）
+ * @param historyChars 带上的历史一共多少个字
+ * @param summarized 是否带了早期对话的摘要（摘要记忆开着、而且已经压缩过）
+ * @param expired 会话是否因为空闲太久过期了（这一轮当作新会话，旧历史已清空）
+ * @param condensedQuestion 追问改写后的问题（只有走 RAG、有历史、改写成功时才有），检索用的是它
+ * @param carriedOrderNo 这一句没提订单号、从历史里沿用的订单号
+ * @param carriedSkuId 这一句没提 SKU、从历史里沿用的 SKU
+ * @param warning 给人看的说明：为什么降级成单轮（登录失效、商城不可用、记忆库不可用），没有时为 null
+ */
+<span class="fc" id="L22">public record MemoryTrace(</span>
+        String conversationId,
+        String store,
+        boolean active,
+        int historyTurns,
+        int droppedTurns,
+        int historyChars,
+        boolean summarized,
+        boolean expired,
+        String condensedQuestion,
+        String carriedOrderNo,
+        String carriedSkuId,
+        String warning) {}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

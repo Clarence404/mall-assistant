@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>McpResults.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.mcp</a> &gt; <span class="el_source">McpResults.java</span></div><h1>McpResults.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.mcp;
+
+import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * 把工具的返回值做成 MCP 的工具结果：转 JSON、超长截断、出错时标 {@code isError}（第 8 章引入）。
+ *
+ * &lt;p&gt;所在层：MCP 的输出。{@link MallMcpTools} 的每个工具方法都返回 {@link CallToolResult}，而不是让 Spring AI 自动把返回值转 JSON：
+ * 自动转换不截断；出异常时还会把异常信息和根因原样拼进结果（见 {@link McpRejection}），我们要自己掌控「对面能看到什么」。
+ *
+ * &lt;p&gt;结果用 {@code text} 内容放 JSON 字符串：MCP 客户端几乎都把 text 原样交给模型，模型读 JSON 没有问题；结构化输出（{@code structuredContent}
+ * + 输出 Schema）是 2025-06 版协议才加的，很多客户端还不认。
+ */
+public final class McpResults {
+
+<span class="fc" id="L17">    private static final JsonMapper JSON = JsonMapper.builder().build();</span>
+
+    /** 截断时追加的说明：让对面的模型知道后面还有，别当成完整的结果。 */
+    public static final String TRUNCATED = &quot;…（结果太长，已截断）&quot;;
+
+    private McpResults() {}
+
+    /**
+     * 成功的结果：值转成 JSON，超过 {@code maxChars} 截断。
+     *
+     * @param value 返回值（record）
+     * @param maxChars 最多多少字
+     * @return 工具结果
+     */
+    public static CallToolResult ok(Object value, int maxChars) {
+<span class="nc bnc" id="L32" title="All 2 branches missed.">        String json = value instanceof String s ? s : JSON.writeValueAsString(value);</span>
+<span class="nc" id="L33">        return CallToolResult.builder()</span>
+<span class="nc" id="L34">                .addTextContent(limit(json, maxChars))</span>
+<span class="nc" id="L35">                .isError(false)</span>
+<span class="nc" id="L36">                .build();</span>
+    }
+
+    /**
+     * 失败的结果（{@code isError=true}）：没登录、太频繁、参数不对等，消息是固定话术。
+     *
+     * @param message 给对面模型看的原因
+     * @return 工具结果
+     */
+    public static CallToolResult error(String message) {
+<span class="fc" id="L46">        return CallToolResult.builder().addTextContent(message).isError(true).build();</span>
+    }
+
+    /**
+     * 超长截断。
+     *
+     * @param text 原文
+     * @param maxChars 最多多少字
+     * @return 不超过 {@code maxChars + 截断说明} 的文字
+     */
+    public static String limit(String text, int maxChars) {
+<span class="nc bnc" id="L57" title="All 2 branches missed.">        return text.length() &lt;= maxChars ? text : text.substring(0, maxChars) + TRUNCATED;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

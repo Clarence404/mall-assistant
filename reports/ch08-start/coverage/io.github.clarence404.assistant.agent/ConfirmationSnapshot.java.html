@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ConfirmationSnapshot.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">ConfirmationSnapshot.java</span></div><h1>ConfirmationSnapshot.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+/**
+ * 一个待确认操作此刻的样子：卡片内容 + 现在的状态（第 8 章引入）。
+ *
+ * &lt;p&gt;所在层：接口层的数据。{@link ConfirmationService#snapshot} 生成；两个地方用它：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;{@code GET /api/agent/confirmations/{id}}：用户打开 MCP 工具给的确认链接（{@code /?confirm=&lt;ID&gt;}）时，页面拿它画确认卡片
+ *   &lt;li&gt;MCP 工具 {@code getConfirmation}：对面的模型查「用户点了没有、结果是什么」
+ * &lt;/ul&gt;
+ *
+ * @param confirmation 卡片内容（说明、影响、过期时间），和第 7 章推给页面的是同一个对象
+ * @param state {@link State}
+ * @param message 结果说明：执行了 / 没执行的固定话术（和第 7 章确认接口返回的一字不差）；还没决定时是一句提示
+ */
+<span class="nc" id="L17">public record ConfirmationSnapshot(PendingConfirmation confirmation, State state, String message) {</span>
+
+    /** 待确认操作的状态。 */
+<span class="nc" id="L20">    public enum State {</span>
+        /** 还没点，没过期：等用户确认。 */
+<span class="nc" id="L22">        PENDING,</span>
+        /** 点了确认，执行成功。 */
+<span class="nc" id="L24">        EXECUTED,</span>
+        /** 点了确认，但执行失败（商城拒绝、不可用等），什么都没改。 */
+<span class="nc" id="L26">        FAILED,</span>
+        /** 点了取消，没有执行。 */
+<span class="nc" id="L28">        REJECTED,</span>
+        /** 过期了也没点，没有执行。 */
+<span class="nc" id="L30">        EXPIRED</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

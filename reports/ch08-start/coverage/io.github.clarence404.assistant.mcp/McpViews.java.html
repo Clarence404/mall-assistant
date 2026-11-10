@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>McpViews.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.mcp</a> &gt; <span class="el_source">McpViews.java</span></div><h1>McpViews.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.mcp;
+
+import java.time.Instant;
+import java.util.List;
+
+/**
+ * MCP 工具返回给对面模型的数据：每个工具一个 record，转成 JSON 放进工具结果（第 8 章引入）。
+ *
+ * &lt;p&gt;所在层：MCP 的输出模型。由 {@link McpMallService} 生成，{@link McpResults#ok} 转 JSON。
+ *
+ * &lt;p&gt;和第 7 章 Agent 的「观察」（{@code agent.Observations}）很像，但是给&lt;b&gt;别人的模型&lt;/b&gt;看的，有几处不同：不提 {@code finish} 这类只有我们循环里才有的动作；
+ * 能办的操作写成 MCP 工具名（{@code proposeCancelOrder}）；每个结果都带一句 {@code note}，告诉对面「下一步该做什么、什么不要做」——
+ * 第 7 章的经验，写在结果里的提示比写在说明里的更管用。手机号照样打码：对面是谁的模型、日志存在哪，我们都不知道，个人信息给得越少越好。
+ */
+public final class McpViews {
+
+    private McpViews() {}
+
+    /**
+     * 一笔订单。
+     *
+     * @param found 是否查到
+     * @param reason 没查到的原因
+     * @param orderNo 订单号
+     * @param status 中文状态
+     * @param statusCode 商城的状态枚举名
+     * @param payAmount 实付金额（元）
+     * @param items 商品摘要
+     * @param receiver 收货信息（手机号打码）
+     * @param createdAt 下单时间
+     * @param allowedProposals 这笔现在能提出的写操作（MCP 工具名），由代码按状态算好
+     * @param note 下一步提示
+     */
+<span class="fc" id="L34">    public record Order(</span>
+            boolean found,
+            String reason,
+            String orderNo,
+            String status,
+            String statusCode,
+            String payAmount,
+            String items,
+            String receiver,
+            String createdAt,
+            List&lt;String&gt; allowedProposals,
+            String note) {
+
+        static Order notFound(String orderNo, String reason) {
+<span class="fc" id="L48">            return new Order(false, reason, orderNo, null, null, null, null, null, null, List.of(), null);</span>
+        }
+    }
+
+    /**
+     * 我最近的订单。
+     *
+     * @param found 是否查成
+     * @param reason 没查成的原因
+     * @param orders 订单（最多 {@link McpMallService#LIST_SIZE} 笔）
+     * @param note 下一步提示
+     */
+<span class="fc" id="L60">    public record OrderList(boolean found, String reason, List&lt;Brief&gt; orders, String note) {</span>
+
+        /**
+         * 列表里的一笔。
+         *
+         * @param orderNo 订单号
+         * @param status 中文状态
+         * @param statusCode 状态枚举名
+         * @param payAmount 实付金额
+         * @param createdAt 下单时间
+         * @param allowedProposals 能提出的写操作
+         */
+<span class="nc" id="L72">        public record Brief(</span>
+                String orderNo,
+                String status,
+                String statusCode,
+                String payAmount,
+                String createdAt,
+                List&lt;String&gt; allowedProposals) {}
+    }
+
+    /**
+     * 知识库检索结果。
+     *
+     * @param found 是否找到
+     * @param reason 没找到的原因
+     * @param snippets 资料片段（按相关度）
+     * @param note 资料只是数据的说明
+     */
+<span class="fc" id="L89">    public record Knowledge(boolean found, String reason, List&lt;Snippet&gt; snippets, String note) {</span>
+
+        /**
+         * 一段资料。
+         *
+         * @param index 编号，从 1 开始（对面回答时可以标 [1]）
+         * @param title 文档标题
+         * @param headingPath 标题路径，如「退换货 &gt; 七天无理由退货」
+         * @param source 来源文件，如 returns.md；同名的 MCP 资源是 {@code mall://knowledge/returns.md}
+         * @param text 正文（截短）
+         */
+<span class="nc" id="L100">        public record Snippet(int index, String title, String headingPath, String source, String text) {}</span>
+    }
+
+    /**
+     * 写操作的提议结果：要么生成了一个待确认操作（带确认 ID 和链接），要么被拦下（带原因）。
+     *
+     * @param proposed 是否生成了待确认操作
+     * @param executed 是否已经执行：MCP 工具&lt;b&gt;永远是 false&lt;/b&gt;，执行只能由用户在页面上点确认
+     * @param reason 被拦下的原因
+     * @param confirmationId 确认 ID
+     * @param confirmUrl 确认链接：用户打开它、登录同一个账号、点「确认」才会执行
+     * @param summary 要做的事（代码按实际参数写的，和页面卡片上一字不差）
+     * @param impact 执行后会怎样
+     * @param expiresAt 过期时间
+     * @param note 给对面模型的说明
+     */
+<span class="fc" id="L116">    public record Proposal(</span>
+            boolean proposed,
+            boolean executed,
+            String reason,
+            String confirmationId,
+            String confirmUrl,
+            String summary,
+            String impact,
+            Instant expiresAt,
+            String note) {
+
+        static Proposal rejected(String reason) {
+<span class="fc" id="L128">            return new Proposal(false, false, reason, null, null, null, null, null, null);</span>
+        }
+    }
+
+    /**
+     * 一个待确认操作现在的状态（对面的模型用 getConfirmation 查「用户点了没有」）。
+     *
+     * @param confirmationId 确认 ID
+     * @param state PENDING（等用户点）、EXECUTED、FAILED、REJECTED（用户点了取消）、EXPIRED（过期没点）
+     * @param summary 要做的事
+     * @param message 结果说明（执行了 / 没执行的固定话术）；还没决定时是提示
+     * @param expiresAt 过期时间
+     */
+<span class="nc" id="L141">    public record ConfirmationState(</span>
+            String confirmationId, String state, String summary, String message, Instant expiresAt) {}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
