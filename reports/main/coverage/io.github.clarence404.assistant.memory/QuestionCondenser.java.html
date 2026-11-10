@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>QuestionCondenser.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.memory</a> &gt; <span class="el_source">QuestionCondenser.java</span></div><h1>QuestionCondenser.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.memory;
 
+import io.github.clarence404.assistant.ops.UsageAdvisor;
 import io.github.clarence404.assistant.rag.Terms;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -46,7 +47,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class QuestionCondenser {
 
-<span class="fc" id="L49">    private static final Logger log = LoggerFactory.getLogger(QuestionCondenser.class);</span>
+<span class="fc" id="L50">    private static final Logger log = LoggerFactory.getLogger(QuestionCondenser.class);</span>
 
     /** 改写和意图识别一样要稳定：温度 0。 */
     static final double TEMPERATURE = 0.0;
@@ -64,10 +65,10 @@ public class QuestionCondenser {
             改写后的问题：&quot;&quot;&quot;;
 
     /** 示例里的历史、最新一句和改写结果：放在系统消息之后，一组是一问一答两条消息。话题故意和商城规则无关，见类注释。 */
-<span class="fc" id="L67">    static final List&lt;List&lt;String&gt;&gt; EXAMPLES = List.of(</span>
-<span class="fc" id="L68">            List.of(&quot;用户：会员等级怎么划分\n助手：按近 12 个月的消费金额分为普通、银卡、金卡三级。&quot;, &quot;那怎么升级&quot;, &quot;会员等级怎么升级&quot;),</span>
-<span class="fc" id="L69">            List.of(&quot;用户：订单 1849203385720832512 发货了吗\n助手：这笔订单已发货。&quot;, &quot;它是哪家快递&quot;, &quot;订单 1849203385720832512 是哪家快递&quot;),</span>
-<span class="fc" id="L70">            List.of(&quot;用户：会员等级怎么划分\n助手：按近 12 个月的消费金额分为三级。&quot;, &quot;谢谢&quot;, &quot;谢谢&quot;));</span>
+<span class="fc" id="L68">    static final List&lt;List&lt;String&gt;&gt; EXAMPLES = List.of(</span>
+<span class="fc" id="L69">            List.of(&quot;用户：会员等级怎么划分\n助手：按近 12 个月的消费金额分为普通、银卡、金卡三级。&quot;, &quot;那怎么升级&quot;, &quot;会员等级怎么升级&quot;),</span>
+<span class="fc" id="L70">            List.of(&quot;用户：订单 1849203385720832512 发货了吗\n助手：这笔订单已发货。&quot;, &quot;它是哪家快递&quot;, &quot;订单 1849203385720832512 是哪家快递&quot;),</span>
+<span class="fc" id="L71">            List.of(&quot;用户：会员等级怎么划分\n助手：按近 12 个月的消费金额分为三级。&quot;, &quot;谢谢&quot;, &quot;谢谢&quot;));</span>
 
     /** 原话里的关键词至少有这么大比例出现在改写结果里，才算没改跑题。 */
     static final double MIN_TERM_COVERAGE = 0.6;
@@ -76,13 +77,13 @@ public class QuestionCondenser {
     static final int MESSAGE_PREVIEW_CHARS = 200;
 
     /** 小模型有时会在结果前面加上「改写后的问题：」之类的前缀，或者用引号括起来。 */
-<span class="fc" id="L79">    private static final Pattern LABEL = Pattern.compile(&quot;^(?:改写后的问题|改写后|问题|最新一句)\\s*[:：]\\s*&quot;);</span>
+<span class="fc" id="L80">    private static final Pattern LABEL = Pattern.compile(&quot;^(?:改写后的问题|改写后|问题|最新一句)\\s*[:：]\\s*&quot;);</span>
 
-<span class="fc" id="L81">    private static final Pattern QUOTES = Pattern.compile(&quot;^[「“\&quot;'『]+|[」”\&quot;'』]+$&quot;);</span>
+<span class="fc" id="L82">    private static final Pattern QUOTES = Pattern.compile(&quot;^[「“\&quot;'『]+|[」”\&quot;'』]+$&quot;);</span>
 
     private final ChatClient chatClient;
     private final MemoryProperties properties;
-<span class="fc" id="L85">    private final Resource systemPrompt = new ClassPathResource(&quot;prompts/memory-condense.st&quot;);</span>
+<span class="fc" id="L86">    private final Resource systemPrompt = new ClassPathResource(&quot;prompts/memory-condense.st&quot;);</span>
 
     /**
      * 创建。
@@ -90,10 +91,10 @@ public class QuestionCondenser {
      * @param chatClient 共享的 ChatClient
      * @param properties {@code assistant.memory.*}（开关、看几轮、结果最长多少字）
      */
-<span class="fc" id="L93">    public QuestionCondenser(ChatClient chatClient, MemoryProperties properties) {</span>
-<span class="fc" id="L94">        this.chatClient = chatClient;</span>
-<span class="fc" id="L95">        this.properties = properties;</span>
-<span class="fc" id="L96">    }</span>
+<span class="fc" id="L94">    public QuestionCondenser(ChatClient chatClient, MemoryProperties properties) {</span>
+<span class="fc" id="L95">        this.chatClient = chatClient;</span>
+<span class="fc" id="L96">        this.properties = properties;</span>
+<span class="fc" id="L97">    }</span>
 
     /**
      * 把追问改写成独立问题。
@@ -114,36 +115,37 @@ public class QuestionCondenser {
      * @return 改写后的问题；没改写时为 null（调用方就用原话）
      */
     public String condense(String message, List&lt;Message&gt; history) {
-<span class="fc bfc" id="L117" title="All 4 branches covered.">        if (!properties.condense().enabled() || history.isEmpty()) {</span>
-<span class="fc" id="L118">            return null;</span>
+<span class="fc bfc" id="L118" title="All 4 branches covered.">        if (!properties.condense().enabled() || history.isEmpty()) {</span>
+<span class="fc" id="L119">            return null;</span>
         }
-<span class="fc" id="L120">        String transcript = transcript(history, properties.condense().historyTurns());</span>
+<span class="fc" id="L121">        String transcript = transcript(history, properties.condense().historyTurns());</span>
         try {
-<span class="fc" id="L122">            String output = chatClient</span>
-<span class="fc" id="L123">                    .prompt()</span>
-<span class="fc" id="L124">                    .system(systemPrompt)</span>
-<span class="fc" id="L125">                    .messages(examples())</span>
-<span class="fc" id="L126">                    .user(u -&gt;</span>
-<span class="fc" id="L127">                            u.text(USER_TEMPLATE).param(&quot;history&quot;, transcript).param(&quot;question&quot;, message))</span>
-<span class="fc" id="L128">                    .options(ChatOptions.builder().temperature(TEMPERATURE))</span>
-<span class="fc" id="L129">                    .call()</span>
-<span class="fc" id="L130">                    .content();</span>
-<span class="fc" id="L131">            String condensed = clean(output);</span>
-<span class="fc bfc" id="L132" title="All 2 branches covered.">            if (condensed.isEmpty()</span>
-<span class="fc bfc" id="L133" title="All 2 branches covered.">                    || condensed.length() &gt; properties.condense().maxChars()</span>
-<span class="fc bfc" id="L134" title="All 2 branches covered.">                    || condensed.equals(message.strip())) {</span>
-<span class="fc" id="L135">                log.info(&quot;追问改写「{}」→「{}」：没有改写或结果太长，用原话&quot;, message, condensed);</span>
-<span class="fc" id="L136">                return null;</span>
+<span class="fc" id="L123">            String output = chatClient</span>
+<span class="fc" id="L124">                    .prompt()</span>
+<span class="fc" id="L125">                    .system(systemPrompt)</span>
+<span class="fc" id="L126">                    .messages(examples())</span>
+<span class="fc" id="L127">                    .user(u -&gt;</span>
+<span class="fc" id="L128">                            u.text(USER_TEMPLATE).param(&quot;history&quot;, transcript).param(&quot;question&quot;, message))</span>
+<span class="fc" id="L129">                    .options(ChatOptions.builder().temperature(TEMPERATURE))</span>
+<span class="fc" id="L130">                    .advisors(UsageAdvisor.stage(&quot;condense&quot;)) // 第 9 章：Token 记账时标明这是追问改写</span>
+<span class="fc" id="L131">                    .call()</span>
+<span class="fc" id="L132">                    .content();</span>
+<span class="fc" id="L133">            String condensed = clean(output);</span>
+<span class="fc bfc" id="L134" title="All 2 branches covered.">            if (condensed.isEmpty()</span>
+<span class="fc bfc" id="L135" title="All 2 branches covered.">                    || condensed.length() &gt; properties.condense().maxChars()</span>
+<span class="fc bfc" id="L136" title="All 2 branches covered.">                    || condensed.equals(message.strip())) {</span>
+<span class="fc" id="L137">                log.info(&quot;追问改写「{}」→「{}」：没有改写或结果太长，用原话&quot;, message, condensed);</span>
+<span class="fc" id="L138">                return null;</span>
             }
-<span class="fc bfc" id="L138" title="All 2 branches covered.">            if (!plausible(message, condensed)) {</span>
-<span class="fc" id="L139">                log.info(&quot;追问改写「{}」→「{}」：丢了原话里的关键词（改跑题了），用原话&quot;, message, condensed);</span>
-<span class="fc" id="L140">                return null;</span>
+<span class="fc bfc" id="L140" title="All 2 branches covered.">            if (!plausible(message, condensed)) {</span>
+<span class="fc" id="L141">                log.info(&quot;追问改写「{}」→「{}」：丢了原话里的关键词（改跑题了），用原话&quot;, message, condensed);</span>
+<span class="fc" id="L142">                return null;</span>
             }
-<span class="fc" id="L142">            log.info(&quot;追问改写「{}」→「{}」&quot;, message, condensed);</span>
-<span class="fc" id="L143">            return condensed;</span>
-<span class="fc" id="L144">        } catch (RuntimeException e) {</span>
-<span class="fc" id="L145">            log.warn(&quot;追问改写失败，用原话：{}&quot;, e.toString());</span>
-<span class="fc" id="L146">            return null;</span>
+<span class="fc" id="L144">            log.info(&quot;追问改写「{}」→「{}」&quot;, message, condensed);</span>
+<span class="fc" id="L145">            return condensed;</span>
+<span class="fc" id="L146">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L147">            log.warn(&quot;追问改写失败，用原话：{}&quot;, e.toString());</span>
+<span class="fc" id="L148">            return null;</span>
         }
     }
 
@@ -153,13 +155,13 @@ public class QuestionCondenser {
      * @return 示例消息，按顺序
      */
     static List&lt;Message&gt; examples() {
-<span class="fc" id="L156">        List&lt;Message&gt; messages = new ArrayList&lt;&gt;();</span>
-<span class="fc bfc" id="L157" title="All 2 branches covered.">        for (List&lt;String&gt; example : EXAMPLES) {</span>
-<span class="fc" id="L158">            messages.add(new UserMessage(</span>
-<span class="fc" id="L159">                    USER_TEMPLATE.replace(&quot;{history}&quot;, example.get(0)).replace(&quot;{question}&quot;, example.get(1))));</span>
-<span class="fc" id="L160">            messages.add(new AssistantMessage(example.get(2)));</span>
-<span class="fc" id="L161">        }</span>
-<span class="fc" id="L162">        return messages;</span>
+<span class="fc" id="L158">        List&lt;Message&gt; messages = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L159" title="All 2 branches covered.">        for (List&lt;String&gt; example : EXAMPLES) {</span>
+<span class="fc" id="L160">            messages.add(new UserMessage(</span>
+<span class="fc" id="L161">                    USER_TEMPLATE.replace(&quot;{history}&quot;, example.get(0)).replace(&quot;{question}&quot;, example.get(1))));</span>
+<span class="fc" id="L162">            messages.add(new AssistantMessage(example.get(2)));</span>
+<span class="fc" id="L163">        }</span>
+<span class="fc" id="L164">        return messages;</span>
     }
 
     /**
@@ -172,18 +174,18 @@ public class QuestionCondenser {
      * @return 可信时为 true
      */
     static boolean plausible(String original, String condensed) {
-<span class="fc" id="L175">        Set&lt;String&gt; terms = new LinkedHashSet&lt;&gt;();</span>
-<span class="fc bfc" id="L176" title="All 2 branches covered.">        for (String term : Terms.of(original)) {</span>
-<span class="pc bpc" id="L177" title="1 of 4 branches missed.">            if (term.length() == 1 || Character.UnicodeScript.of(term.charAt(0)) != Character.UnicodeScript.HAN) {</span>
-<span class="fc" id="L178">                terms.add(term);</span>
+<span class="fc" id="L177">        Set&lt;String&gt; terms = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L178" title="All 2 branches covered.">        for (String term : Terms.of(original)) {</span>
+<span class="pc bpc" id="L179" title="1 of 4 branches missed.">            if (term.length() == 1 || Character.UnicodeScript.of(term.charAt(0)) != Character.UnicodeScript.HAN) {</span>
+<span class="fc" id="L180">                terms.add(term);</span>
             }
-<span class="fc" id="L180">        }</span>
-<span class="fc bfc" id="L181" title="All 2 branches covered.">        if (terms.isEmpty()) {</span>
-<span class="fc" id="L182">            return true;</span>
+<span class="fc" id="L182">        }</span>
+<span class="fc bfc" id="L183" title="All 2 branches covered.">        if (terms.isEmpty()) {</span>
+<span class="fc" id="L184">            return true;</span>
         }
-<span class="fc" id="L184">        String lower = condensed.toLowerCase(java.util.Locale.ROOT);</span>
-<span class="fc" id="L185">        long kept = terms.stream().filter(lower::contains).count();</span>
-<span class="fc bfc" id="L186" title="All 2 branches covered.">        return (double) kept / terms.size() &gt;= MIN_TERM_COVERAGE;</span>
+<span class="fc" id="L186">        String lower = condensed.toLowerCase(java.util.Locale.ROOT);</span>
+<span class="fc" id="L187">        long kept = terms.stream().filter(lower::contains).count();</span>
+<span class="fc bfc" id="L188" title="All 2 branches covered.">        return (double) kept / terms.size() &gt;= MIN_TERM_COVERAGE;</span>
     }
 
     /**
@@ -194,11 +196,11 @@ public class QuestionCondenser {
      * @return 对话文本
      */
     static String transcript(List&lt;Message&gt; history, int turns) {
-<span class="fc" id="L197">        List&lt;List&lt;Message&gt;&gt; all = HistoryWindow.turns(history);</span>
-<span class="fc" id="L198">        return all.subList(Math.max(0, all.size() - turns), all.size()).stream()</span>
-<span class="fc" id="L199">                .flatMap(List::stream)</span>
-<span class="fc bfc" id="L200" title="All 2 branches covered.">                .map(m -&gt; (m.getMessageType() == MessageType.USER ? &quot;用户：&quot; : &quot;助手：&quot;) + preview(MemoryMessages.text(m)))</span>
-<span class="fc" id="L201">                .collect(Collectors.joining(&quot;\n&quot;));</span>
+<span class="fc" id="L199">        List&lt;List&lt;Message&gt;&gt; all = HistoryWindow.turns(history);</span>
+<span class="fc" id="L200">        return all.subList(Math.max(0, all.size() - turns), all.size()).stream()</span>
+<span class="fc" id="L201">                .flatMap(List::stream)</span>
+<span class="fc bfc" id="L202" title="All 2 branches covered.">                .map(m -&gt; (m.getMessageType() == MessageType.USER ? &quot;用户：&quot; : &quot;助手：&quot;) + preview(MemoryMessages.text(m)))</span>
+<span class="fc" id="L203">                .collect(Collectors.joining(&quot;\n&quot;));</span>
     }
 
     /**
@@ -208,22 +210,22 @@ public class QuestionCondenser {
      * @return 清理后的文字，可能为空串
      */
     static String clean(String output) {
-<span class="pc bpc" id="L211" title="1 of 2 branches missed.">        if (output == null) {</span>
-<span class="nc" id="L212">            return &quot;&quot;;</span>
+<span class="pc bpc" id="L213" title="1 of 2 branches missed.">        if (output == null) {</span>
+<span class="nc" id="L214">            return &quot;&quot;;</span>
         }
-<span class="fc" id="L214">        String line = output.strip()</span>
-<span class="fc" id="L215">                .lines()</span>
-<span class="fc" id="L216">                .map(String::strip)</span>
-<span class="pc bpc" id="L217" title="1 of 2 branches missed.">                .filter(l -&gt; !l.isEmpty())</span>
-<span class="fc" id="L218">                .findFirst()</span>
-<span class="fc" id="L219">                .orElse(&quot;&quot;);</span>
-<span class="fc" id="L220">        line = LABEL.matcher(line).replaceFirst(&quot;&quot;);</span>
-<span class="fc" id="L221">        return QUOTES.matcher(line).replaceAll(&quot;&quot;).strip();</span>
+<span class="fc" id="L216">        String line = output.strip()</span>
+<span class="fc" id="L217">                .lines()</span>
+<span class="fc" id="L218">                .map(String::strip)</span>
+<span class="pc bpc" id="L219" title="1 of 2 branches missed.">                .filter(l -&gt; !l.isEmpty())</span>
+<span class="fc" id="L220">                .findFirst()</span>
+<span class="fc" id="L221">                .orElse(&quot;&quot;);</span>
+<span class="fc" id="L222">        line = LABEL.matcher(line).replaceFirst(&quot;&quot;);</span>
+<span class="fc" id="L223">        return QUOTES.matcher(line).replaceAll(&quot;&quot;).strip();</span>
     }
 
     private static String preview(String text) {
-<span class="fc" id="L225">        String oneLine = text.replaceAll(&quot;\\s+&quot;, &quot; &quot;).strip();</span>
-<span class="fc bfc" id="L226" title="All 2 branches covered.">        return oneLine.length() &lt;= MESSAGE_PREVIEW_CHARS ? oneLine : oneLine.substring(0, MESSAGE_PREVIEW_CHARS) + &quot;…&quot;;</span>
+<span class="fc" id="L227">        String oneLine = text.replaceAll(&quot;\\s+&quot;, &quot; &quot;).strip();</span>
+<span class="fc bfc" id="L228" title="All 2 branches covered.">        return oneLine.length() &lt;= MESSAGE_PREVIEW_CHARS ? oneLine : oneLine.substring(0, MESSAGE_PREVIEW_CHARS) + &quot;…&quot;;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

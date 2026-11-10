@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ConversationSummarizer.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.memory</a> &gt; <span class="el_source">ConversationSummarizer.java</span></div><h1>ConversationSummarizer.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.memory;
 
+import io.github.clarence404.assistant.ops.UsageAdvisor;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -36,7 +37,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class ConversationSummarizer {
 
-<span class="fc" id="L39">    private static final Logger log = LoggerFactory.getLogger(ConversationSummarizer.class);</span>
+<span class="fc" id="L40">    private static final Logger log = LoggerFactory.getLogger(ConversationSummarizer.class);</span>
 
     /** 摘要要忠实于原话，不需要发挥：温度 0。 */
     static final double TEMPERATURE = 0.0;
@@ -50,7 +51,7 @@ public class ConversationSummarizer {
 
     private final ChatClient chatClient;
     private final MemoryProperties properties;
-<span class="fc" id="L53">    private final Resource systemPrompt = new ClassPathResource(&quot;prompts/memory-summary.st&quot;);</span>
+<span class="fc" id="L54">    private final Resource systemPrompt = new ClassPathResource(&quot;prompts/memory-summary.st&quot;);</span>
 
     /**
      * 创建。
@@ -58,10 +59,10 @@ public class ConversationSummarizer {
      * @param chatClient 共享的 ChatClient
      * @param properties {@code assistant.memory.*}（开关、窗口轮数、摘要长度）
      */
-<span class="fc" id="L61">    public ConversationSummarizer(ChatClient chatClient, MemoryProperties properties) {</span>
-<span class="fc" id="L62">        this.chatClient = chatClient;</span>
-<span class="fc" id="L63">        this.properties = properties;</span>
-<span class="fc" id="L64">    }</span>
+<span class="fc" id="L62">    public ConversationSummarizer(ChatClient chatClient, MemoryProperties properties) {</span>
+<span class="fc" id="L63">        this.chatClient = chatClient;</span>
+<span class="fc" id="L64">        this.properties = properties;</span>
+<span class="fc" id="L65">    }</span>
 
     /**
      * 需要时压缩：对话轮数超过 {@code window-turns} 时，把多出来的最早几轮（连同旧摘要）压成新摘要。
@@ -71,58 +72,59 @@ public class ConversationSummarizer {
      * @return 压缩后的全部消息（新摘要 + 留下的几轮原话）；没开、不需要压缩或压缩失败时为 null（调用方什么都不改）
      */
     public List&lt;Message&gt; compact(List&lt;Message&gt; stored, Instant now) {
-<span class="fc bfc" id="L74" title="All 2 branches covered.">        if (!properties.summary().enabled()) {</span>
-<span class="fc" id="L75">            return null;</span>
+<span class="fc bfc" id="L75" title="All 2 branches covered.">        if (!properties.summary().enabled()) {</span>
+<span class="fc" id="L76">            return null;</span>
         }
-<span class="fc" id="L77">        String oldSummary = null;</span>
-<span class="fc" id="L78">        List&lt;Message&gt; dialogue = new ArrayList&lt;&gt;();</span>
-<span class="fc bfc" id="L79" title="All 2 branches covered.">        for (Message message : stored) {</span>
-<span class="pc bpc" id="L80" title="1 of 2 branches missed.">            if (MemoryMessages.isSummary(message)) {</span>
-<span class="nc" id="L81">                oldSummary = MemoryMessages.text(message);</span>
+<span class="fc" id="L78">        String oldSummary = null;</span>
+<span class="fc" id="L79">        List&lt;Message&gt; dialogue = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L80" title="All 2 branches covered.">        for (Message message : stored) {</span>
+<span class="pc bpc" id="L81" title="1 of 2 branches missed.">            if (MemoryMessages.isSummary(message)) {</span>
+<span class="nc" id="L82">                oldSummary = MemoryMessages.text(message);</span>
             } else {
-<span class="fc" id="L83">                dialogue.add(message);</span>
+<span class="fc" id="L84">                dialogue.add(message);</span>
             }
-<span class="fc" id="L85">        }</span>
-<span class="fc" id="L86">        List&lt;List&lt;Message&gt;&gt; turns = HistoryWindow.turns(dialogue);</span>
-<span class="fc" id="L87">        int overflow = turns.size() - properties.windowTurns();</span>
-<span class="fc bfc" id="L88" title="All 2 branches covered.">        if (overflow &lt;= 0) {</span>
-<span class="fc" id="L89">            return null;</span>
+<span class="fc" id="L86">        }</span>
+<span class="fc" id="L87">        List&lt;List&lt;Message&gt;&gt; turns = HistoryWindow.turns(dialogue);</span>
+<span class="fc" id="L88">        int overflow = turns.size() - properties.windowTurns();</span>
+<span class="fc bfc" id="L89" title="All 2 branches covered.">        if (overflow &lt;= 0) {</span>
+<span class="fc" id="L90">            return null;</span>
         }
-<span class="fc" id="L91">        String text = render(oldSummary, turns.subList(0, overflow));</span>
+<span class="fc" id="L92">        String text = render(oldSummary, turns.subList(0, overflow));</span>
         try {
-<span class="fc" id="L93">            String summary = chatClient</span>
-<span class="fc" id="L94">                    .prompt()</span>
-<span class="fc" id="L95">                    .system(spec -&gt; spec.text(systemPrompt)</span>
-<span class="fc" id="L96">                            .param(&quot;maxChars&quot;, properties.summary().maxChars()))</span>
-<span class="fc" id="L97">                    .user(u -&gt; u.text(USER_TEMPLATE).param(&quot;dialogue&quot;, text))</span>
-<span class="fc" id="L98">                    .options(ChatOptions.builder().temperature(TEMPERATURE))</span>
-<span class="fc" id="L99">                    .call()</span>
-<span class="fc" id="L100">                    .content();</span>
-<span class="pc bpc" id="L101" title="1 of 2 branches missed.">            String cleaned = summary == null ? &quot;&quot; : summary.strip();</span>
-<span class="pc bpc" id="L102" title="1 of 2 branches missed.">            if (cleaned.isEmpty()) {</span>
-<span class="nc" id="L103">                return null;</span>
+<span class="fc" id="L94">            String summary = chatClient</span>
+<span class="fc" id="L95">                    .prompt()</span>
+<span class="fc" id="L96">                    .system(spec -&gt; spec.text(systemPrompt)</span>
+<span class="fc" id="L97">                            .param(&quot;maxChars&quot;, properties.summary().maxChars()))</span>
+<span class="fc" id="L98">                    .user(u -&gt; u.text(USER_TEMPLATE).param(&quot;dialogue&quot;, text))</span>
+<span class="fc" id="L99">                    .options(ChatOptions.builder().temperature(TEMPERATURE))</span>
+<span class="fc" id="L100">                    .advisors(UsageAdvisor.stage(&quot;summary&quot;)) // 第 9 章：Token 记账时标明这是摘要记忆</span>
+<span class="fc" id="L101">                    .call()</span>
+<span class="fc" id="L102">                    .content();</span>
+<span class="pc bpc" id="L103" title="1 of 2 branches missed.">            String cleaned = summary == null ? &quot;&quot; : summary.strip();</span>
+<span class="pc bpc" id="L104" title="1 of 2 branches missed.">            if (cleaned.isEmpty()) {</span>
+<span class="nc" id="L105">                return null;</span>
             }
-<span class="pc bpc" id="L105" title="1 of 2 branches missed.">            if (cleaned.length() &gt; properties.summary().maxChars()) {</span>
-<span class="nc" id="L106">                cleaned = cleaned.substring(0, properties.summary().maxChars()) + &quot;…&quot;;</span>
+<span class="pc bpc" id="L107" title="1 of 2 branches missed.">            if (cleaned.length() &gt; properties.summary().maxChars()) {</span>
+<span class="nc" id="L108">                cleaned = cleaned.substring(0, properties.summary().maxChars()) + &quot;…&quot;;</span>
             }
-<span class="fc" id="L108">            log.info(&quot;摘要记忆：压缩了最早的 {} 轮，摘要 {} 字&quot;, overflow, cleaned.length());</span>
-<span class="fc" id="L109">            List&lt;Message&gt; compacted = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L110">            compacted.add(MemoryMessages.summary(cleaned, now));</span>
-<span class="fc" id="L111">            turns.subList(overflow, turns.size()).forEach(compacted::addAll);</span>
-<span class="fc" id="L112">            return compacted;</span>
-<span class="nc" id="L113">        } catch (RuntimeException e) {</span>
-<span class="nc" id="L114">            log.warn(&quot;摘要记忆：压缩失败，保留原话：{}&quot;, e.toString());</span>
-<span class="nc" id="L115">            return null;</span>
+<span class="fc" id="L110">            log.info(&quot;摘要记忆：压缩了最早的 {} 轮，摘要 {} 字&quot;, overflow, cleaned.length());</span>
+<span class="fc" id="L111">            List&lt;Message&gt; compacted = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L112">            compacted.add(MemoryMessages.summary(cleaned, now));</span>
+<span class="fc" id="L113">            turns.subList(overflow, turns.size()).forEach(compacted::addAll);</span>
+<span class="fc" id="L114">            return compacted;</span>
+<span class="nc" id="L115">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L116">            log.warn(&quot;摘要记忆：压缩失败，保留原话：{}&quot;, e.toString());</span>
+<span class="nc" id="L117">            return null;</span>
         }
     }
 
     /** 旧摘要 + 要压缩的几轮，写成「用户：…」「助手：…」。 */
     static String render(String oldSummary, List&lt;List&lt;Message&gt;&gt; turns) {
-<span class="fc" id="L121">        String dialogue = turns.stream()</span>
-<span class="fc" id="L122">                .flatMap(List::stream)</span>
-<span class="fc bfc" id="L123" title="All 2 branches covered.">                .map(m -&gt; (m.getMessageType() == MessageType.USER ? &quot;用户：&quot; : &quot;助手：&quot;) + MemoryMessages.text(m))</span>
-<span class="fc" id="L124">                .collect(Collectors.joining(&quot;\n&quot;));</span>
-<span class="pc bpc" id="L125" title="1 of 2 branches missed.">        return oldSummary == null ? dialogue : &quot;之前的摘要：&quot; + oldSummary + &quot;\n&quot; + dialogue;</span>
+<span class="fc" id="L123">        String dialogue = turns.stream()</span>
+<span class="fc" id="L124">                .flatMap(List::stream)</span>
+<span class="fc bfc" id="L125" title="All 2 branches covered.">                .map(m -&gt; (m.getMessageType() == MessageType.USER ? &quot;用户：&quot; : &quot;助手：&quot;) + MemoryMessages.text(m))</span>
+<span class="fc" id="L126">                .collect(Collectors.joining(&quot;\n&quot;));</span>
+<span class="pc bpc" id="L127" title="1 of 2 branches missed.">        return oldSummary == null ? dialogue : &quot;之前的摘要：&quot; + oldSummary + &quot;\n&quot; + dialogue;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

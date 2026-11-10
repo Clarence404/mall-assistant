@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ApiExceptionHandler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.error</a> &gt; <span class="el_source">ApiExceptionHandler.java</span></div><h1>ApiExceptionHandler.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.error;
 
 import io.github.clarence404.assistant.agent.ConfirmationException;
+import io.github.clarence404.assistant.guard.ChatRejection;
 import io.github.clarence404.assistant.knowledge.KnowledgeException;
 import io.github.clarence404.assistant.knowledge.KnowledgeFailure;
 import io.github.clarence404.assistant.memory.ConversationException;
@@ -30,11 +31,14 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * &lt;p&gt;第 6 章起还处理会话的 {@link ConversationException}：会话不存在 404、正在回答 409、登录失效 401、商城或记忆库不可用 503。
  *
  * &lt;p&gt;第 7 章起还处理确认接口的 {@link ConfirmationException}：确认不存在或不是你的 404、过期 410、已经做过相反的决定 409。
+ *
+ * &lt;p&gt;第 9 章起还处理对话接口进门时的 {@link ChatRejection}：太频繁、今日额度用完 429，太忙 503，都带 {@code Retry-After}；模型熔断中
+ * （MODEL_CIRCUIT_OPEN）和第 1 章的两类一样是 503。
  */
 @RestControllerAdvice
-<span class="fc" id="L35">public class ApiExceptionHandler {</span>
+<span class="fc" id="L39">public class ApiExceptionHandler {</span>
 
-<span class="fc" id="L37">    private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);</span>
+<span class="fc" id="L41">    private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);</span>
 
     /**
      * 模型调用失败 → 503 Service Unavailable + ProblemDetail。
@@ -47,15 +51,15 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
      */
     @ExceptionHandler(ModelCallException.class)
     public ResponseEntity&lt;ProblemDetail&gt; handleModelFailure(ModelCallException e) {
-<span class="fc" id="L50">        ModelFailure failure = e.failure();</span>
+<span class="fc" id="L54">        ModelFailure failure = e.failure();</span>
         // 细节只进日志，不给前端
-<span class="fc" id="L52">        log.warn(&quot;调用模型失败：{}&quot;, failure, e.getCause());</span>
-<span class="fc" id="L53">        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, failure.message());</span>
-<span class="fc" id="L54">        problem.setTitle(failure.title());</span>
-<span class="fc" id="L55">        problem.setProperty(&quot;code&quot;, failure.name());</span>
-<span class="fc" id="L56">        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)</span>
-<span class="fc" id="L57">                .header(HttpHeaders.RETRY_AFTER, &quot;5&quot;)</span>
-<span class="fc" id="L58">                .body(problem);</span>
+<span class="fc" id="L56">        log.warn(&quot;调用模型失败：{}&quot;, failure, e.getCause());</span>
+<span class="fc" id="L57">        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, failure.message());</span>
+<span class="fc" id="L58">        problem.setTitle(failure.title());</span>
+<span class="fc" id="L59">        problem.setProperty(&quot;code&quot;, failure.name());</span>
+<span class="fc" id="L60">        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)</span>
+<span class="fc" id="L61">                .header(HttpHeaders.RETRY_AFTER, &quot;5&quot;)</span>
+<span class="fc" id="L62">                .body(problem);</span>
     }
 
     /**
@@ -67,16 +71,16 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
      */
     @ExceptionHandler(KnowledgeException.class)
     public ResponseEntity&lt;ProblemDetail&gt; handleKnowledgeFailure(KnowledgeException e) {
-<span class="fc" id="L70">        KnowledgeFailure failure = e.failure();</span>
-<span class="fc" id="L71">        log.warn(&quot;知识库操作失败：{} {}&quot;, failure, e.getMessage(), e.getCause());</span>
-<span class="fc" id="L72">        ProblemDetail problem = ProblemDetail.forStatusAndDetail(failure.status(), e.getMessage());</span>
-<span class="fc" id="L73">        problem.setTitle(failure.title());</span>
-<span class="fc" id="L74">        problem.setProperty(&quot;code&quot;, failure.name());</span>
-<span class="fc" id="L75">        ResponseEntity.BodyBuilder response = ResponseEntity.status(failure.status());</span>
-<span class="pc bpc" id="L76" title="1 of 2 branches missed.">        if (failure.status() == HttpStatus.SERVICE_UNAVAILABLE) {</span>
-<span class="fc" id="L77">            response.header(HttpHeaders.RETRY_AFTER, &quot;5&quot;);</span>
+<span class="fc" id="L74">        KnowledgeFailure failure = e.failure();</span>
+<span class="fc" id="L75">        log.warn(&quot;知识库操作失败：{} {}&quot;, failure, e.getMessage(), e.getCause());</span>
+<span class="fc" id="L76">        ProblemDetail problem = ProblemDetail.forStatusAndDetail(failure.status(), e.getMessage());</span>
+<span class="fc" id="L77">        problem.setTitle(failure.title());</span>
+<span class="fc" id="L78">        problem.setProperty(&quot;code&quot;, failure.name());</span>
+<span class="fc" id="L79">        ResponseEntity.BodyBuilder response = ResponseEntity.status(failure.status());</span>
+<span class="pc bpc" id="L80" title="1 of 2 branches missed.">        if (failure.status() == HttpStatus.SERVICE_UNAVAILABLE) {</span>
+<span class="fc" id="L81">            response.header(HttpHeaders.RETRY_AFTER, &quot;5&quot;);</span>
         }
-<span class="fc" id="L79">        return response.body(problem);</span>
+<span class="fc" id="L83">        return response.body(problem);</span>
     }
 
     /**
@@ -87,16 +91,38 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
      */
     @ExceptionHandler(ConversationException.class)
     public ResponseEntity&lt;ProblemDetail&gt; handleConversationFailure(ConversationException e) {
-<span class="fc" id="L90">        ConversationException.Failure failure = e.failure();</span>
-<span class="fc" id="L91">        log.info(&quot;会话操作失败：{}&quot;, failure, e.getCause());</span>
-<span class="fc" id="L92">        ProblemDetail problem = ProblemDetail.forStatusAndDetail(failure.status(), failure.message());</span>
-<span class="fc" id="L93">        problem.setTitle(failure.title());</span>
-<span class="fc" id="L94">        problem.setProperty(&quot;code&quot;, failure.name());</span>
-<span class="fc" id="L95">        ResponseEntity.BodyBuilder response = ResponseEntity.status(failure.status());</span>
-<span class="fc bfc" id="L96" title="All 2 branches covered.">        if (failure.status() == HttpStatus.SERVICE_UNAVAILABLE) {</span>
-<span class="fc" id="L97">            response.header(HttpHeaders.RETRY_AFTER, &quot;5&quot;);</span>
+<span class="fc" id="L94">        ConversationException.Failure failure = e.failure();</span>
+<span class="fc" id="L95">        log.info(&quot;会话操作失败：{}&quot;, failure, e.getCause());</span>
+<span class="fc" id="L96">        ProblemDetail problem = ProblemDetail.forStatusAndDetail(failure.status(), failure.message());</span>
+<span class="fc" id="L97">        problem.setTitle(failure.title());</span>
+<span class="fc" id="L98">        problem.setProperty(&quot;code&quot;, failure.name());</span>
+<span class="fc" id="L99">        ResponseEntity.BodyBuilder response = ResponseEntity.status(failure.status());</span>
+<span class="fc bfc" id="L100" title="All 2 branches covered.">        if (failure.status() == HttpStatus.SERVICE_UNAVAILABLE) {</span>
+<span class="fc" id="L101">            response.header(HttpHeaders.RETRY_AFTER, &quot;5&quot;);</span>
         }
-<span class="fc" id="L99">        return response.body(problem);</span>
+<span class="fc" id="L103">        return response.body(problem);</span>
+    }
+
+    /**
+     * 对话请求在进门时被挡下 → ProblemDetail（第 9 章）：429（太频繁、今日额度用完）或 503（太忙），{@code Retry-After} 是建议的等待秒数
+     * （HTTP 标准头，客户端和网关都认得）。
+     *
+     * @param e 被挡下的原因
+     * @return 对应状态码的响应
+     */
+    @ExceptionHandler(ChatRejection.class)
+    public ResponseEntity&lt;ProblemDetail&gt; handleRejection(ChatRejection e) {
+<span class="fc" id="L115">        ChatRejection.Reason reason = e.reason();</span>
+<span class="fc" id="L116">        ProblemDetail problem = ProblemDetail.forStatusAndDetail(reason.status(), reason.message());</span>
+<span class="fc" id="L117">        problem.setTitle(reason.title());</span>
+<span class="fc" id="L118">        problem.setProperty(&quot;code&quot;, reason.name());</span>
+<span class="fc" id="L119">        ResponseEntity.BodyBuilder response = ResponseEntity.status(reason.status());</span>
+<span class="pc bpc" id="L120" title="1 of 2 branches missed.">        if (e.retryAfter() != null) {</span>
+<span class="fc" id="L121">            response.header(</span>
+                    HttpHeaders.RETRY_AFTER,
+<span class="fc" id="L123">                    String.valueOf(Math.max(1, e.retryAfter().toSeconds())));</span>
+        }
+<span class="fc" id="L125">        return response.body(problem);</span>
     }
 
     /**
@@ -107,12 +133,12 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
      */
     @ExceptionHandler(ConfirmationException.class)
     public ResponseEntity&lt;ProblemDetail&gt; handleConfirmationFailure(ConfirmationException e) {
-<span class="fc" id="L110">        ConfirmationException.Failure failure = e.failure();</span>
-<span class="fc" id="L111">        log.info(&quot;确认失败：{}&quot;, failure);</span>
-<span class="fc" id="L112">        ProblemDetail problem = ProblemDetail.forStatusAndDetail(failure.status(), failure.message());</span>
-<span class="fc" id="L113">        problem.setTitle(failure.title());</span>
-<span class="fc" id="L114">        problem.setProperty(&quot;code&quot;, failure.name());</span>
-<span class="fc" id="L115">        return ResponseEntity.status(failure.status()).body(problem);</span>
+<span class="fc" id="L136">        ConfirmationException.Failure failure = e.failure();</span>
+<span class="fc" id="L137">        log.info(&quot;确认失败：{}&quot;, failure);</span>
+<span class="fc" id="L138">        ProblemDetail problem = ProblemDetail.forStatusAndDetail(failure.status(), failure.message());</span>
+<span class="fc" id="L139">        problem.setTitle(failure.title());</span>
+<span class="fc" id="L140">        problem.setProperty(&quot;code&quot;, failure.name());</span>
+<span class="fc" id="L141">        return ResponseEntity.status(failure.status()).body(problem);</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

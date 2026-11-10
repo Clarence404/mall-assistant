@@ -16,13 +16,15 @@ import java.util.List;
  * @param passed 通过门槛的块数
  * @param contextChars 拼进提示词的资料一共多少个字
  * @param retrievalMs 检索耗时（含改写问题、把问题向量化），毫秒
- * @param shortCircuit 没调模型的原因：{@code NO_MATCH}（没有相关资料）、{@code KNOWLEDGE_UNAVAILABLE}（向量模型或向量库不可用）；调了模型时为 null
+ * @param shortCircuit 没调模型的原因：{@code NO_MATCH}（没有相关资料）、{@code KNOWLEDGE_UNAVAILABLE}（向量模型或向量库不可用）、第 9 章的
+ *     {@code ALL_BLOCKED}（资料全被注入过滤挡下）与 {@code MODEL_UNAVAILABLE}（模型不可用、降级给原文）；调了模型时为 null
  * @param warning 给人看的说明（如知识库不可用的原因、改写失败），没有时为 null
  * @param cited 回答引用了哪些编号（只有阻塞回答做引用校验；流式与短路时为空列表）
  * @param invalidCitations 回答里出现、但没有对应资料的编号，已从回答里去掉
  * @param uncited 阻塞回答一个有效编号都没引用时为 true；没做引用校验（流式、短路）时为 null
+ * @param blocked 第 9 章：检索到了、但被提示注入过滤挡下的资料块（没交给模型）；没有时为空列表
  */
-<span class="fc" id="L25">public record RagTrace(</span>
+public record RagTrace(
         String query,
         String rewrittenQuery,
         String mode,
@@ -35,7 +37,8 @@ import java.util.List;
         String warning,
         List&lt;Integer&gt; cited,
         List&lt;Integer&gt; invalidCitations,
-        Boolean uncited) {
+        Boolean uncited,
+        List&lt;BlockedSource&gt; blocked) {
 
     /** 检索不到相关资料：不调模型，直接回固定话术。 */
     public static final String NO_MATCH = &quot;NO_MATCH&quot;;
@@ -43,14 +46,44 @@ import java.util.List;
     /** 向量模型或向量库不可用：同样不调模型，回固定话术。 */
     public static final String KNOWLEDGE_UNAVAILABLE = &quot;KNOWLEDGE_UNAVAILABLE&quot;;
 
+    /** 第 9 章：检索到的资料全被提示注入过滤挡下了：同样不调模型，回「没有找到相关规定」。 */
+    public static final String ALL_BLOCKED = &quot;ALL_BLOCKED&quot;;
+
+    /** 第 9 章：调了模型但模型不可用（熔断、连不上、超时），降级成直接给检索到的原文。 */
+    public static final String MODEL_UNAVAILABLE = &quot;MODEL_UNAVAILABLE&quot;;
+
     /**
-     * 补上引用校验的结果。
+     * 第 8 章及以前的调试信息（没有被挡的资料）。
      *
-     * @param check {@link CitationChecker#check} 的结果
-     * @return 新的调试信息
+     * @param query 用户原话
+     * @param rewrittenQuery 改写后的问题
+     * @param mode 检索方式
+     * @param vectorCandidates 向量检索返回了几块
+     * @param keywordCandidates 关键词检索返回了几块
+     * @param passed 通过门槛的块数
+     * @param contextChars 资料字数
+     * @param retrievalMs 检索耗时
+     * @param shortCircuit 没调模型的原因
+     * @param warning 说明
+     * @param cited 引用了哪些编号
+     * @param invalidCitations 对不上的编号
+     * @param uncited 一个都没引用
      */
-    public RagTrace withCitations(CitationChecker.Check check) {
-<span class="fc" id="L53">        return new RagTrace(</span>
+    public RagTrace(
+            String query,
+            String rewrittenQuery,
+            String mode,
+            int vectorCandidates,
+            int keywordCandidates,
+            int passed,
+            int contextChars,
+            long retrievalMs,
+            String shortCircuit,
+            String warning,
+            List&lt;Integer&gt; cited,
+            List&lt;Integer&gt; invalidCitations,
+            Boolean uncited) {
+<span class="fc" id="L86">        this(</span>
                 query,
                 rewrittenQuery,
                 mode,
@@ -61,9 +94,64 @@ import java.util.List;
                 retrievalMs,
                 shortCircuit,
                 warning,
-<span class="fc" id="L64">                List.copyOf(check.cited()),</span>
-<span class="fc" id="L65">                List.copyOf(check.invalid()),</span>
-<span class="fc" id="L66">                check.uncited());</span>
+                cited,
+                invalidCitations,
+                uncited,
+<span class="fc" id="L100">                List.of());</span>
+<span class="fc" id="L101">    }</span>
+
+    /** 紧凑构造器：被挡的资料为 null 时当作空列表（录制文件里没有这个字段）。 */
+<span class="fc" id="L104">    public RagTrace {</span>
+<span class="pc bpc" id="L105" title="1 of 2 branches missed.">        blocked = blocked == null ? List.of() : List.copyOf(blocked);</span>
+<span class="fc" id="L106">    }</span>
+
+    /**
+     * 补上引用校验的结果。
+     *
+     * @param check {@link CitationChecker#check} 的结果
+     * @return 新的调试信息
+     */
+    public RagTrace withCitations(CitationChecker.Check check) {
+<span class="fc" id="L115">        return new RagTrace(</span>
+                query,
+                rewrittenQuery,
+                mode,
+                vectorCandidates,
+                keywordCandidates,
+                passed,
+                contextChars,
+                retrievalMs,
+                shortCircuit,
+                warning,
+<span class="fc" id="L126">                List.copyOf(check.cited()),</span>
+<span class="fc" id="L127">                List.copyOf(check.invalid()),</span>
+<span class="fc" id="L128">                check.uncited(),</span>
+                blocked);
+    }
+
+    /**
+     * 换一个短路原因（第 9 章：模型不可用时降级）。
+     *
+     * @param reason 短路原因，如 {@link #MODEL_UNAVAILABLE}
+     * @param note 说明
+     * @return 新的调试信息
+     */
+    public RagTrace withShortCircuit(String reason, String note) {
+<span class="fc" id="L140">        return new RagTrace(</span>
+                query,
+                rewrittenQuery,
+                mode,
+                vectorCandidates,
+                keywordCandidates,
+                passed,
+                contextChars,
+                retrievalMs,
+                reason,
+                note,
+                cited,
+                invalidCitations,
+                uncited,
+                blocked);
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

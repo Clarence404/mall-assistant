@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>EvalReport.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.eval</a> &gt; <span class="el_source">EvalReport.java</span></div><h1>EvalReport.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.eval;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+/**
+ * 一次评测的报告：被测模型、评测集版本、汇总指标、逐条结果（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：评测的数据。{@link EvalRunner#run} 生成；测试把它写成 JSON（{@code target/eval/report-*.json}，也是基线文件的格式）和 Markdown
+ * （{@link #toMarkdown()}，CI 贴进运行摘要）。{@link EvalComparison} 拿两份报告比较。
+ *
+ * @param model 被测模型
+ * @param evalSet 评测集名字
+ * @param evalSetVersion 评测集版本（内容的哈希）
+ * @param startedAt 开始时间
+ * @param summary 汇总
+ * @param results 逐条结果，顺序同评测集
+ */
+<span class="fc" id="L22">public record EvalReport(</span>
+        String model,
+        String evalSet,
+        String evalSetVersion,
+        String startedAt,
+        Summary summary,
+        List&lt;EvalResult&gt; results) {
+
+    /**
+     * 汇总指标。
+     *
+     * @param total 用例数
+     * @param passed 通过数
+     * @param passRate 通过率（0～1，保留 4 位小数）
+     * @param categories 按类别：顺序同 {@link EvalCase.Category}，只列出现过的类别
+     * @param p50Ms 耗时中位数（被判定那一轮），毫秒
+     * @param p95Ms 耗时 95 分位，毫秒
+     * @param maxMs 最长耗时，毫秒
+     * @param inputTokens 输入 Token 合计
+     * @param outputTokens 输出 Token 合计
+     * @param estimated Token 里有没有估算的
+     * @param judged 裁判打了分的用例数
+     * @param judgeAverage 裁判的平均分（保留 2 位小数）；没有打分时为 null
+     */
+<span class="fc" id="L46">    public record Summary(</span>
+            int total,
+            int passed,
+            double passRate,
+            Map&lt;String, CategoryScore&gt; categories,
+            long p50Ms,
+            long p95Ms,
+            long maxMs,
+            long inputTokens,
+            long outputTokens,
+            boolean estimated,
+            int judged,
+            Double judgeAverage) {}
+
+    /**
+     * 一个类别的得分。
+     *
+     * @param total 用例数
+     * @param passed 通过数
+     * @param passRate 通过率（0～1，保留 4 位小数）
+     */
+<span class="fc" id="L67">    public record CategoryScore(int total, int passed, double passRate) {}</span>
+
+    /**
+     * 汇总逐条结果（ch09-10 之一）。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;总数、通过数、通过率（{@link #rate}：通过 / 总数，没有用例时为 0，保留 4 位小数）
+     *   &lt;li&gt;按类别：按 {@link EvalCase.Category} 的声明顺序，只放出现过的类别，键是类别名（{@code name()}）
+     *   &lt;li&gt;耗时：{@code durationMs} 的 p50、p95（{@link #percentile}，最近秩法）和最大值；没有用例时都是 0
+     *   &lt;li&gt;Token：输入、输出分别求和；有一条是估算的 {@code estimated} 就为 true
+     *   &lt;li&gt;裁判：{@code judgeScore} 不为 null 的条数与平均分（保留 2 位小数），一条都没有时平均分为 null
+     * &lt;/ul&gt;
+     *
+     * @param results 逐条结果
+     * @return 汇总
+     */
+    public static Summary summarize(List&lt;EvalResult&gt; results) {
+<span class="fc" id="L86">        int passed = (int) results.stream().filter(EvalResult::passed).count();</span>
+<span class="fc" id="L87">        Map&lt;String, CategoryScore&gt; categories = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L88" title="All 2 branches covered.">        for (EvalCase.Category category : EvalCase.Category.values()) {</span>
+<span class="fc" id="L89">            List&lt;EvalResult&gt; mine =</span>
+<span class="fc bfc" id="L90" title="All 2 branches covered.">                    results.stream().filter(r -&gt; r.category() == category).toList();</span>
+<span class="fc bfc" id="L91" title="All 2 branches covered.">            if (!mine.isEmpty()) {</span>
+<span class="fc" id="L92">                int ok = (int) mine.stream().filter(EvalResult::passed).count();</span>
+<span class="fc" id="L93">                categories.put(category.name(), new CategoryScore(mine.size(), ok, rate(ok, mine.size())));</span>
+            }
+        }
+<span class="fc" id="L96">        List&lt;Long&gt; durations = new ArrayList&lt;&gt;(</span>
+<span class="fc" id="L97">                results.stream().map(EvalResult::durationMs).sorted().toList());</span>
+<span class="fc" id="L98">        long input = results.stream().mapToLong(EvalResult::inputTokens).sum();</span>
+<span class="fc" id="L99">        long output = results.stream().mapToLong(EvalResult::outputTokens).sum();</span>
+<span class="fc" id="L100">        boolean estimated = results.stream().anyMatch(EvalResult::estimated);</span>
+<span class="fc" id="L101">        List&lt;Integer&gt; scores = results.stream()</span>
+<span class="fc" id="L102">                .map(EvalResult::judgeScore)</span>
+<span class="fc bfc" id="L103" title="All 2 branches covered.">                .filter(s -&gt; s != null)</span>
+<span class="fc" id="L104">                .toList();</span>
+<span class="fc bfc" id="L105" title="All 2 branches covered.">        Double average = scores.isEmpty()</span>
+<span class="fc" id="L106">                ? null</span>
+<span class="fc" id="L107">                : Math.round(scores.stream()</span>
+<span class="fc" id="L108">                                        .mapToInt(Integer::intValue)</span>
+<span class="fc" id="L109">                                        .average()</span>
+<span class="fc" id="L110">                                        .orElse(0)</span>
+                                * 100)
+                        / 100.0;
+<span class="fc" id="L113">        return new Summary(</span>
+<span class="fc" id="L114">                results.size(),</span>
+                passed,
+<span class="fc" id="L116">                rate(passed, results.size()),</span>
+                categories,
+<span class="fc" id="L118">                percentile(durations, 0.50),</span>
+<span class="fc" id="L119">                percentile(durations, 0.95),</span>
+<span class="fc bfc" id="L120" title="All 2 branches covered.">                durations.isEmpty() ? 0 : durations.getLast(),</span>
+                input,
+                output,
+                estimated,
+<span class="fc" id="L124">                scores.size(),</span>
+                average);
+    }
+
+    /**
+     * 通过率：保留 4 位小数，总数为 0 时是 0。
+     *
+     * @param passed 通过数
+     * @param total 总数
+     * @return 0～1
+     */
+    static double rate(int passed, int total) {
+<span class="fc bfc" id="L136" title="All 2 branches covered.">        return total == 0 ? 0 : Math.round(passed * 10000.0 / total) / 10000.0;</span>
+    }
+
+    /**
+     * 最近秩法的分位数：排好序的 n 个数里取第 {@code ceil(q * n)} 个（从 1 数），空列表是 0。
+     *
+     * &lt;p&gt;例：10 个数的 p95 是第 10 个（ceil(9.5)），p50 是第 5 个。用例只有几十条，分位数本来就粗，最近秩法简单、结果一定是某个真实测到的值。
+     *
+     * @param sorted 从小到大排好的数
+     * @param q 分位（0～1）
+     * @return 分位数
+     */
+    static long percentile(List&lt;Long&gt; sorted, double q) {
+<span class="fc bfc" id="L149" title="All 2 branches covered.">        if (sorted.isEmpty()) {</span>
+<span class="fc" id="L150">            return 0;</span>
+        }
+<span class="fc" id="L152">        int rank = (int) Math.ceil(q * sorted.size());</span>
+<span class="fc" id="L153">        return sorted.get(Math.max(0, Math.min(sorted.size(), rank) - 1));</span>
+    }
+
+    /**
+     * 写成 Markdown：一张总表、一张按类别的表、没通过的用例与原因。CI 把它贴进运行摘要。
+     *
+     * @return Markdown 文本
+     */
+    public String toMarkdown() {
+<span class="fc" id="L162">        StringBuilder md = new StringBuilder();</span>
+<span class="fc" id="L163">        md.append(&quot;## 评测报告：&quot;).append(model).append(&quot;\n\n&quot;);</span>
+<span class="fc" id="L164">        md.append(&quot;评测集 `&quot;)</span>
+<span class="fc" id="L165">                .append(evalSet)</span>
+<span class="fc" id="L166">                .append(&quot;`（版本 &quot;)</span>
+<span class="fc" id="L167">                .append(evalSetVersion)</span>
+<span class="fc" id="L168">                .append(&quot;），开始于 &quot;)</span>
+<span class="fc" id="L169">                .append(startedAt)</span>
+<span class="fc" id="L170">                .append(&quot;\n\n&quot;);</span>
+<span class="fc" id="L171">        md.append(&quot;| 用例 | 通过 | 通过率 | 耗时 p50 / p95 / 最长 | 输入 / 输出 Token | 裁判平均分 |\n&quot;);</span>
+<span class="fc" id="L172">        md.append(&quot;|---|---|---|---|---|---|\n&quot;);</span>
+<span class="fc" id="L173">        md.append(&quot;| &quot;)</span>
+<span class="fc" id="L174">                .append(summary.total())</span>
+<span class="fc" id="L175">                .append(&quot; | &quot;)</span>
+<span class="fc" id="L176">                .append(summary.passed())</span>
+<span class="fc" id="L177">                .append(&quot; | &quot;)</span>
+<span class="fc" id="L178">                .append(percent(summary.passRate()))</span>
+<span class="fc" id="L179">                .append(&quot; | &quot;)</span>
+<span class="fc" id="L180">                .append(summary.p50Ms())</span>
+<span class="fc" id="L181">                .append(&quot; / &quot;)</span>
+<span class="fc" id="L182">                .append(summary.p95Ms())</span>
+<span class="fc" id="L183">                .append(&quot; / &quot;)</span>
+<span class="fc" id="L184">                .append(summary.maxMs())</span>
+<span class="fc" id="L185">                .append(&quot; ms | &quot;)</span>
+<span class="fc" id="L186">                .append(summary.inputTokens())</span>
+<span class="fc" id="L187">                .append(&quot; / &quot;)</span>
+<span class="fc" id="L188">                .append(summary.outputTokens())</span>
+<span class="pc bpc" id="L189" title="1 of 2 branches missed.">                .append(summary.estimated() ? &quot;（含估算）&quot; : &quot;&quot;)</span>
+<span class="fc" id="L190">                .append(&quot; | &quot;)</span>
+<span class="pc bpc" id="L191" title="1 of 2 branches missed.">                .append(summary.judgeAverage() == null ? &quot;-&quot; : summary.judgeAverage() + &quot;（&quot; + summary.judged() + &quot; 条）&quot;)</span>
+<span class="fc" id="L192">                .append(&quot; |\n\n&quot;);</span>
+<span class="fc" id="L193">        md.append(&quot;| 类别 | 用例 | 通过 | 通过率 |\n|---|---|---|---|\n&quot;);</span>
+<span class="fc" id="L194">        summary.categories()</span>
+<span class="fc" id="L195">                .forEach((name, score) -&gt; md.append(&quot;| &quot;)</span>
+<span class="fc" id="L196">                        .append(name.toLowerCase(Locale.ROOT))</span>
+<span class="fc" id="L197">                        .append(&quot; | &quot;)</span>
+<span class="fc" id="L198">                        .append(score.total())</span>
+<span class="fc" id="L199">                        .append(&quot; | &quot;)</span>
+<span class="fc" id="L200">                        .append(score.passed())</span>
+<span class="fc" id="L201">                        .append(&quot; | &quot;)</span>
+<span class="fc" id="L202">                        .append(percent(score.passRate()))</span>
+<span class="fc" id="L203">                        .append(&quot; |\n&quot;));</span>
+<span class="fc bfc" id="L204" title="All 2 branches covered.">        List&lt;EvalResult&gt; failed = results.stream().filter(r -&gt; !r.passed()).toList();</span>
+<span class="pc bpc" id="L205" title="1 of 2 branches missed.">        if (!failed.isEmpty()) {</span>
+<span class="fc" id="L206">            md.append(&quot;\n没通过的用例：\n\n&quot;);</span>
+<span class="fc bfc" id="L207" title="All 2 branches covered.">            for (EvalResult r : failed) {</span>
+<span class="fc" id="L208">                md.append(&quot;- `&quot;)</span>
+<span class="fc" id="L209">                        .append(r.id())</span>
+<span class="fc" id="L210">                        .append(&quot;`：&quot;)</span>
+<span class="fc" id="L211">                        .append(String.join(&quot;；&quot;, r.failures()))</span>
+<span class="fc" id="L212">                        .append('\n');</span>
+<span class="fc" id="L213">            }</span>
+        }
+<span class="fc" id="L215">        return md.toString();</span>
+    }
+
+    private static String percent(double rate) {
+<span class="fc" id="L219">        return String.format(Locale.ROOT, &quot;%.1f%%&quot;, rate * 100);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AgentPlanner.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">AgentPlanner.java</span></div><h1>AgentPlanner.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
 
 import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.ops.UsageAdvisor;
 import io.github.clarence404.assistant.prompt.AssistantPrompts;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -37,7 +38,7 @@ import tools.jackson.core.JacksonException;
 @Component
 public class AgentPlanner {
 
-<span class="fc" id="L40">    private static final Logger log = LoggerFactory.getLogger(AgentPlanner.class);</span>
+<span class="fc" id="L41">    private static final Logger log = LoggerFactory.getLogger(AgentPlanner.class);</span>
 
     /**
      * 每一步的用户消息。{@code &lt;办事记录&gt;} 标签同时是测试里假模型认出「这是 Agent 的一步」的标志。
@@ -77,16 +78,16 @@ public class AgentPlanner {
      * @param properties {@code assistant.agent.*}（提示词版本、步数上限）
      * @throws IllegalStateException 配置的提示词文件不存在，应用启动失败
      */
-<span class="fc" id="L80">    public AgentPlanner(ChatClient chatClient, AssistantPrompts prompts, AgentProperties properties) {</span>
-<span class="fc" id="L81">        this.chatClient = chatClient;</span>
-<span class="fc" id="L82">        this.prompts = prompts;</span>
-<span class="fc" id="L83">        this.properties = properties;</span>
-<span class="fc" id="L84">        this.systemTemplate = new ClassPathResource(&quot;prompts/&quot; + properties.prompt() + &quot;.st&quot;);</span>
-<span class="pc bpc" id="L85" title="1 of 2 branches missed.">        if (!systemTemplate.exists()) {</span>
-<span class="nc" id="L86">            throw new IllegalStateException(</span>
-<span class="nc" id="L87">                    &quot;找不到 Agent 提示词模板 prompts/&quot; + properties.prompt() + &quot;.st，检查 assistant.agent.prompt&quot;);</span>
+<span class="fc" id="L81">    public AgentPlanner(ChatClient chatClient, AssistantPrompts prompts, AgentProperties properties) {</span>
+<span class="fc" id="L82">        this.chatClient = chatClient;</span>
+<span class="fc" id="L83">        this.prompts = prompts;</span>
+<span class="fc" id="L84">        this.properties = properties;</span>
+<span class="fc" id="L85">        this.systemTemplate = new ClassPathResource(&quot;prompts/&quot; + properties.prompt() + &quot;.st&quot;);</span>
+<span class="pc bpc" id="L86" title="1 of 2 branches missed.">        if (!systemTemplate.exists()) {</span>
+<span class="nc" id="L87">            throw new IllegalStateException(</span>
+<span class="nc" id="L88">                    &quot;找不到 Agent 提示词模板 prompts/&quot; + properties.prompt() + &quot;.st，检查 assistant.agent.prompt&quot;);</span>
         }
-<span class="fc" id="L89">    }</span>
+<span class="fc" id="L90">    }</span>
 
     /**
      * 让模型给出下一步。
@@ -96,34 +97,35 @@ public class AgentPlanner {
      * @throws ModelCallException 模型调用本身失败（连不上、超时），不重试
      */
     public AgentDecision decide(AgentRun run) {
-<span class="fc" id="L99">        AgentDecision decision = call(run, false);</span>
-<span class="fc bfc" id="L100" title="All 2 branches covered.">        if (decision == null) {</span>
-<span class="fc" id="L101">            log.info(&quot;Agent 第 {} 步：输出解析不了，带上更严格的提醒重试一次&quot;, run.nextIndex());</span>
-<span class="fc" id="L102">            decision = call(run, true);</span>
+<span class="fc" id="L100">        AgentDecision decision = call(run, false);</span>
+<span class="fc bfc" id="L101" title="All 2 branches covered.">        if (decision == null) {</span>
+<span class="fc" id="L102">            log.info(&quot;Agent 第 {} 步：输出解析不了，带上更严格的提醒重试一次&quot;, run.nextIndex());</span>
+<span class="fc" id="L103">            decision = call(run, true);</span>
         }
-<span class="fc" id="L104">        return decision;</span>
+<span class="fc" id="L105">        return decision;</span>
     }
 
     private AgentDecision call(AgentRun run, boolean strict) {
-<span class="fc bfc" id="L108" title="All 2 branches covered.">        String template = strict ? STEP_TEMPLATE + &quot;\n\n&quot; + STRICT_REMINDER : STEP_TEMPLATE;</span>
+<span class="fc bfc" id="L109" title="All 2 branches covered.">        String template = strict ? STEP_TEMPLATE + &quot;\n\n&quot; + STRICT_REMINDER : STEP_TEMPLATE;</span>
         try {
-<span class="fc" id="L110">            return chatClient</span>
-<span class="fc" id="L111">                    .prompt()</span>
-<span class="fc" id="L112">                    .system(s -&gt; s.text(systemTemplate).params(prompts.variables()))</span>
-<span class="fc" id="L113">                    .messages(run.task().history())</span>
-<span class="fc" id="L114">                    .user(u -&gt; u.text(template)</span>
-<span class="fc" id="L115">                            .param(&quot;message&quot;, run.task().message())</span>
-<span class="fc" id="L116">                            .param(&quot;record&quot;, record(run.steps()))</span>
-<span class="fc" id="L117">                            .param(&quot;step&quot;, String.valueOf(run.nextIndex()))</span>
-<span class="fc" id="L118">                            .param(&quot;maxSteps&quot;, String.valueOf(properties.maxSteps())))</span>
-<span class="fc" id="L119">                    .options(ChatOptions.builder().temperature(TEMPERATURE).maxTokens(properties.maxOutputTokens()))</span>
-<span class="fc" id="L120">                    .call()</span>
-<span class="fc" id="L121">                    .entity(AgentDecision.class, spec -&gt; spec.useProviderStructuredOutput());</span>
-<span class="fc" id="L122">        } catch (JacksonException e) {</span>
-<span class="fc" id="L123">            log.info(&quot;Agent：输出不是合法的 JSON：{}&quot;, e.getOriginalMessage());</span>
-<span class="fc" id="L124">            return null;</span>
-<span class="fc" id="L125">        } catch (RuntimeException e) {</span>
-<span class="fc" id="L126">            throw ModelCallException.from(e);</span>
+<span class="fc" id="L111">            return chatClient</span>
+<span class="fc" id="L112">                    .prompt()</span>
+<span class="fc" id="L113">                    .system(s -&gt; s.text(systemTemplate).params(prompts.variables()))</span>
+<span class="fc" id="L114">                    .messages(run.task().history())</span>
+<span class="fc" id="L115">                    .user(u -&gt; u.text(template)</span>
+<span class="fc" id="L116">                            .param(&quot;message&quot;, run.task().message())</span>
+<span class="fc" id="L117">                            .param(&quot;record&quot;, record(run.steps()))</span>
+<span class="fc" id="L118">                            .param(&quot;step&quot;, String.valueOf(run.nextIndex()))</span>
+<span class="fc" id="L119">                            .param(&quot;maxSteps&quot;, String.valueOf(properties.maxSteps())))</span>
+<span class="fc" id="L120">                    .options(ChatOptions.builder().temperature(TEMPERATURE).maxTokens(properties.maxOutputTokens()))</span>
+<span class="fc" id="L121">                    .advisors(UsageAdvisor.stage(&quot;agent&quot;)) // 第 9 章：Token 记账时标明这是 Agent 的一步</span>
+<span class="fc" id="L122">                    .call()</span>
+<span class="fc" id="L123">                    .entity(AgentDecision.class, spec -&gt; spec.useProviderStructuredOutput());</span>
+<span class="fc" id="L124">        } catch (JacksonException e) {</span>
+<span class="fc" id="L125">            log.info(&quot;Agent：输出不是合法的 JSON：{}&quot;, e.getOriginalMessage());</span>
+<span class="fc" id="L126">            return null;</span>
+<span class="fc" id="L127">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L128">            throw ModelCallException.from(e);</span>
         }
     }
 
@@ -134,14 +136,14 @@ public class AgentPlanner {
      * @return 交给模型的文字；还没走时是 {@link #EMPTY_RECORD}
      */
     static String record(List&lt;AgentStep&gt; steps) {
-<span class="fc bfc" id="L137" title="All 2 branches covered.">        if (steps.isEmpty()) {</span>
-<span class="fc" id="L138">            return EMPTY_RECORD;</span>
+<span class="fc bfc" id="L139" title="All 2 branches covered.">        if (steps.isEmpty()) {</span>
+<span class="fc" id="L140">            return EMPTY_RECORD;</span>
         }
-<span class="fc" id="L140">        return steps.stream()</span>
-<span class="fc" id="L141">                .map(s -&gt; &quot;第 &quot; + s.index() + &quot; 步：&quot; + s.action() + &quot; &quot; + s.arguments()</span>
-<span class="fc bfc" id="L142" title="All 2 branches covered.">                        + (s.thought() != null ? &quot;\n想法：&quot; + s.thought() : &quot;&quot;)</span>
-<span class="fc" id="L143">                        + &quot;\n结果：&quot; + s.observation())</span>
-<span class="fc" id="L144">                .collect(Collectors.joining(&quot;\n\n&quot;));</span>
+<span class="fc" id="L142">        return steps.stream()</span>
+<span class="fc" id="L143">                .map(s -&gt; &quot;第 &quot; + s.index() + &quot; 步：&quot; + s.action() + &quot; &quot; + s.arguments()</span>
+<span class="fc bfc" id="L144" title="All 2 branches covered.">                        + (s.thought() != null ? &quot;\n想法：&quot; + s.thought() : &quot;&quot;)</span>
+<span class="fc" id="L145">                        + &quot;\n结果：&quot; + s.observation())</span>
+<span class="fc" id="L146">                .collect(Collectors.joining(&quot;\n\n&quot;));</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

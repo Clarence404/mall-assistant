@@ -3,6 +3,7 @@
 import io.github.clarence404.assistant.agent.AgentStep;
 import io.github.clarence404.assistant.agent.PendingConfirmation;
 import io.github.clarence404.assistant.memory.MemoryTrace;
+import io.github.clarence404.assistant.rag.BlockedSource;
 import io.github.clarence404.assistant.rag.RagSource;
 import io.github.clarence404.assistant.tool.ToolInvocation;
 
@@ -23,41 +24,48 @@ public sealed interface AnswerPart {
      *
      * @param text 模型新生成的文字（或拒答话术、RAG 的固定话术）
      */
-<span class="fc" id="L26">    record Text(String text) implements AnswerPart {}</span>
+<span class="fc" id="L27">    record Text(String text) implements AnswerPart {}</span>
 
     /**
      * 一次工具调用。
      *
      * @param invocation 调用记录
      */
-<span class="fc" id="L33">    record ToolUse(ToolInvocation invocation) implements AnswerPart {}</span>
+<span class="fc" id="L34">    record ToolUse(ToolInvocation invocation) implements AnswerPart {}</span>
 
     /**
      * 一条 RAG 引用来源（第 5 章）：在模型的第一段文字之前推出，页面先拿到 [1][2]… 对应的资料，文字里出现编号时就能对上。
      *
      * @param source 引用来源
      */
-<span class="fc" id="L40">    record Source(RagSource source) implements AnswerPart {}</span>
+<span class="fc" id="L41">    record Source(RagSource source) implements AnswerPart {}</span>
 
     /**
      * 这一轮的记忆情况（第 6 章）：带了几轮历史、裁掉几轮、追问改写成了什么。请求带了会话 ID 时，在第一段文字（和引用来源）之前推出一次。
      *
      * @param trace 记忆调试信息
      */
-<span class="fc" id="L47">    record Memory(MemoryTrace trace) implements AnswerPart {}</span>
+<span class="fc" id="L48">    record Memory(MemoryTrace trace) implements AnswerPart {}</span>
 
     /**
      * Agent 走了一步（第 7 章）：边走边推，页面的「Agent 步骤」一栏实时多一行。
      *
      * @param step 这一步
      */
-<span class="fc" id="L54">    record Step(AgentStep step) implements AnswerPart {}</span>
+<span class="fc" id="L55">    record Step(AgentStep step) implements AnswerPart {}</span>
 
     /**
      * Agent 提出了一个写操作（第 7 章）：在它那一步之后、回答文字之前推出，页面画一张确认卡片。
      *
      * @param confirmation 待确认操作
      */
-<span class="fc" id="L61">    record Confirm(PendingConfirmation confirmation) implements AnswerPart {}</span>
+<span class="fc" id="L62">    record Confirm(PendingConfirmation confirmation) implements AnswerPart {}</span>
+
+    /**
+     * 一块被提示注入过滤挡下的资料（第 9 章）：RAG 流式回答里，在引用来源之后、文字之前推出，页面调试面板用红色列出。阻塞接口在 {@code rag.blocked} 里。
+     *
+     * @param source 被挡下的资料
+     */
+<span class="fc" id="L69">    record Blocked(BlockedSource source) implements AnswerPart {}</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StreamEvents.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.chat</a> &gt; <span class="el_source">StreamEvents.java</span></div><h1>StreamEvents.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.chat;
 
+import io.github.clarence404.assistant.ops.UsageTrace;
+
 /**
  * 流式接口 {@code POST /api/chat/stream} 推给前端的 SSE 事件，data 都是 JSON。
  *
@@ -16,14 +18,18 @@
  *       不走 Agent 时没有
  *   &lt;li&gt;{@code event: confirm}，data 为 {@code PendingConfirmation}：第 7 章新增，Agent 提出写操作（取消订单、改地址、提交售后）时推一个，
  *       紧跟在提出它的那个 step 之后；页面据此画确认卡片，点按钮调 {@code POST /api/agent/confirmations/{id}}
+ *   &lt;li&gt;{@code event: blocked}，data 为 {@code BlockedSource}：第 9 章新增，RAG 检索到、但被提示注入过滤挡下的资料（没交给模型），在 source 之后、
+ *       文字之前推出，0 到多个；页面调试面板用红色列出
  *   &lt;li&gt;{@code event: token}，data 为 {@link Token}：一段增量文本，前端按顺序拼接
- *   &lt;li&gt;{@code event: done}，data 为 {@link Done}：回答结束，之后连接关闭
+ *   &lt;li&gt;{@code event: done}，data 为 {@link Done}：回答结束，之后连接关闭；第 9 章起 data 里多一个 {@code usage}（这一轮每次模型调用的 Token、合计、
+ *       今日用量与预算），只认 {@code reason} 的旧前端不受影响
  *   &lt;li&gt;{@code event: error}，data 为 {@link Error}：出错，之后连接关闭，不再有 done
  * &lt;/ul&gt;
  *
  * &lt;p&gt;顺序：{@code intent → tool* → token* → done | error}（第 3 章起 tool 也可能夹在 token 之间：模型先说了几句再调工具时）；
  * 走 RAG 时是 {@code intent → source* → token* → done | error}（第 5 章，RAG 不用工具）；第 6 章起带了会话 ID 时，intent 之后紧跟一个 memory 事件；
- * 第 7 章走 Agent 时是 {@code intent → memory? → step* → confirm? → token → done | error}（Agent 的回答是整段一个 token）。
+ * 第 7 章走 Agent 时是 {@code intent → memory? → step* → confirm? → token → done | error}（Agent 的回答是整段一个 token）；
+ * 第 9 章起进门就被挡下（限流、太忙、超预算）时只有一个 error，连 intent 都没有。
  *
  * &lt;p&gt;data 用 JSON 而不是纯文本：增量文本里常有换行和前导空格，纯文本 SSE 会把换行拆成多行 data、 把行首空格吃掉。
  *
@@ -40,6 +46,7 @@ public final class StreamEvents {
     public static final String MEMORY = &quot;memory&quot;;
     public static final String STEP = &quot;step&quot;;
     public static final String CONFIRM = &quot;confirm&quot;;
+    public static final String BLOCKED = &quot;blocked&quot;;
     public static final String TOKEN = &quot;token&quot;;
     public static final String DONE = &quot;done&quot;;
     public static final String ERROR = &quot;error&quot;;
@@ -51,18 +58,29 @@ public final class StreamEvents {
      *
      * @param text 模型新生成的一小段文字（通常是一个到几个 token），前端追加到气泡末尾
      */
-<span class="fc" id="L54">    public record Token(String text) {}</span>
+<span class="fc" id="L61">    public record Token(String text) {}</span>
 
     /**
      * 正常结束。
      *
      * @param reason 结束原因，目前只有 {@code stop}（模型自然说完）
+     * @param usage 第 9 章：这一轮的 Token 用量；没有统计时为 null
      */
-<span class="fc" id="L61">    public record Done(String reason) {</span>
+<span class="fc" id="L69">    public record Done(String reason, UsageTrace usage) {</span>
 
-        /** 模型自然说完。 */
+        /** 模型自然说完（没有用量统计）。 */
         public static Done stop() {
-<span class="fc" id="L65">            return new Done(&quot;stop&quot;);</span>
+<span class="nc" id="L73">            return new Done(&quot;stop&quot;, null);</span>
+        }
+
+        /**
+         * 模型自然说完，带上这一轮的用量（第 9 章）。
+         *
+         * @param usage 用量
+         * @return 结束事件的数据
+         */
+        public static Done stop(UsageTrace usage) {
+<span class="fc" id="L83">            return new Done(&quot;stop&quot;, usage);</span>
         }
     }
 
@@ -72,6 +90,6 @@ public final class StreamEvents {
      * @param code 错误码，取 {@code ModelFailure} 的 name()，如 MODEL_TIMEOUT
      * @param message 给用户看的提示，不含内部细节
      */
-<span class="fc" id="L75">    public record Error(String code, String message) {}</span>
+<span class="fc" id="L93">    public record Error(String code, String message) {}</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

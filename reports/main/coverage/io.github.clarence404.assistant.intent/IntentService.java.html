@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>IntentService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.intent</a> &gt; <span class="el_source">IntentService.java</span></div><h1>IntentService.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.intent;
 
 import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.ops.UsageAdvisor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -31,7 +32,7 @@ import tools.jackson.core.JacksonException;
 @Service
 public class IntentService {
 
-<span class="fc" id="L34">    private static final Logger log = LoggerFactory.getLogger(IntentService.class);</span>
+<span class="fc" id="L35">    private static final Logger log = LoggerFactory.getLogger(IntentService.class);</span>
 
     /**
      * 分类要稳定、可复现，温度调到 0；回答用配置文件里的温度。
@@ -74,10 +75,10 @@ public class IntentService {
      * @param intentPrompt 意图识别的系统提示词：取值说明 + few-shot 示例（给模型看几个「输入 → 输出」的例子，比纯文字说明更管用）；
      *     测试里可以换成别的文件
      */
-<span class="fc" id="L77">    public IntentService(ChatClient chatClient, @Value(&quot;classpath:prompts/intent-v2.st&quot;) Resource intentPrompt) {</span>
-<span class="fc" id="L78">        this.chatClient = chatClient;</span>
-<span class="fc" id="L79">        this.intentPrompt = intentPrompt;</span>
-<span class="fc" id="L80">    }</span>
+<span class="fc" id="L78">    public IntentService(ChatClient chatClient, @Value(&quot;classpath:prompts/intent-v2.st&quot;) Resource intentPrompt) {</span>
+<span class="fc" id="L79">        this.chatClient = chatClient;</span>
+<span class="fc" id="L80">        this.intentPrompt = intentPrompt;</span>
+<span class="fc" id="L81">    }</span>
 
     /**
      * 识别一条用户消息的意图，结果已经过 {@link IntentResult#sanitized()} 校验。最多调两次模型，解析失败时兜底为 UNKNOWN。
@@ -87,18 +88,18 @@ public class IntentService {
      * @throws ModelCallException 模型调用本身失败（连不上、超时），不重试、不兜底
      */
     public IntentResult classify(String message) {
-<span class="fc" id="L90">        IntentResult result = callModel(message, false);</span>
-<span class="fc bfc" id="L91" title="All 2 branches covered.">        if (result == null) {</span>
-<span class="fc" id="L92">            log.info(&quot;意图识别：模型输出无法解析，带上更严格的提醒重试一次&quot;);</span>
-<span class="fc" id="L93">            result = callModel(message, true);</span>
+<span class="fc" id="L91">        IntentResult result = callModel(message, false);</span>
+<span class="fc bfc" id="L92" title="All 2 branches covered.">        if (result == null) {</span>
+<span class="fc" id="L93">            log.info(&quot;意图识别：模型输出无法解析，带上更严格的提醒重试一次&quot;);</span>
+<span class="fc" id="L94">            result = callModel(message, true);</span>
         }
-<span class="fc bfc" id="L95" title="All 2 branches covered.">        if (result == null) {</span>
-<span class="fc" id="L96">            log.warn(&quot;意图识别：重试后仍无法解析，按 UNKNOWN 处理&quot;);</span>
-<span class="fc" id="L97">            return IntentResult.unknown();</span>
+<span class="fc bfc" id="L96" title="All 2 branches covered.">        if (result == null) {</span>
+<span class="fc" id="L97">            log.warn(&quot;意图识别：重试后仍无法解析，按 UNKNOWN 处理&quot;);</span>
+<span class="fc" id="L98">            return IntentResult.unknown();</span>
         }
-<span class="fc" id="L99">        IntentResult sanitized = result.sanitized();</span>
-<span class="fc" id="L100">        log.debug(&quot;意图识别：{} -&gt; {}&quot;, message, sanitized);</span>
-<span class="fc" id="L101">        return sanitized;</span>
+<span class="fc" id="L100">        IntentResult sanitized = result.sanitized();</span>
+<span class="fc" id="L101">        log.debug(&quot;意图识别：{} -&gt; {}&quot;, message, sanitized);</span>
+<span class="fc" id="L102">        return sanitized;</span>
     }
 
     /**
@@ -117,20 +118,21 @@ public class IntentService {
      * @throws ModelCallException 模型调用本身失败
      */
     IntentResult callModel(String message, boolean strict) {
-<span class="fc bfc" id="L120" title="All 2 branches covered.">        String template = strict ? USER_TEMPLATE + &quot;\n\n&quot; + STRICT_REMINDER : USER_TEMPLATE;</span>
+<span class="fc bfc" id="L121" title="All 2 branches covered.">        String template = strict ? USER_TEMPLATE + &quot;\n\n&quot; + STRICT_REMINDER : USER_TEMPLATE;</span>
         try {
-<span class="fc" id="L122">            return chatClient</span>
-<span class="fc" id="L123">                    .prompt()</span>
-<span class="fc" id="L124">                    .system(intentPrompt)</span>
-<span class="fc" id="L125">                    .user(u -&gt; u.text(template).param(&quot;message&quot;, message))</span>
-<span class="fc" id="L126">                    .options(ChatOptions.builder().temperature(TEMPERATURE).maxTokens(MAX_TOKENS))</span>
-<span class="fc" id="L127">                    .call()</span>
-<span class="fc" id="L128">                    .entity(IntentResult.class, spec -&gt; spec.useProviderStructuredOutput());</span>
-<span class="fc" id="L129">        } catch (JacksonException e) {</span>
-<span class="fc" id="L130">            log.info(&quot;意图识别：输出不是合法的 JSON：{}&quot;, e.getOriginalMessage());</span>
-<span class="fc" id="L131">            return null;</span>
-<span class="fc" id="L132">        } catch (RuntimeException e) {</span>
-<span class="fc" id="L133">            throw ModelCallException.from(e);</span>
+<span class="fc" id="L123">            return chatClient</span>
+<span class="fc" id="L124">                    .prompt()</span>
+<span class="fc" id="L125">                    .system(intentPrompt)</span>
+<span class="fc" id="L126">                    .user(u -&gt; u.text(template).param(&quot;message&quot;, message))</span>
+<span class="fc" id="L127">                    .options(ChatOptions.builder().temperature(TEMPERATURE).maxTokens(MAX_TOKENS))</span>
+<span class="fc" id="L128">                    .advisors(UsageAdvisor.stage(&quot;intent&quot;)) // 第 9 章：Token 记账时标明这是意图识别</span>
+<span class="fc" id="L129">                    .call()</span>
+<span class="fc" id="L130">                    .entity(IntentResult.class, spec -&gt; spec.useProviderStructuredOutput());</span>
+<span class="fc" id="L131">        } catch (JacksonException e) {</span>
+<span class="fc" id="L132">            log.info(&quot;意图识别：输出不是合法的 JSON：{}&quot;, e.getOriginalMessage());</span>
+<span class="fc" id="L133">            return null;</span>
+<span class="fc" id="L134">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L135">            throw ModelCallException.from(e);</span>
         }
     }
 }

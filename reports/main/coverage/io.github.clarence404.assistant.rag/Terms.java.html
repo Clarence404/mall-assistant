@@ -60,7 +60,7 @@ public final class Terms {
 <span class="fc" id="L60">                i++;</span>
 <span class="fc bfc" id="L61" title="All 2 branches covered.">            } else if (Character.isLetterOrDigit(c)) {</span>
 <span class="fc" id="L62">                int end = i;</span>
-<span class="pc bpc" id="L63" title="1 of 6 branches missed.">                while (end &lt; t.length() &amp;&amp; Character.isLetterOrDigit(t.charAt(end)) &amp;&amp; !isHan(t.charAt(end))) {</span>
+<span class="fc bfc" id="L63" title="All 6 branches covered.">                while (end &lt; t.length() &amp;&amp; Character.isLetterOrDigit(t.charAt(end)) &amp;&amp; !isHan(t.charAt(end))) {</span>
 <span class="fc" id="L64">                    end++;</span>
                 }
 <span class="fc" id="L66">                terms.add(t.substring(i, end));</span>

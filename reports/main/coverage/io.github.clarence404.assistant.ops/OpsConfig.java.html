@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>OpsConfig.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.ops</a> &gt; <span class="el_source">OpsConfig.java</span></div><h1>OpsConfig.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.ops;
+
+import io.github.clarence404.assistant.guard.CircuitBreakerAdvisor;
+import io.github.clarence404.assistant.guard.GuardProperties;
+import io.github.clarence404.assistant.guard.InjectionFilter;
+import org.springframework.ai.chat.client.ChatClientCustomizer;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/**
+ * 第 9 章的装配：把熔断和 Token 记账挂到共享 ChatClient 上，按配置创建提示注入过滤器。
+ *
+ * &lt;p&gt;所在层：配置。Spring AI 自动配置的 {@code ChatClient.Builder} 在交给 {@code chat.ChatClientConfig} 之前，会先经过容器里所有的
+ * {@link ChatClientCustomizer}；这里加的两个默认 advisor 因此出现在&lt;b&gt;每一次&lt;/b&gt;模型调用上（意图识别、追问改写、回答、RAG、Agent、摘要），
+ * 业务代码不用改。前几章的测试手工 {@code ChatClient.builder(假模型)} 时没有它们，行为和以前一样。
+ */
+@Configuration(proxyBeanMethods = false)
+<span class="fc" id="L18">public class OpsConfig {</span>
+
+    /**
+     * 给共享 ChatClient 加上默认 advisor：外层熔断、内层记账（顺序由各自的 {@code getOrder()} 决定，和这里写的先后无关）。
+     *
+     * @param circuitBreaker 熔断
+     * @param usage Token 记账
+     * @return 定制器
+     */
+    @Bean
+    public ChatClientCustomizer opsAdvisors(CircuitBreakerAdvisor circuitBreaker, UsageAdvisor usage) {
+<span class="fc" id="L29">        return builder -&gt; builder.defaultAdvisors(circuitBreaker, usage);</span>
+    }
+
+    /**
+     * 提示注入过滤器：内置规则 + {@code assistant.guard.injection.extra-patterns}。
+     *
+     * @param properties {@code assistant.guard.*}
+     * @return 过滤器
+     */
+    @Bean
+    public InjectionFilter injectionFilter(GuardProperties properties) {
+<span class="fc" id="L40">        return InjectionFilter.of(properties.injection());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

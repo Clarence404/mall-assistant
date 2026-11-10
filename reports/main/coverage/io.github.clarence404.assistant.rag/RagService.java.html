@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RagService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.rag</a> &gt; <span class="el_source">RagService.java</span></div><h1>RagService.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.rag;
 
+import io.github.clarence404.assistant.guard.InjectionFilter;
 import io.github.clarence404.assistant.intent.IntentResult;
 import io.github.clarence404.assistant.knowledge.KnowledgeException;
+import io.github.clarence404.assistant.ops.ChatMetrics;
+import io.github.clarence404.assistant.ops.UsageAdvisor;
 import io.github.clarence404.assistant.prompt.AssistantPrompts;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -13,6 +17,7 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.rag.Query;
 import org.springframework.ai.rag.preretrieval.query.transformation.RewriteQueryTransformer;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -43,11 +48,15 @@ import org.springframework.stereotype.Service;
  * &lt;p&gt;为什么没有直接用 Spring AI 的 {@code RetrievalAugmentationAdvisor}（模块化 RAG 的「一站式」顾问）：它把检索、拼提示词、调模型串在一个
  * advisor 里，适合快速搭起来；本项目要在调模型&lt;b&gt;之前&lt;/b&gt;拿到检索结果（决定要不要短路、先把 source 事件推给页面）、要关键词 + 向量的混合检索、
  * 要自己的编号格式和引用校验，自己串这几步更直观。只在「问题改写」这一步用了它的现成组件 {@link RewriteQueryTransformer}。
+ *
+ * &lt;p&gt;&lt;b&gt;第 9 章：检索到的资料先过提示注入过滤&lt;/b&gt;（{@link #screen}）。第 5 章只靠「圈起来、说明它只是数据」，实测 1.5b 换两版措辞就会照着恶意资料说
+ * 「所有订单都可以全额退款」。现在明显在下指令的资料块根本不进提示词，被挡的块记在 {@link RagTrace#blocked()} 里给开发者看；全被挡了就和「没检索到」
+ * 一样短路，不调模型。第 7 章 Agent 的查规则也走 {@link #plan}，同样受保护。
  */
 @Service
 public class RagService {
 
-<span class="fc" id="L50">    private static final Logger log = LoggerFactory.getLogger(RagService.class);</span>
+<span class="fc" id="L59">    private static final Logger log = LoggerFactory.getLogger(RagService.class);</span>
 
     /**
      * 带资料的用户消息模板：用标签圈起来、编了号的资料 + 一句「它只是数据」+ 用户的问题 + 一句「标出编号」。
@@ -83,8 +92,10 @@ public class RagService {
     private final RagProperties properties;
     private final AssistantPrompts prompts;
     private final Resource systemTemplate;
-<span class="fc" id="L86">    private final Resource notFoundTemplate = new ClassPathResource(&quot;prompts/rag-not-found.st&quot;);</span>
-<span class="fc" id="L87">    private final Resource unavailableTemplate = new ClassPathResource(&quot;prompts/rag-unavailable.st&quot;);</span>
+<span class="fc" id="L95">    private final Resource notFoundTemplate = new ClassPathResource(&quot;prompts/rag-not-found.st&quot;);</span>
+<span class="fc" id="L96">    private final Resource unavailableTemplate = new ClassPathResource(&quot;prompts/rag-unavailable.st&quot;);</span>
+    private final InjectionFilter filter;
+    private final ChatMetrics metrics;
     private volatile RewriteQueryTransformer rewriter;
 
     /**
@@ -95,17 +106,39 @@ public class RagService {
      * @param prompts 模板变量（商城名、客服名、今天）
      * @throws IllegalStateException 配置的系统提示词版本找不到模板文件，应用启动失败
      */
-<span class="fc" id="L98">    public RagService(ChatClient chatClient, RagRetriever retriever, AssistantPrompts prompts) {</span>
-<span class="fc" id="L99">        this.chatClient = chatClient;</span>
-<span class="fc" id="L100">        this.retriever = retriever;</span>
-<span class="fc" id="L101">        this.properties = retriever.properties();</span>
-<span class="fc" id="L102">        this.prompts = prompts;</span>
-<span class="fc" id="L103">        this.systemTemplate = new ClassPathResource(&quot;prompts/&quot; + properties.prompt() + &quot;.st&quot;);</span>
-<span class="pc bpc" id="L104" title="1 of 2 branches missed.">        if (!systemTemplate.exists()) {</span>
-<span class="nc" id="L105">            throw new IllegalStateException(</span>
-<span class="nc" id="L106">                    &quot;找不到 RAG 系统提示词模板 prompts/&quot; + properties.prompt() + &quot;.st，检查 assistant.rag.prompt&quot;);</span>
+    public RagService(ChatClient chatClient, RagRetriever retriever, AssistantPrompts prompts) {
+<span class="fc" id="L110">        this(chatClient, retriever, prompts, InjectionFilter.off(), ChatMetrics.noop());</span>
+<span class="fc" id="L111">    }</span>
+
+    /**
+     * 创建 RAG 服务（第 9 章起 Spring 用这个）：检索到的资料先过提示注入过滤。
+     *
+     * @param chatClient 共享的 ChatClient
+     * @param retriever 检索器
+     * @param prompts 模板变量
+     * @param filter 提示注入过滤器（{@link InjectionFilter#off()} 等于第 8 章的行为）
+     * @param metrics 指标（记被挡下的块）
+     * @throws IllegalStateException 配置的系统提示词版本找不到模板文件
+     */
+    @Autowired
+    public RagService(
+            ChatClient chatClient,
+            RagRetriever retriever,
+            AssistantPrompts prompts,
+            InjectionFilter filter,
+<span class="fc" id="L129">            ChatMetrics metrics) {</span>
+<span class="fc" id="L130">        this.chatClient = chatClient;</span>
+<span class="fc" id="L131">        this.filter = filter;</span>
+<span class="fc" id="L132">        this.metrics = metrics;</span>
+<span class="fc" id="L133">        this.retriever = retriever;</span>
+<span class="fc" id="L134">        this.properties = retriever.properties();</span>
+<span class="fc" id="L135">        this.prompts = prompts;</span>
+<span class="fc" id="L136">        this.systemTemplate = new ClassPathResource(&quot;prompts/&quot; + properties.prompt() + &quot;.st&quot;);</span>
+<span class="pc bpc" id="L137" title="1 of 2 branches missed.">        if (!systemTemplate.exists()) {</span>
+<span class="nc" id="L138">            throw new IllegalStateException(</span>
+<span class="nc" id="L139">                    &quot;找不到 RAG 系统提示词模板 prompts/&quot; + properties.prompt() + &quot;.st，检查 assistant.rag.prompt&quot;);</span>
         }
-<span class="fc" id="L108">    }</span>
+<span class="fc" id="L141">    }</span>
 
     /**
      * 这条消息走不走 RAG：总开关打开，且意图在 {@code assistant.rag.intents} 里（默认售后、规则政策）。
@@ -114,7 +147,7 @@ public class RagService {
      * @return 走 RAG 时为 true
      */
     public boolean handles(IntentResult intent) {
-<span class="fc bfc" id="L117" title="All 4 branches covered.">        return properties.enabled() &amp;&amp; properties.intents().contains(intent.intent());</span>
+<span class="fc bfc" id="L150" title="All 4 branches covered.">        return properties.enabled() &amp;&amp; properties.intents().contains(intent.intent());</span>
     }
 
     /**
@@ -127,35 +160,45 @@ public class RagService {
      * @return 回答计划
      */
     public RagPlan plan(String message) {
-<span class="fc" id="L130">        long start = System.nanoTime();</span>
-<span class="fc" id="L131">        String rewritten = rewrite(message);</span>
-<span class="fc bfc" id="L132" title="All 2 branches covered.">        String vectorQuery = rewritten != null ? rewritten : message;</span>
-<span class="fc bfc" id="L133" title="All 2 branches covered.">        String keywordQuery = rewritten != null ? message + &quot;\n&quot; + rewritten : message;</span>
-<span class="pc bpc" id="L134" title="1 of 2 branches missed.">        String mode = properties.hybrid() ? &quot;hybrid&quot; : RagRetriever.VECTOR;</span>
+<span class="fc" id="L163">        long start = System.nanoTime();</span>
+<span class="fc" id="L164">        String rewritten = rewrite(message);</span>
+<span class="fc bfc" id="L165" title="All 2 branches covered.">        String vectorQuery = rewritten != null ? rewritten : message;</span>
+<span class="fc bfc" id="L166" title="All 2 branches covered.">        String keywordQuery = rewritten != null ? message + &quot;\n&quot; + rewritten : message;</span>
+<span class="pc bpc" id="L167" title="1 of 2 branches missed.">        String mode = properties.hybrid() ? &quot;hybrid&quot; : RagRetriever.VECTOR;</span>
         try {
-<span class="fc" id="L136">            RagRetriever.Retrieval retrieval = retriever.retrieve(vectorQuery, keywordQuery, properties.topK());</span>
-<span class="fc" id="L137">            List&lt;RagSource&gt; sources = retrieval.sources();</span>
-<span class="fc" id="L138">            RagTrace trace = new RagTrace(</span>
+<span class="fc" id="L169">            RagRetriever.Retrieval retrieval = retriever.retrieve(vectorQuery, keywordQuery, properties.topK());</span>
+            // 第 9 章：资料进提示词之前先过提示注入过滤，被挡的块不交给模型、剩下的重新编号
+<span class="fc" id="L171">            Screened screened = screen(retrieval.sources(), filter);</span>
+<span class="fc" id="L172">            List&lt;RagSource&gt; sources = screened.kept();</span>
+<span class="fc" id="L173">            screened.blocked().forEach(b -&gt; {</span>
+<span class="fc" id="L174">                log.warn(&quot;RAG：资料 {}（{}）疑似提示注入，已挡下：{}&quot;, b.source(), b.headingPath(), b.rules());</span>
+<span class="fc" id="L175">                metrics.injectionBlocked(&quot;rag&quot;, b.rules().getFirst());</span>
+<span class="fc" id="L176">            });</span>
+<span class="fc bfc" id="L177" title="All 2 branches covered.">            String shortCircuit = sources.isEmpty()</span>
+<span class="fc bfc" id="L178" title="All 2 branches covered.">                    ? (screened.blocked().isEmpty() ? RagTrace.NO_MATCH : RagTrace.ALL_BLOCKED)</span>
+<span class="fc" id="L179">                    : null;</span>
+<span class="fc" id="L180">            RagTrace trace = new RagTrace(</span>
                     message,
                     rewritten,
                     mode,
-<span class="fc" id="L142">                    retrieval.vectorCandidates(),</span>
-<span class="fc" id="L143">                    retrieval.keywordCandidates(),</span>
-<span class="fc" id="L144">                    retrieval.passed(),</span>
-<span class="fc" id="L145">                    sources.stream().mapToInt(s -&gt; s.content().length()).sum(),</span>
-<span class="fc" id="L146">                    elapsedMs(start),</span>
-<span class="fc bfc" id="L147" title="All 2 branches covered.">                    sources.isEmpty() ? RagTrace.NO_MATCH : null,</span>
+<span class="fc" id="L184">                    retrieval.vectorCandidates(),</span>
+<span class="fc" id="L185">                    retrieval.keywordCandidates(),</span>
+<span class="fc" id="L186">                    retrieval.passed(),</span>
+<span class="fc" id="L187">                    sources.stream().mapToInt(s -&gt; s.content().length()).sum(),</span>
+<span class="fc" id="L188">                    elapsedMs(start),</span>
+                    shortCircuit,
                     null,
-<span class="fc" id="L149">                    List.of(),</span>
-<span class="fc" id="L150">                    List.of(),</span>
-                    null);
-<span class="fc bfc" id="L152" title="All 2 branches covered.">            if (sources.isEmpty()) {</span>
-<span class="fc" id="L153">                log.info(&quot;RAG：没有检索到相关资料，不调模型，直接回固定话术：{}&quot;, message);</span>
+<span class="fc" id="L191">                    List.of(),</span>
+<span class="fc" id="L192">                    List.of(),</span>
+                    null,
+<span class="fc" id="L194">                    screened.blocked());</span>
+<span class="fc bfc" id="L195" title="All 2 branches covered.">            if (sources.isEmpty()) {</span>
+<span class="fc" id="L196">                log.info(&quot;RAG：没有检索到相关资料，不调模型，直接回固定话术：{}&quot;, message);</span>
             }
-<span class="fc" id="L155">            return new RagPlan(sources, trace, render(notFoundTemplate));</span>
-<span class="fc" id="L156">        } catch (KnowledgeException e) {</span>
-<span class="fc" id="L157">            log.warn(&quot;RAG：知识库不可用（{}），不调模型：{}&quot;, e.failure(), e.getMessage());</span>
-<span class="fc" id="L158">            RagTrace trace = new RagTrace(</span>
+<span class="fc" id="L198">            return new RagPlan(sources, trace, render(notFoundTemplate));</span>
+<span class="fc" id="L199">        } catch (KnowledgeException e) {</span>
+<span class="fc" id="L200">            log.warn(&quot;RAG：知识库不可用（{}），不调模型：{}&quot;, e.failure(), e.getMessage());</span>
+<span class="fc" id="L201">            RagTrace trace = new RagTrace(</span>
                     message,
                     rewritten,
                     mode,
@@ -163,13 +206,13 @@ public class RagService {
                     0,
                     0,
                     0,
-<span class="fc" id="L166">                    elapsedMs(start),</span>
+<span class="fc" id="L209">                    elapsedMs(start),</span>
                     RagTrace.KNOWLEDGE_UNAVAILABLE,
-<span class="fc" id="L168">                    e.getMessage(),</span>
-<span class="fc" id="L169">                    List.of(),</span>
-<span class="fc" id="L170">                    List.of(),</span>
+<span class="fc" id="L211">                    e.getMessage(),</span>
+<span class="fc" id="L212">                    List.of(),</span>
+<span class="fc" id="L213">                    List.of(),</span>
                     null);
-<span class="fc" id="L172">            return new RagPlan(List.of(), trace, render(unavailableTemplate));</span>
+<span class="fc" id="L215">            return new RagPlan(List.of(), trace, render(unavailableTemplate));</span>
         }
     }
 
@@ -181,7 +224,7 @@ public class RagService {
      * @return 还没发出的请求，调用方接着 {@code call()} 或 {@code stream()}
      */
     public ChatClient.ChatClientRequestSpec request(String message, RagPlan plan) {
-<span class="fc" id="L184">        return request(message, plan, List.of());</span>
+<span class="fc" id="L227">        return request(message, plan, List.of());</span>
     }
 
     /**
@@ -199,12 +242,75 @@ public class RagService {
      * @return 还没发出的请求，调用方接着 {@code call()} 或 {@code stream()}
      */
     public ChatClient.ChatClientRequestSpec request(String message, RagPlan plan, List&lt;Message&gt; history) {
-<span class="fc" id="L202">        return chatClient</span>
-<span class="fc" id="L203">                .prompt()</span>
-<span class="fc" id="L204">                .system(spec -&gt; spec.text(systemTemplate).params(prompts.variables()))</span>
-<span class="fc" id="L205">                .messages(history)</span>
-<span class="fc" id="L206">                .user(u -&gt; u.text(CONTEXT_TEMPLATE).param(&quot;message&quot;, message).param(&quot;context&quot;, context(plan.sources())))</span>
-<span class="fc" id="L207">                .options(ChatOptions.builder().temperature(TEMPERATURE));</span>
+<span class="fc" id="L245">        return chatClient</span>
+<span class="fc" id="L246">                .prompt()</span>
+<span class="fc" id="L247">                .system(spec -&gt; spec.text(systemTemplate).params(prompts.variables()))</span>
+<span class="fc" id="L248">                .messages(history)</span>
+<span class="fc" id="L249">                .user(u -&gt; u.text(CONTEXT_TEMPLATE).param(&quot;message&quot;, message).param(&quot;context&quot;, context(plan.sources())))</span>
+<span class="fc" id="L250">                .options(ChatOptions.builder().temperature(TEMPERATURE))</span>
+<span class="fc" id="L251">                .advisors(UsageAdvisor.stage(&quot;rag&quot;));</span>
+    }
+
+    /**
+     * 提示注入过滤（ch09-2）：检索到的每块资料过一遍 {@link InjectionFilter}，挡下的记成 {@link BlockedSource}，留下的重新编号。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;按原来的顺序，对每条来源的 {@code content()}（标题路径 + 正文：标题本身也可能被改成一句指令）调 {@code filter.check}
+     *   &lt;li&gt;被挡的：记一个 {@link BlockedSource}（来源文件、标题路径、命中的规则编号 {@code verdict.rules()}、第一条命中的原因和片段），不留
+     *   &lt;li&gt;留下的：编号从 1 开始重新连续编（{@link #renumber}）——提示词里、回答里、页面上的 [n] 三处要对得上，不能出现 [1][3] 少了 [2]
+     *   &lt;li&gt;一块都没挡时原样返回（编号本来就是连续的）
+     * &lt;/ul&gt;
+     *
+     * &lt;p&gt;被挡的块已经占过上下文预算和 top-k 的名额（{@link ContextPacker} 在前面），所以交给模型的资料可能少于 top-k；更彻底的做法是入库时就过滤
+     * （讲义思考题）。
+     *
+     * @param sources 检索到的引用来源（编号从 1 开始）
+     * @param filter 过滤器
+     * @return 留下的与被挡的
+     */
+    static Screened screen(List&lt;RagSource&gt; sources, InjectionFilter filter) {
+<span class="fc" id="L274">        List&lt;RagSource&gt; kept = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L275">        List&lt;BlockedSource&gt; blocked = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L276" title="All 2 branches covered.">        for (RagSource source : sources) {</span>
+<span class="fc" id="L277">            InjectionFilter.Verdict verdict = filter.check(source.content());</span>
+<span class="fc bfc" id="L278" title="All 2 branches covered.">            if (verdict.blocked()) {</span>
+<span class="fc" id="L279">                InjectionFilter.Hit first = verdict.hits().getFirst();</span>
+<span class="fc" id="L280">                blocked.add(new BlockedSource(</span>
+<span class="fc" id="L281">                        source.source(), source.headingPath(), verdict.rules(), first.reason(), first.excerpt()));</span>
+<span class="fc" id="L282">            } else {</span>
+<span class="fc" id="L283">                kept.add(renumber(source, kept.size() + 1));</span>
+            }
+<span class="fc" id="L285">        }</span>
+<span class="fc" id="L286">        return new Screened(List.copyOf(kept), List.copyOf(blocked));</span>
+    }
+
+    /**
+     * 过滤的结果。
+     *
+     * @param kept 留下的（编号已重排）
+     * @param blocked 被挡下的
+     */
+<span class="fc" id="L295">    public record Screened(List&lt;RagSource&gt; kept, List&lt;BlockedSource&gt; blocked) {}</span>
+
+    /** 换一个编号（其余字段不变）。 */
+    static RagSource renumber(RagSource source, int index) {
+<span class="fc bfc" id="L299" title="All 2 branches covered.">        if (source.index() == index) {</span>
+<span class="fc" id="L300">            return source;</span>
+        }
+<span class="fc" id="L302">        return new RagSource(</span>
+                index,
+<span class="fc" id="L304">                source.source(),</span>
+<span class="fc" id="L305">                source.title(),</span>
+<span class="fc" id="L306">                source.headingPath(),</span>
+<span class="fc" id="L307">                source.chunkIndexes(),</span>
+<span class="fc" id="L308">                source.score(),</span>
+<span class="fc" id="L309">                source.keywordScore(),</span>
+<span class="fc" id="L310">                source.fusedScore(),</span>
+<span class="fc" id="L311">                source.foundBy(),</span>
+<span class="fc" id="L312">                source.snippet(),</span>
+<span class="fc" id="L313">                source.content());</span>
     }
 
     /**
@@ -227,7 +333,7 @@ public class RagService {
      * @return 资料文字
      */
     static String context(List&lt;RagSource&gt; sources) {
-<span class="fc" id="L230">        return sources.stream().map(s -&gt; &quot;[&quot; + s.index() + &quot;] &quot; + s.content()).collect(Collectors.joining(&quot;\n\n&quot;));</span>
+<span class="fc" id="L336">        return sources.stream().map(s -&gt; &quot;[&quot; + s.index() + &quot;] &quot; + s.content()).collect(Collectors.joining(&quot;\n\n&quot;));</span>
     }
 
     /**
@@ -241,17 +347,17 @@ public class RagService {
      * @return 改写后的问题；没开改写、改写失败或结果和原话一样时为 null
      */
     String rewrite(String message) {
-<span class="fc bfc" id="L244" title="All 2 branches covered.">        if (!properties.rewriteQuery()) {</span>
-<span class="fc" id="L245">            return null;</span>
+<span class="fc bfc" id="L350" title="All 2 branches covered.">        if (!properties.rewriteQuery()) {</span>
+<span class="fc" id="L351">            return null;</span>
         }
         try {
-<span class="fc" id="L248">            String text = rewriter().transform(new Query(message)).text();</span>
-<span class="pc bpc" id="L249" title="1 of 2 branches missed.">            String rewritten = text == null ? &quot;&quot; : text.strip();</span>
-<span class="fc" id="L250">            log.info(&quot;RAG：问题改写「{}」→「{}」&quot;, message, rewritten);</span>
-<span class="pc bpc" id="L251" title="2 of 4 branches missed.">            return rewritten.isEmpty() || rewritten.equals(message) ? null : rewritten;</span>
-<span class="fc" id="L252">        } catch (RuntimeException e) {</span>
-<span class="fc" id="L253">            log.warn(&quot;RAG：问题改写失败，用原话检索：{}&quot;, e.toString());</span>
-<span class="fc" id="L254">            return null;</span>
+<span class="fc" id="L354">            String text = rewriter().transform(new Query(message)).text();</span>
+<span class="pc bpc" id="L355" title="1 of 2 branches missed.">            String rewritten = text == null ? &quot;&quot; : text.strip();</span>
+<span class="fc" id="L356">            log.info(&quot;RAG：问题改写「{}」→「{}」&quot;, message, rewritten);</span>
+<span class="pc bpc" id="L357" title="2 of 4 branches missed.">            return rewritten.isEmpty() || rewritten.equals(message) ? null : rewritten;</span>
+<span class="fc" id="L358">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L359">            log.warn(&quot;RAG：问题改写失败，用原话检索：{}&quot;, e.toString());</span>
+<span class="fc" id="L360">            return null;</span>
         }
     }
 
@@ -263,27 +369,27 @@ public class RagService {
      * 的构建器，把默认温度设成 0（改写和意图识别一样要稳定）。
      */
     private RewriteQueryTransformer rewriter() {
-<span class="fc" id="L266">        RewriteQueryTransformer current = rewriter;</span>
-<span class="pc bpc" id="L267" title="1 of 2 branches missed.">        if (current == null) {</span>
-<span class="fc" id="L268">            current = RewriteQueryTransformer.builder()</span>
-<span class="fc" id="L269">                    .chatClientBuilder(chatClient</span>
-<span class="fc" id="L270">                            .mutate()</span>
-<span class="fc" id="L271">                            .defaultOptions(ChatOptions.builder().temperature(0.0)))</span>
-<span class="fc" id="L272">                    .promptTemplate(new PromptTemplate(new ClassPathResource(&quot;prompts/rag-rewrite.st&quot;)))</span>
-<span class="fc" id="L273">                    .targetSearchSystem(REWRITE_TARGET)</span>
-<span class="fc" id="L274">                    .build();</span>
-<span class="fc" id="L275">            rewriter = current;</span>
+<span class="fc" id="L372">        RewriteQueryTransformer current = rewriter;</span>
+<span class="pc bpc" id="L373" title="1 of 2 branches missed.">        if (current == null) {</span>
+<span class="fc" id="L374">            current = RewriteQueryTransformer.builder()</span>
+<span class="fc" id="L375">                    .chatClientBuilder(chatClient</span>
+<span class="fc" id="L376">                            .mutate()</span>
+<span class="fc" id="L377">                            .defaultOptions(ChatOptions.builder().temperature(0.0)))</span>
+<span class="fc" id="L378">                    .promptTemplate(new PromptTemplate(new ClassPathResource(&quot;prompts/rag-rewrite.st&quot;)))</span>
+<span class="fc" id="L379">                    .targetSearchSystem(REWRITE_TARGET)</span>
+<span class="fc" id="L380">                    .build();</span>
+<span class="fc" id="L381">            rewriter = current;</span>
         }
-<span class="fc" id="L277">        return current;</span>
+<span class="fc" id="L383">        return current;</span>
     }
 
     /** 渲染一段固定话术（不经过模型）。 */
     private String render(Resource template) {
-<span class="fc" id="L282">        return prompts.render(template);</span>
+<span class="fc" id="L388">        return prompts.render(template);</span>
     }
 
     private static long elapsedMs(long start) {
-<span class="fc" id="L286">        return (System.nanoTime() - start) / 1_000_000;</span>
+<span class="fc" id="L392">        return (System.nanoTime() - start) / 1_000_000;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
