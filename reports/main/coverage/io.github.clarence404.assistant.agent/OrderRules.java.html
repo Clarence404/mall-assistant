@@ -35,11 +35,11 @@ public final class OrderRules {
 <span class="pc bpc" id="L35" title="1 of 2 branches missed.">        if (status == null) {</span>
 <span class="nc" id="L36">            return List.of();</span>
         }
-<span class="pc bpc" id="L38" title="1 of 4 branches missed.">        return switch (status) {</span>
+<span class="fc bfc" id="L38" title="All 4 branches covered.">        return switch (status) {</span>
 <span class="fc" id="L39">            case &quot;PENDING_PAYMENT&quot; -&gt; List.of(AgentTool.CANCEL_ORDER, AgentTool.CHANGE_ADDRESS);</span>
 <span class="fc" id="L40">            case &quot;PENDING_SHIPMENT&quot; -&gt; List.of(AgentTool.CHANGE_ADDRESS, AgentTool.APPLY_AFTER_SALES);</span>
 <span class="fc" id="L41">            case &quot;SHIPPED&quot;, &quot;COMPLETED&quot; -&gt; List.of(AgentTool.APPLY_AFTER_SALES);</span>
-<span class="nc" id="L42">            default -&gt; List.of();</span>
+<span class="fc" id="L42">            default -&gt; List.of();</span>
         };
     }
 

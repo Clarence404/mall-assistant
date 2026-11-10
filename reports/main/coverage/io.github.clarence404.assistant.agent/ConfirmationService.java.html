@@ -52,16 +52,22 @@ import org.springframework.stereotype.Service;
  *
  * &lt;p&gt;待确认操作存在内存里（{@link ConcurrentHashMap}），只在一个进程里有效：部署多个实例时要放进数据库或 Redis（和第 6 章的「正在回答」标记一样）。
  * 后台定期清掉过期很久的。
+ *
+ * &lt;p&gt;&lt;b&gt;第 8 章：MCP 客户端提出的写操作也登记在这里&lt;/b&gt;（{@link #createForMcp}）。它们没有会话（会话 ID 为 null），确认的唯一方式仍然是用户在智能客服页面上点按钮：
+ * MCP 工具只拿到确认 ID 和确认链接，页面打开链接时用 {@link #view} 取卡片内容，点按钮走的还是 {@link #decide}——执行只有这一个入口，来源不同、规则相同。
  */
 @Service
 public class ConfirmationService {
 
-<span class="fc" id="L59">    private static final Logger log = LoggerFactory.getLogger(ConfirmationService.class);</span>
-<span class="fc" id="L60">    private static final DateTimeFormatter DAY =</span>
-<span class="fc" id="L61">            DateTimeFormatter.ofPattern(&quot;yyyyMMdd&quot;).withZone(ZoneId.of(&quot;Asia/Shanghai&quot;));</span>
+<span class="fc" id="L62">    private static final Logger log = LoggerFactory.getLogger(ConfirmationService.class);</span>
+<span class="fc" id="L63">    private static final DateTimeFormatter DAY =</span>
+<span class="fc" id="L64">            DateTimeFormatter.ofPattern(&quot;yyyyMMdd&quot;).withZone(ZoneId.of(&quot;Asia/Shanghai&quot;));</span>
 
     /** 过期之后再留多久（这段时间里重复点确认还能拿到原来的结果；再之后就是 404）。 */
-<span class="fc" id="L64">    static final Duration RETENTION = Duration.ofHours(1);</span>
+<span class="fc" id="L67">    static final Duration RETENTION = Duration.ofHours(1);</span>
+
+    /** 还没确认时的提示（第 8 章，MCP 工具查状态时给对面的模型看）。 */
+    static final String PENDING_MESSAGE = &quot;还没有执行：等用户本人在智能客服页面登录同一个账号后点「确认」，MCP 客户端不能代替用户确认。&quot;;
 
     private final MallApiClient mallApi;
     private final AfterSalesStore afterSales;
@@ -69,7 +75,7 @@ public class ConfirmationService {
     private final ConversationOwners owners;
     private final AgentProperties properties;
     private final Clock clock;
-<span class="fc" id="L72">    private final Map&lt;String, Entry&gt; entries = new ConcurrentHashMap&lt;&gt;();</span>
+<span class="fc" id="L78">    private final Map&lt;String, Entry&gt; entries = new ConcurrentHashMap&lt;&gt;();</span>
 
     /**
      * 创建。
@@ -87,14 +93,14 @@ public class ConfirmationService {
             ConversationMemory memory,
             ConversationOwners owners,
             AgentProperties properties,
-<span class="fc" id="L90">            Clock clock) {</span>
-<span class="fc" id="L91">        this.mallApi = mallApi;</span>
-<span class="fc" id="L92">        this.afterSales = afterSales;</span>
-<span class="fc" id="L93">        this.memory = memory;</span>
-<span class="fc" id="L94">        this.owners = owners;</span>
-<span class="fc" id="L95">        this.properties = properties;</span>
-<span class="fc" id="L96">        this.clock = clock;</span>
-<span class="fc" id="L97">    }</span>
+<span class="fc" id="L96">            Clock clock) {</span>
+<span class="fc" id="L97">        this.mallApi = mallApi;</span>
+<span class="fc" id="L98">        this.afterSales = afterSales;</span>
+<span class="fc" id="L99">        this.memory = memory;</span>
+<span class="fc" id="L100">        this.owners = owners;</span>
+<span class="fc" id="L101">        this.properties = properties;</span>
+<span class="fc" id="L102">        this.clock = clock;</span>
+<span class="fc" id="L103">    }</span>
 
     /**
      * 登记一个待确认操作：配上随机的确认 ID 和过期时间，记下归属和会话。
@@ -105,22 +111,41 @@ public class ConfirmationService {
      * @return 推给页面的待确认操作
      */
     public PendingConfirmation create(PendingAction action, ConversationOwner owner, String conversationId) {
-<span class="fc" id="L108">        Instant now = clock.instant();</span>
-<span class="fc" id="L109">        Instant expiresAt = now.plus(properties.confirmationTtl());</span>
-<span class="fc" id="L110">        String id = UUID.randomUUID().toString();</span>
-<span class="fc" id="L111">        PendingConfirmation view = new PendingConfirmation(</span>
+<span class="fc" id="L114">        return create(action, owner, conversationId, Origin.CHAT);</span>
+    }
+
+    private PendingConfirmation create(
+            PendingAction action, ConversationOwner owner, String conversationId, Origin origin) {
+<span class="fc" id="L119">        Instant now = clock.instant();</span>
+<span class="fc" id="L120">        Instant expiresAt = now.plus(properties.confirmationTtl());</span>
+<span class="fc" id="L121">        String id = UUID.randomUUID().toString();</span>
+<span class="fc" id="L122">        PendingConfirmation view = new PendingConfirmation(</span>
                 id,
-<span class="fc" id="L113">                action.tool().toolName(),</span>
-<span class="fc" id="L114">                action.tool().title(),</span>
-<span class="fc" id="L115">                action.orderNo(),</span>
-<span class="fc" id="L116">                action.params(),</span>
-<span class="fc" id="L117">                action.summary(),</span>
-<span class="fc" id="L118">                action.impact(),</span>
+<span class="fc" id="L124">                action.tool().toolName(),</span>
+<span class="fc" id="L125">                action.tool().title(),</span>
+<span class="fc" id="L126">                action.orderNo(),</span>
+<span class="fc" id="L127">                action.params(),</span>
+<span class="fc" id="L128">                action.summary(),</span>
+<span class="fc" id="L129">                action.impact(),</span>
                 expiresAt,
-<span class="fc" id="L120">                properties.confirmationTtl().toSeconds());</span>
-<span class="fc" id="L121">        entries.put(id, new Entry(id, action, owner.key(), conversationId, expiresAt, view));</span>
-<span class="fc" id="L122">        log.info(&quot;待确认操作 {}：{}（{}），{} 前有效&quot;, id, action.summary(), owner.key(), expiresAt);</span>
-<span class="fc" id="L123">        return view;</span>
+<span class="fc" id="L131">                properties.confirmationTtl().toSeconds());</span>
+<span class="fc" id="L132">        entries.put(id, new Entry(id, action, owner.key(), conversationId, expiresAt, view, origin));</span>
+<span class="fc" id="L133">        log.info(&quot;待确认操作 {}（{}）：{}（{}），{} 前有效&quot;, id, origin, action.summary(), owner.key(), expiresAt);</span>
+<span class="fc" id="L134">        return view;</span>
+    }
+
+    /**
+     * 登记一个由 MCP 客户端提出的待确认操作（第 8 章）：没有会话，只绑定到商城用户；确认仍然只能在页面上点按钮（{@link #decide}，会话 ID 为空）。
+     *
+     * &lt;p&gt;为什么单独一个方法、记下来源：页面打开确认链接时（{@link #view}）只认 MCP 来的确认——聊天里生成的确认绑定着会话，应该在那个会话的卡片上点；
+     * 聊天里说「确认」时的提醒（{@link #pendingFor}）也只看聊天来的，不把 MCP 那边的操作混进来。
+     *
+     * @param action 写操作（已经过 {@link WriteActionGuard} 核对）
+     * @param owner 谁提的（商城用户）
+     * @return 待确认操作
+     */
+    public PendingConfirmation createForMcp(PendingAction action, ConversationOwner owner) {
+<span class="fc" id="L148">        return create(action, owner, null, Origin.MCP);</span>
     }
 
     /**
@@ -131,12 +156,62 @@ public class ConfirmationService {
      * @return 最近的一个；没有时为空
      */
     public Optional&lt;PendingConfirmation&gt; pendingFor(ConversationOwner owner, String conversationId) {
-<span class="fc" id="L134">        Instant now = clock.instant();</span>
-<span class="fc" id="L135">        return entries.values().stream()</span>
-<span class="pc bpc" id="L136" title="1 of 4 branches missed.">                .filter(e -&gt; e.ownerKey.equals(owner.key()) &amp;&amp; Objects.equals(e.conversationId, conversationId))</span>
-<span class="pc bpc" id="L137" title="1 of 4 branches missed.">                .filter(e -&gt; e.outcome == null &amp;&amp; e.expiresAt.isAfter(now))</span>
-<span class="fc" id="L138">                .map(e -&gt; e.view)</span>
-<span class="pc" id="L139">                .reduce((a, b) -&gt; b);</span>
+<span class="fc" id="L159">        Instant now = clock.instant();</span>
+<span class="fc" id="L160">        return entries.values().stream()</span>
+<span class="fc bfc" id="L161" title="All 2 branches covered.">                .filter(e -&gt; e.origin == Origin.CHAT)</span>
+<span class="pc bpc" id="L162" title="1 of 4 branches missed.">                .filter(e -&gt; e.ownerKey.equals(owner.key()) &amp;&amp; Objects.equals(e.conversationId, conversationId))</span>
+<span class="pc bpc" id="L163" title="1 of 4 branches missed.">                .filter(e -&gt; e.outcome == null &amp;&amp; e.expiresAt.isAfter(now))</span>
+<span class="fc" id="L164">                .map(e -&gt; e.view)</span>
+<span class="pc" id="L165">                .reduce((a, b) -&gt; b);</span>
+    }
+
+    /**
+     * 页面打开确认链接（{@code /?confirm=&lt;ID&gt;}）时取卡片：只有 MCP 来的、是你的确认才给看（第 8 章）。
+     *
+     * @param id 确认 ID
+     * @param mallToken 页面上登录的商城令牌，可以为 null（匿名没有确认，结果是 404）
+     * @return 卡片内容与状态
+     * @throws ConfirmationException 不存在、不是你的、不是 MCP 来的（都是 404）
+     */
+    public ConfirmationSnapshot view(String id, String mallToken) {
+<span class="fc" id="L177">        return snapshot(id, owners.resolve(mallToken));</span>
+    }
+
+    /**
+     * 一个 MCP 来的待确认操作此刻的样子（ch08-7）：页面画卡片、MCP 工具 {@code getConfirmation} 查结果都用它。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;找不到这个 ID、归属对不上、或者不是 MCP 来的（{@link Origin#MCP}）：抛 {@link ConfirmationException.Failure#CONFIRMATION_NOT_FOUND}
+     *       ——和 {@link #decide} 一样，不是你的和不存在不区分，不让人探测 ID；聊天里生成的确认也不能借这个接口看
+     *   &lt;li&gt;已经有结果：状态按结果（EXECUTED / FAILED / REJECTED），消息是结果的固定话术
+     *   &lt;li&gt;没结果、已过期（现在不早于 expiresAt）：EXPIRED，消息说明「过期了，没有执行」
+     *   &lt;li&gt;没结果、没过期：PENDING，消息提示「等用户在智能客服页面点确认，还没有执行」
+     *   &lt;li&gt;只读：不加锁、不改任何东西（看的那一刻和点的那一刻之间状态可能变，以 {@link #decide} 为准）
+     * &lt;/ul&gt;
+     *
+     * @param id 确认 ID
+     * @param owner 谁在看
+     * @return 卡片内容与状态
+     * @throws ConfirmationException 不存在、不是你的、不是 MCP 来的（都是 404）
+     */
+    public ConfirmationSnapshot snapshot(String id, ConversationOwner owner) {
+<span class="fc" id="L200">        Entry entry = entries.get(id);</span>
+<span class="fc bfc" id="L201" title="All 6 branches covered.">        if (entry == null || entry.origin != Origin.MCP || !entry.ownerKey.equals(owner.key())) {</span>
+<span class="fc" id="L202">            throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_NOT_FOUND);</span>
+        }
+<span class="fc" id="L204">        ConfirmationOutcome outcome = entry.outcome;</span>
+<span class="fc bfc" id="L205" title="All 2 branches covered.">        if (outcome != null) {</span>
+<span class="fc" id="L206">            return new ConfirmationSnapshot(</span>
+                    entry.view,
+<span class="fc" id="L208">                    ConfirmationSnapshot.State.valueOf(outcome.status().name()),</span>
+<span class="fc" id="L209">                    outcome.message());</span>
+        }
+<span class="fc bfc" id="L211" title="All 2 branches covered.">        if (!clock.instant().isBefore(entry.expiresAt)) {</span>
+<span class="fc" id="L212">            return new ConfirmationSnapshot(entry.view, ConfirmationSnapshot.State.EXPIRED, &quot;这个确认已经过期，没有执行；要办的话请重新提出。&quot;);</span>
+        }
+<span class="fc" id="L214">        return new ConfirmationSnapshot(entry.view, ConfirmationSnapshot.State.PENDING, PENDING_MESSAGE);</span>
     }
 
     /**
@@ -165,41 +240,41 @@ public class ConfirmationService {
      */
     public ConfirmationOutcome decide(
             String id, ConfirmationOutcome.Decision decision, String conversationId, String mallToken) {
-<span class="fc" id="L168">        ConversationOwner owner = owners.resolve(mallToken);</span>
-<span class="fc" id="L169">        Entry entry = entries.get(id);</span>
-<span class="fc bfc" id="L170" title="All 2 branches covered.">        if (entry == null</span>
-<span class="fc bfc" id="L171" title="All 2 branches covered.">                || !entry.ownerKey.equals(owner.key())</span>
-<span class="fc bfc" id="L172" title="All 2 branches covered.">                || !Objects.equals(entry.conversationId, conversationId)) {</span>
-<span class="fc" id="L173">            throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_NOT_FOUND);</span>
+<span class="fc" id="L243">        ConversationOwner owner = owners.resolve(mallToken);</span>
+<span class="fc" id="L244">        Entry entry = entries.get(id);</span>
+<span class="fc bfc" id="L245" title="All 2 branches covered.">        if (entry == null</span>
+<span class="fc bfc" id="L246" title="All 2 branches covered.">                || !entry.ownerKey.equals(owner.key())</span>
+<span class="fc bfc" id="L247" title="All 2 branches covered.">                || !Objects.equals(entry.conversationId, conversationId)) {</span>
+<span class="fc" id="L248">            throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_NOT_FOUND);</span>
         }
-<span class="fc" id="L175">        entry.lock.lock();</span>
+<span class="fc" id="L250">        entry.lock.lock();</span>
         try {
-<span class="fc bfc" id="L177" title="All 2 branches covered.">            if (entry.outcome != null) {</span>
-<span class="fc bfc" id="L178" title="All 2 branches covered.">                if (entry.outcome.decision() == decision) {</span>
-<span class="fc" id="L179">                    log.info(&quot;确认 {} 重复提交（{}），返回原来的结果&quot;, id, decision);</span>
-<span class="fc" id="L180">                    return entry.outcome;</span>
+<span class="fc bfc" id="L252" title="All 2 branches covered.">            if (entry.outcome != null) {</span>
+<span class="fc bfc" id="L253" title="All 2 branches covered.">                if (entry.outcome.decision() == decision) {</span>
+<span class="fc" id="L254">                    log.info(&quot;确认 {} 重复提交（{}），返回原来的结果&quot;, id, decision);</span>
+<span class="fc" id="L255">                    return entry.outcome;</span>
                 }
-<span class="fc" id="L182">                throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_ALREADY_DECIDED);</span>
+<span class="fc" id="L257">                throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_ALREADY_DECIDED);</span>
             }
-<span class="fc" id="L184">            Instant now = clock.instant();</span>
-<span class="fc bfc" id="L185" title="All 2 branches covered.">            if (!now.isBefore(entry.expiresAt)) {</span>
-<span class="fc" id="L186">                throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_EXPIRED);</span>
+<span class="fc" id="L259">            Instant now = clock.instant();</span>
+<span class="fc bfc" id="L260" title="All 2 branches covered.">            if (!now.isBefore(entry.expiresAt)) {</span>
+<span class="fc" id="L261">                throw new ConfirmationException(ConfirmationException.Failure.CONFIRMATION_EXPIRED);</span>
             }
-<span class="fc bfc" id="L188" title="All 2 branches covered.">            ConfirmationOutcome outcome = decision == ConfirmationOutcome.Decision.REJECT</span>
-<span class="fc" id="L189">                    ? new ConfirmationOutcome(</span>
+<span class="fc bfc" id="L263" title="All 2 branches covered.">            ConfirmationOutcome outcome = decision == ConfirmationOutcome.Decision.REJECT</span>
+<span class="fc" id="L264">                    ? new ConfirmationOutcome(</span>
                             id,
                             decision,
                             ConfirmationOutcome.Status.REJECTED,
-<span class="fc" id="L193">                            &quot;好的，没有执行：&quot; + entry.action.summary() + &quot;。订单没有任何变化。&quot;,</span>
+<span class="fc" id="L268">                            &quot;好的，没有执行：&quot; + entry.action.summary() + &quot;。订单没有任何变化。&quot;,</span>
                             null,
                             now)
-<span class="fc" id="L196">                    : execute(entry, owner, mallToken, now);</span>
-<span class="fc" id="L197">            entry.outcome = outcome;</span>
-<span class="fc" id="L198">            log.info(&quot;确认 {}：{} → {}&quot;, id, decision, outcome.status());</span>
-<span class="fc" id="L199">            remember(entry, outcome, mallToken);</span>
-<span class="fc" id="L200">            return outcome;</span>
+<span class="fc" id="L271">                    : execute(entry, owner, mallToken, now);</span>
+<span class="fc" id="L272">            entry.outcome = outcome;</span>
+<span class="fc" id="L273">            log.info(&quot;确认 {}：{} → {}&quot;, id, decision, outcome.status());</span>
+<span class="fc" id="L274">            remember(entry, outcome, mallToken);</span>
+<span class="fc" id="L275">            return outcome;</span>
         } finally {
-<span class="fc" id="L202">            entry.lock.unlock();</span>
+<span class="fc" id="L277">            entry.lock.unlock();</span>
         }
     }
 
@@ -226,86 +301,86 @@ public class ConfirmationService {
      * @return 结果
      */
     ConfirmationOutcome execute(Entry entry, ConversationOwner owner, String token, Instant now) {
-<span class="fc" id="L229">        PendingAction action = entry.action;</span>
-<span class="fc" id="L230">        String orderNo = action.orderNo();</span>
-<span class="pc bpc" id="L231" title="1 of 4 branches missed.">        return switch (action.tool()) {</span>
+<span class="fc" id="L304">        PendingAction action = entry.action;</span>
+<span class="fc" id="L305">        String orderNo = action.orderNo();</span>
+<span class="pc bpc" id="L306" title="1 of 4 branches missed.">        return switch (action.tool()) {</span>
             case CANCEL_ORDER -&gt; {
-<span class="fc" id="L233">                MallResult&lt;MallModels.Order&gt; result = mallApi.cancelOrder(token, orderNo);</span>
-<span class="fc bfc" id="L234" title="All 2 branches covered.">                yield result.isOk()</span>
-<span class="fc" id="L235">                        ? outcome(</span>
+<span class="fc" id="L308">                MallResult&lt;MallModels.Order&gt; result = mallApi.cancelOrder(token, orderNo);</span>
+<span class="fc bfc" id="L309" title="All 2 branches covered.">                yield result.isOk()</span>
+<span class="fc" id="L310">                        ? outcome(</span>
                                 entry,
                                 ConfirmationOutcome.Status.EXECUTED,
-<span class="fc" id="L238">                                &quot;已取消订单 &quot; + orderNo + &quot;，订单现在是「&quot; + statusText(result.body()) + &quot;」。这笔没有付款，不涉及退款。&quot;,</span>
+<span class="fc" id="L313">                                &quot;已取消订单 &quot; + orderNo + &quot;，订单现在是「&quot; + statusText(result.body()) + &quot;」。这笔没有付款，不涉及退款。&quot;,</span>
                                 null,
                                 now)
-<span class="fc" id="L241">                        : outcome(entry, ConfirmationOutcome.Status.FAILED, failure(orderNo, result), null, now);</span>
+<span class="fc" id="L316">                        : outcome(entry, ConfirmationOutcome.Status.FAILED, failure(orderNo, result), null, now);</span>
             }
             case CHANGE_ADDRESS -&gt; {
-<span class="fc" id="L244">                Map&lt;String, String&gt; p = action.params();</span>
-<span class="fc" id="L245">                MallResult&lt;MallModels.Order&gt; result = mallApi.changeAddress(</span>
-<span class="fc" id="L246">                        token, orderNo, new MallModels.AddressPatch(null, null, p.get(&quot;address&quot;)));</span>
-<span class="pc bpc" id="L247" title="1 of 2 branches missed.">                yield result.isOk()</span>
-<span class="fc" id="L248">                        ? outcome(</span>
+<span class="fc" id="L319">                Map&lt;String, String&gt; p = action.params();</span>
+<span class="fc" id="L320">                MallResult&lt;MallModels.Order&gt; result = mallApi.changeAddress(</span>
+<span class="fc" id="L321">                        token, orderNo, new MallModels.AddressPatch(null, null, p.get(&quot;address&quot;)));</span>
+<span class="pc bpc" id="L322" title="1 of 2 branches missed.">                yield result.isOk()</span>
+<span class="fc" id="L323">                        ? outcome(</span>
                                 entry,
                                 ConfirmationOutcome.Status.EXECUTED,
-<span class="fc" id="L251">                                &quot;已把订单 &quot; + orderNo + &quot; 的收货地址改为：&quot; + p.get(&quot;address&quot;) + &quot;。&quot;,</span>
+<span class="fc" id="L326">                                &quot;已把订单 &quot; + orderNo + &quot; 的收货地址改为：&quot; + p.get(&quot;address&quot;) + &quot;。&quot;,</span>
                                 null,
                                 now)
-<span class="nc" id="L254">                        : outcome(entry, ConfirmationOutcome.Status.FAILED, failure(orderNo, result), null, now);</span>
+<span class="nc" id="L329">                        : outcome(entry, ConfirmationOutcome.Status.FAILED, failure(orderNo, result), null, now);</span>
             }
-<span class="fc" id="L256">            case APPLY_AFTER_SALES -&gt; applyAfterSales(entry, owner, token, now);</span>
-<span class="nc" id="L257">            default -&gt; throw new IllegalStateException(&quot;不是写操作：&quot; + action.tool());</span>
+<span class="fc" id="L331">            case APPLY_AFTER_SALES -&gt; applyAfterSales(entry, owner, token, now);</span>
+<span class="nc" id="L332">            default -&gt; throw new IllegalStateException(&quot;不是写操作：&quot; + action.tool());</span>
         };
     }
 
     /** 提交售后申请：执行前再查一次订单，再记一张待人工审核的申请单。 */
     private ConfirmationOutcome applyAfterSales(Entry entry, ConversationOwner owner, String token, Instant now) {
-<span class="fc" id="L263">        PendingAction action = entry.action;</span>
-<span class="fc" id="L264">        String orderNo = action.orderNo();</span>
-<span class="fc" id="L265">        MallResult&lt;MallModels.Order&gt; order = mallApi.getOrder(token, orderNo);</span>
-<span class="pc bpc" id="L266" title="1 of 2 branches missed.">        if (!order.isOk()) {</span>
-<span class="nc" id="L267">            return outcome(entry, ConfirmationOutcome.Status.FAILED, failure(orderNo, order), null, now);</span>
+<span class="fc" id="L338">        PendingAction action = entry.action;</span>
+<span class="fc" id="L339">        String orderNo = action.orderNo();</span>
+<span class="fc" id="L340">        MallResult&lt;MallModels.Order&gt; order = mallApi.getOrder(token, orderNo);</span>
+<span class="pc bpc" id="L341" title="1 of 2 branches missed.">        if (!order.isOk()) {</span>
+<span class="nc" id="L342">            return outcome(entry, ConfirmationOutcome.Status.FAILED, failure(orderNo, order), null, now);</span>
         }
-<span class="pc bpc" id="L269" title="1 of 2 branches missed.">        if (!OrderRules.allowed(order.body().status()).contains(AgentTool.APPLY_AFTER_SALES)) {</span>
-<span class="nc" id="L270">            return outcome(</span>
+<span class="pc bpc" id="L344" title="1 of 2 branches missed.">        if (!OrderRules.allowed(order.body().status()).contains(AgentTool.APPLY_AFTER_SALES)) {</span>
+<span class="nc" id="L345">            return outcome(</span>
                     entry,
                     ConfirmationOutcome.Status.FAILED,
-<span class="nc" id="L273">                    &quot;订单 &quot; + orderNo + &quot; 现在是「&quot; + statusText(order.body()) + &quot;」，不能再提交售后申请，没有执行。&quot;,</span>
+<span class="nc" id="L348">                    &quot;订单 &quot; + orderNo + &quot; 现在是「&quot; + statusText(order.body()) + &quot;」，不能再提交售后申请，没有执行。&quot;,</span>
                     null,
                     now);
         }
-<span class="fc" id="L277">        Optional&lt;AfterSalesApplication&gt; open = afterSales.findOpen(owner.key(), orderNo);</span>
-<span class="pc bpc" id="L278" title="1 of 2 branches missed.">        if (open.isPresent()) {</span>
-<span class="nc" id="L279">            return outcome(</span>
+<span class="fc" id="L352">        Optional&lt;AfterSalesApplication&gt; open = afterSales.findOpen(owner.key(), orderNo);</span>
+<span class="pc bpc" id="L353" title="1 of 2 branches missed.">        if (open.isPresent()) {</span>
+<span class="nc" id="L354">            return outcome(</span>
                     entry,
                     ConfirmationOutcome.Status.FAILED,
-<span class="nc" id="L282">                    &quot;订单 &quot; + orderNo + &quot; 已经有待审核的售后申请 &quot; + open.get().id() + &quot;，没有重复提交。&quot;,</span>
+<span class="nc" id="L357">                    &quot;订单 &quot; + orderNo + &quot; 已经有待审核的售后申请 &quot; + open.get().id() + &quot;，没有重复提交。&quot;,</span>
                     null,
                     now);
         }
-<span class="fc" id="L286">        AfterSalesApplication.Type type =</span>
-<span class="fc" id="L287">                AfterSalesApplication.Type.valueOf(action.params().get(&quot;type&quot;));</span>
+<span class="fc" id="L361">        AfterSalesApplication.Type type =</span>
+<span class="fc" id="L362">                AfterSalesApplication.Type.valueOf(action.params().get(&quot;type&quot;));</span>
         AfterSalesApplication saved;
         try {
-<span class="fc" id="L290">            saved = afterSales.create(new AfterSalesApplication(</span>
-<span class="fc" id="L291">                    newApplicationId(now),</span>
-<span class="fc" id="L292">                    owner.key(),</span>
+<span class="fc" id="L365">            saved = afterSales.create(new AfterSalesApplication(</span>
+<span class="fc" id="L366">                    newApplicationId(now),</span>
+<span class="fc" id="L367">                    owner.key(),</span>
                     orderNo,
                     type,
-<span class="fc" id="L295">                    action.params().get(&quot;reason&quot;),</span>
+<span class="fc" id="L370">                    action.params().get(&quot;reason&quot;),</span>
                     AfterSalesApplication.Status.PENDING_REVIEW,
                     entry.id,
                     now));
-<span class="nc" id="L299">        } catch (RuntimeException e) {</span>
-<span class="nc" id="L300">            log.warn(&quot;售后申请单保存失败：{}&quot;, e.toString());</span>
-<span class="nc" id="L301">            return outcome(entry, ConfirmationOutcome.Status.FAILED, &quot;售后申请单暂时存不进去，没有提交成功，请稍后再说一次。&quot;, null, now);</span>
-<span class="fc" id="L302">        }</span>
-<span class="fc" id="L303">        return outcome(</span>
+<span class="nc" id="L374">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L375">            log.warn(&quot;售后申请单保存失败：{}&quot;, e.toString());</span>
+<span class="nc" id="L376">            return outcome(entry, ConfirmationOutcome.Status.FAILED, &quot;售后申请单暂时存不进去，没有提交成功，请稍后再说一次。&quot;, null, now);</span>
+<span class="fc" id="L377">        }</span>
+<span class="fc" id="L378">        return outcome(</span>
                 entry,
                 ConfirmationOutcome.Status.EXECUTED,
-<span class="fc" id="L306">                &quot;已提交售后申请 &quot; + saved.id() + &quot;（&quot; + type.text() + &quot;），状态：&quot;</span>
-<span class="fc" id="L307">                        + saved.status().text() + &quot;。客服会在 24 小时内审核，审核通过前不会退款，也不会改动订单。&quot;,</span>
-<span class="fc" id="L308">                saved.id(),</span>
+<span class="fc" id="L381">                &quot;已提交售后申请 &quot; + saved.id() + &quot;（&quot; + type.text() + &quot;），状态：&quot;</span>
+<span class="fc" id="L382">                        + saved.status().text() + &quot;。客服会在 24 小时内审核，审核通过前不会退款，也不会改动订单。&quot;,</span>
+<span class="fc" id="L383">                saved.id(),</span>
                 now);
     }
 
@@ -317,49 +392,49 @@ public class ConfirmationService {
      * 单轮对话（没有会话 ID）不写；写失败只记日志，不影响结果。
      */
     private void remember(Entry entry, ConfirmationOutcome outcome, String mallToken) {
-<span class="pc bpc" id="L320" title="1 of 2 branches missed.">        if (entry.conversationId == null) {</span>
-<span class="nc" id="L321">            return;</span>
+<span class="fc bfc" id="L395" title="All 2 branches covered.">        if (entry.conversationId == null) {</span>
+<span class="fc" id="L396">            return;</span>
         }
-<span class="fc bfc" id="L323" title="All 2 branches covered.">        String user = (outcome.decision() == ConfirmationOutcome.Decision.APPROVE ? &quot;（点了确认）&quot; : &quot;（点了取消）&quot;)</span>
-<span class="fc" id="L324">                + entry.action.summary();</span>
-<span class="pc bpc" id="L325" title="1 of 2 branches missed.">        if (!memory.record(entry.conversationId, mallToken, user, outcome.message())) {</span>
-<span class="nc" id="L326">            log.info(&quot;确认 {} 的结果没能写回会话 {} 的记忆&quot;, entry.id, entry.conversationId);</span>
+<span class="fc bfc" id="L398" title="All 2 branches covered.">        String user = (outcome.decision() == ConfirmationOutcome.Decision.APPROVE ? &quot;（点了确认）&quot; : &quot;（点了取消）&quot;)</span>
+<span class="fc" id="L399">                + entry.action.summary();</span>
+<span class="pc bpc" id="L400" title="1 of 2 branches missed.">        if (!memory.record(entry.conversationId, mallToken, user, outcome.message())) {</span>
+<span class="nc" id="L401">            log.info(&quot;确认 {} 的结果没能写回会话 {} 的记忆&quot;, entry.id, entry.conversationId);</span>
         }
-<span class="fc" id="L328">    }</span>
+<span class="fc" id="L403">    }</span>
 
     /** 后台清理：过期超过 {@link #RETENTION} 的确认删掉。 */
     @Scheduled(fixedDelayString = &quot;${assistant.agent.confirmation-sweep-interval:10m}&quot;)
     public void sweep() {
-<span class="fc" id="L333">        Instant cutoff = clock.instant().minus(RETENTION);</span>
-<span class="pc" id="L334">        entries.values().removeIf(e -&gt; e.expiresAt.isBefore(cutoff));</span>
-<span class="fc" id="L335">    }</span>
+<span class="fc" id="L408">        Instant cutoff = clock.instant().minus(RETENTION);</span>
+<span class="pc" id="L409">        entries.values().removeIf(e -&gt; e.expiresAt.isBefore(cutoff));</span>
+<span class="fc" id="L410">    }</span>
 
     /** 申请单号：AS + 日期 + 8 位随机十六进制，如 AS20261109-3F2A9C1B。 */
     static String newApplicationId(Instant now) {
-<span class="fc" id="L339">        byte[] random = new byte[4];</span>
-<span class="fc" id="L340">        new java.security.SecureRandom().nextBytes(random);</span>
-<span class="fc" id="L341">        return &quot;AS&quot; + DAY.format(now) + &quot;-&quot; + HexFormat.of().withUpperCase().formatHex(random);</span>
+<span class="fc" id="L414">        byte[] random = new byte[4];</span>
+<span class="fc" id="L415">        new java.security.SecureRandom().nextBytes(random);</span>
+<span class="fc" id="L416">        return &quot;AS&quot; + DAY.format(now) + &quot;-&quot; + HexFormat.of().withUpperCase().formatHex(random);</span>
     }
 
     private static ConfirmationOutcome outcome(
             Entry entry, ConfirmationOutcome.Status status, String message, String afterSalesId, Instant now) {
-<span class="fc" id="L346">        return new ConfirmationOutcome(</span>
+<span class="fc" id="L421">        return new ConfirmationOutcome(</span>
                 entry.id, ConfirmationOutcome.Decision.APPROVE, status, message, afterSalesId, now);
     }
 
     private static String statusText(MallModels.Order order) {
-<span class="fc" id="L351">        String text = OrderStatusText.describe(order.status());</span>
-<span class="fc" id="L352">        int paren = text.indexOf('（');</span>
-<span class="pc bpc" id="L353" title="1 of 2 branches missed.">        return paren &lt; 0 ? text : text.substring(0, paren);</span>
+<span class="fc" id="L426">        String text = OrderStatusText.describe(order.status());</span>
+<span class="fc" id="L427">        int paren = text.indexOf('（');</span>
+<span class="pc bpc" id="L428" title="1 of 2 branches missed.">        return paren &lt; 0 ? text : text.substring(0, paren);</span>
     }
 
     /** 商城失败 → 给用户看的结果说明。 */
     static String failure(String orderNo, MallResult&lt;?&gt; result) {
-<span class="pc bpc" id="L358" title="2 of 4 branches missed.">        return switch (result.failure()) {</span>
-<span class="pc bpc" id="L359" title="1 of 2 branches missed.">            case REJECTED -&gt; &quot;商城没有执行：&quot; + (result.detail() != null ? result.detail() : &quot;订单状态已经变了，不能办理&quot;) + &quot;。&quot;;</span>
-<span class="nc" id="L360">            case UNAUTHORIZED -&gt; &quot;商城登录已失效，没有执行。请重新登录后再说一次。&quot;;</span>
-<span class="nc" id="L361">            case NOT_FOUND -&gt; &quot;商城里找不到订单 &quot; + orderNo + &quot;（或者不是你的订单），没有执行。&quot;;</span>
-<span class="fc" id="L362">            case UNAVAILABLE -&gt; &quot;商城暂时不可用，这次没有执行成功。为保险起见，请到「我的订单」里看一下这笔订单的状态。&quot;;</span>
+<span class="pc bpc" id="L433" title="2 of 4 branches missed.">        return switch (result.failure()) {</span>
+<span class="pc bpc" id="L434" title="1 of 2 branches missed.">            case REJECTED -&gt; &quot;商城没有执行：&quot; + (result.detail() != null ? result.detail() : &quot;订单状态已经变了，不能办理&quot;) + &quot;。&quot;;</span>
+<span class="nc" id="L435">            case UNAUTHORIZED -&gt; &quot;商城登录已失效，没有执行。请重新登录后再说一次。&quot;;</span>
+<span class="nc" id="L436">            case NOT_FOUND -&gt; &quot;商城里找不到订单 &quot; + orderNo + &quot;（或者不是你的订单），没有执行。&quot;;</span>
+<span class="fc" id="L437">            case UNAVAILABLE -&gt; &quot;商城暂时不可用，这次没有执行成功。为保险起见，请到「我的订单」里看一下这笔订单的状态。&quot;;</span>
         };
     }
 
@@ -371,8 +446,10 @@ public class ConfirmationService {
         final String conversationId;
         final Instant expiresAt;
         final PendingConfirmation view;
+        /** 第 8 章：从哪来的（聊天里的 Agent / MCP 客户端）。 */
+        final Origin origin;
         /** 每个确认一把锁：并发的两次点击一个接一个处理，第二个看到第一个的结果。用 ReentrantLock 而不是 synchronized：虚拟线程在 synchronized 里等待会占住载体线程（JDK 21）。 */
-<span class="fc" id="L375">        final ReentrantLock lock = new ReentrantLock();</span>
+<span class="fc" id="L452">        final ReentrantLock lock = new ReentrantLock();</span>
 
         volatile ConfirmationOutcome outcome;
 
@@ -382,14 +459,24 @@ public class ConfirmationService {
                 String ownerKey,
                 String conversationId,
                 Instant expiresAt,
-<span class="fc" id="L385">                PendingConfirmation view) {</span>
-<span class="fc" id="L386">            this.id = id;</span>
-<span class="fc" id="L387">            this.action = action;</span>
-<span class="fc" id="L388">            this.ownerKey = ownerKey;</span>
-<span class="fc" id="L389">            this.conversationId = conversationId;</span>
-<span class="fc" id="L390">            this.expiresAt = expiresAt;</span>
-<span class="fc" id="L391">            this.view = view;</span>
-<span class="fc" id="L392">        }</span>
+                PendingConfirmation view,
+<span class="fc" id="L463">                Origin origin) {</span>
+<span class="fc" id="L464">            this.id = id;</span>
+<span class="fc" id="L465">            this.action = action;</span>
+<span class="fc" id="L466">            this.ownerKey = ownerKey;</span>
+<span class="fc" id="L467">            this.conversationId = conversationId;</span>
+<span class="fc" id="L468">            this.expiresAt = expiresAt;</span>
+<span class="fc" id="L469">            this.view = view;</span>
+<span class="fc" id="L470">            this.origin = origin;</span>
+<span class="fc" id="L471">        }</span>
+    }
+
+    /** 待确认操作从哪来（第 8 章）。 */
+<span class="fc" id="L475">    enum Origin {</span>
+        /** 聊天里的 Agent（第 7 章），绑定会话。 */
+<span class="fc" id="L477">        CHAT,</span>
+        /** MCP 客户端调了 propose* 工具（第 8 章），没有会话。 */
+<span class="fc" id="L479">        MCP</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

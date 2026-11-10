@@ -231,32 +231,43 @@ public class AgentToolbox {
 <span class="fc bfc" id="L231" title="All 2 branches covered.">        return observation.length() &lt;= max ? observation : observation.substring(0, max) + &quot;…（结果太长，已截断）&quot;;</span>
     }
 
-    /** 收货信息：「张三 138****0000 杭州市西湖区」，手机号中间打码。 */
-    static String receiver(MallModels.Receiver receiver) {
-<span class="fc bfc" id="L236" title="All 2 branches covered.">        if (receiver == null) {</span>
-<span class="fc" id="L237">            return null;</span>
+    /**
+     * 收货信息：「张三 138****0000 杭州市西湖区」，手机号中间打码。第 8 章的 MCP 工具也用它（所以是 public）。
+     *
+     * @param receiver 商城的收货信息，可以为 null
+     * @return 打码后的一行；null 时为 null
+     */
+    public static String receiver(MallModels.Receiver receiver) {
+<span class="fc bfc" id="L241" title="All 2 branches covered.">        if (receiver == null) {</span>
+<span class="fc" id="L242">            return null;</span>
         }
-<span class="pc bpc" id="L239" title="1 of 2 branches missed.">        String phone = receiver.phone() == null ? &quot;&quot; : receiver.phone();</span>
-<span class="pc bpc" id="L240" title="1 of 2 branches missed.">        String masked = phone.length() == 11 ? phone.substring(0, 3) + &quot;****&quot; + phone.substring(7) : phone;</span>
-<span class="fc" id="L241">        return String.join(&quot; &quot;, nullToEmpty(receiver.name()), masked, nullToEmpty(receiver.address()))</span>
-<span class="fc" id="L242">                .strip();</span>
+<span class="pc bpc" id="L244" title="1 of 2 branches missed.">        String phone = receiver.phone() == null ? &quot;&quot; : receiver.phone();</span>
+<span class="pc bpc" id="L245" title="1 of 2 branches missed.">        String masked = phone.length() == 11 ? phone.substring(0, 3) + &quot;****&quot; + phone.substring(7) : phone;</span>
+<span class="fc" id="L246">        return String.join(&quot; &quot;, nullToEmpty(receiver.name()), masked, nullToEmpty(receiver.address()))</span>
+<span class="fc" id="L247">                .strip();</span>
     }
 
     private static String nullToEmpty(String value) {
-<span class="pc bpc" id="L246" title="1 of 2 branches missed.">        return value == null ? &quot;&quot; : value;</span>
+<span class="pc bpc" id="L251" title="1 of 2 branches missed.">        return value == null ? &quot;&quot; : value;</span>
     }
 
-    private static String summarize(List&lt;MallModels.OrderItem&gt; items) {
-<span class="pc bpc" id="L250" title="2 of 4 branches missed.">        if (items == null || items.isEmpty()) {</span>
-<span class="nc" id="L251">            return null;</span>
+    /**
+     * 商品摘要：「青柚 ×1、红心柚 ×2」。第 8 章的 MCP 工具也用它（所以是 public）。
+     *
+     * @param items 商品行，可以为 null
+     * @return 摘要；没有商品时为 null
+     */
+    public static String summarize(List&lt;MallModels.OrderItem&gt; items) {
+<span class="pc bpc" id="L261" title="2 of 4 branches missed.">        if (items == null || items.isEmpty()) {</span>
+<span class="nc" id="L262">            return null;</span>
         }
-<span class="fc" id="L253">        return String.join(</span>
+<span class="fc" id="L264">        return String.join(</span>
                 &quot;、&quot;,
-<span class="fc" id="L255">                items.stream().map(i -&gt; i.productName() + &quot; ×&quot; + i.quantity()).toList());</span>
+<span class="fc" id="L266">                items.stream().map(i -&gt; i.productName() + &quot; ×&quot; + i.quantity()).toList());</span>
     }
 
     private static String time(LocalDateTime time) {
-<span class="fc bfc" id="L259" title="All 2 branches covered.">        return time == null ? null : time.format(TIME);</span>
+<span class="fc bfc" id="L270" title="All 2 branches covered.">        return time == null ? null : time.format(TIME);</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
