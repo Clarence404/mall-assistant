@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>TokenEstimator.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.ops</a> &gt; <span class="el_source">TokenEstimator.java</span></div><h1>TokenEstimator.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.ops;
+
+import java.util.List;
+import org.springframework.ai.chat.messages.Message;
+
+/**
+ * 模型没报告用量时，按字数估算 Token（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：上线运维的工具类。{@link UsageAdvisor} 在响应里没有 usage（命令行模型的流式输出、假模型、某些兼容接口）时用它。
+ *
+ * &lt;p&gt;系数是拿 qwen2.5 的分词器实测的（讲义「Token 用量」一节）：一段 121 个汉字的规则原文是 87 个 Token（约 0.7 个 / 字）；132 个字母的英文是
+ * 27 个 Token（约 4.9 个字母 / 个）；数字是一位一个 Token（订单号 23 位就是 23 个）。每条消息还有角色标记的开销（{@code &lt;|im_start|&gt;user} 之类），
+ * 按每条 4 个算。不同模型的分词器不一样（GPT、Claude 的中文大约 1～1.5 个 Token / 字），所以估算只能用来看「大概多少、哪里多」，
+ * 记账和预算以模型报告的为准；估出来的数在调试面板和接口里都标着「估算」。
+ */
+public final class TokenEstimator {
+
+    /** 每个汉字（含全角标点）约多少个 Token。 */
+    static final double PER_CJK = 0.7;
+
+    /** 其他字符（字母、半角标点、空格）多少个算一个 Token。 */
+    static final double OTHER_PER_TOKEN = 4.5;
+
+    /** 每条消息的角色标记开销。 */
+    static final int PER_MESSAGE = 4;
+
+    private TokenEstimator() {}
+
+    /**
+     * 估算一段文字的 Token 数（ch09-4 之一）。
+     *
+     * &lt;p&gt;要求（测试按这个写）：null 或空串是 0；否则逐个字符数三类——汉字和全角标点（{@link #isCjk}）每个 {@link #PER_CJK}，数字 0～9 每个 1，
+     * 其他每 {@link #OTHER_PER_TOKEN} 个算 1——三类加起来&lt;b&gt;向上取整&lt;/b&gt;。用整数算（都乘以 90：汉字 63、数字 90、其他 20，再向上整除 90），
+     * 免得 {@code 10 * 0.7} 这种浮点数算出 7.000000000000001、向上取整成了 8。
+     *
+     * @param text 文字
+     * @return 估算的 Token 数
+     */
+    public static int estimate(String text) {
+<span class="fc bfc" id="L40" title="All 4 branches covered.">        if (text == null || text.isEmpty()) {</span>
+<span class="fc" id="L41">            return 0;</span>
+        }
+<span class="fc" id="L43">        int cjk = 0;</span>
+<span class="fc" id="L44">        int digits = 0;</span>
+<span class="fc" id="L45">        int other = 0;</span>
+<span class="fc bfc" id="L46" title="All 2 branches covered.">        for (int i = 0; i &lt; text.length(); i++) {</span>
+<span class="fc" id="L47">            char c = text.charAt(i);</span>
+<span class="fc bfc" id="L48" title="All 2 branches covered.">            if (isCjk(c)) {</span>
+<span class="fc" id="L49">                cjk++;</span>
+<span class="fc bfc" id="L50" title="All 4 branches covered.">            } else if (c &gt;= '0' &amp;&amp; c &lt;= '9') {</span>
+<span class="fc" id="L51">                digits++;</span>
+            } else {
+<span class="fc" id="L53">                other++;</span>
+            }
+        }
+<span class="fc" id="L56">        long ninetieths = cjk * 63L + digits * 90L + other * 20L;</span>
+<span class="fc" id="L57">        return (int) ((ninetieths + 89) / 90);</span>
+    }
+
+    /**
+     * 估算一组消息（一次请求的提示词）：每条消息的文字估算加上 {@link #PER_MESSAGE}。
+     *
+     * @param messages 消息
+     * @return 估算的 Token 数
+     */
+    public static int estimate(List&lt;Message&gt; messages) {
+<span class="fc" id="L67">        int total = 0;</span>
+<span class="fc bfc" id="L68" title="All 2 branches covered.">        for (Message message : messages) {</span>
+<span class="fc" id="L69">            total += estimate(message.getText()) + PER_MESSAGE;</span>
+<span class="fc" id="L70">        }</span>
+<span class="fc" id="L71">        return total;</span>
+    }
+
+    /** 汉字（CJK 统一表意文字）、中文标点（U+3000～U+303F）、全角字符（U+FF00～U+FFEF）。 */
+    static boolean isCjk(char c) {
+        // 用数值比较而不是 Unicode 转义的字符字面量：palantir 格式化会把转义改写成原字符，全角空格、零宽字符之类肉眼看不清
+<span class="pc bpc" id="L77" title="2 of 16 branches missed.">        return (c &gt;= 0x4E00 &amp;&amp; c &lt;= 0x9FFF)</span>
+                || (c &gt;= 0x3400 &amp;&amp; c &lt;= 0x4DBF)
+                || (c &gt;= 0x3000 &amp;&amp; c &lt;= 0x303F)
+                || (c &gt;= 0xFF00 &amp;&amp; c &lt;= 0xFFEF);
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

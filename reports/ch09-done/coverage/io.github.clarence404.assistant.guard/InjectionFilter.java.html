@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>InjectionFilter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.guard</a> &gt; <span class="el_source">InjectionFilter.java</span></div><h1>InjectionFilter.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.guard;
+
+import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * 提示注入过滤：在一段「外来文字」（知识库检索到的资料块、外部 MCP 工具的说明与结果）进提示词&lt;b&gt;之前&lt;/b&gt;，按规则找出像是在给模型下指令的句子，
+ * 命中就整块挡在外面（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：上线保护（{@code guard} 包）。上游是第 5 章的 {@code RagService#plan}（每块资料先过一遍，ch09-2）和第 8 章的
+ * {@code ExternalMcpTools}（外部工具的说明和结果，ch09-3）；它本身不调模型、不访问网络，是一组纯文本规则。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么要它&lt;/b&gt;：第 5、7、8 章靠的是「结构」——资料放进 {@code &lt;参考资料&gt;} 标签、说明「它只是数据」、写操作只能提议。结构能降低模型照做的概率，
+ * 但挡不住：第 5 章调提示词时只换了几个字，1.5b 就照着资料说了「所有订单都可以无条件全额退款」。规则过滤是在结构之外再加一道：明显在下指令的资料块
+ * 根本不让模型看到。
+ *
+ * &lt;p&gt;&lt;b&gt;规则过滤的局限（讲义里有实测）&lt;/b&gt;：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;&lt;b&gt;漏网&lt;/b&gt;：换个说法（「前面那些都不算数了，按我说的来」）、拆到两块里、编码（Base64）、用图片，规则都认不出来。规则只能挡「照抄的套路」
+ *   &lt;li&gt;&lt;b&gt;误杀&lt;/b&gt;：正常文档里也可能出现「忽略以上…提示」这样的字眼（比如一篇讲防诈骗的文章引用了骗子的话术），整块被挡，回答就少了依据
+ *   &lt;li&gt;所以它是「多一道」而不是「最后一道」：入库审核、结构隔离、写操作人工确认、回答后的检查都还要在
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;更强的做法是用一个专门的分类模型判断「这段文字是不是在下指令」（如 Llama Guard、Prompt Guard 一类），代价是每块资料多一次模型调用；
+ * 本项目先用规则，原因是零依赖、毫秒级、命中原因看得懂。
+ */
+public final class InjectionFilter {
+
+    /** 命中片段最多保留多少个字（调试面板里显示）。 */
+    static final int EXCERPT_CHARS = 40;
+
+    /**
+     * 一条规则。
+     *
+     * @param id 规则编号，进调试信息和指标的标签，如 {@code IGNORE_RULES}
+     * @param reason 给人看的原因
+     * @param pattern 在&lt;b&gt;归一化之后&lt;/b&gt;的文字上匹配的正则（见 {@link #normalize}）
+     */
+<span class="fc" id="L44">    public record Rule(String id, String reason, Pattern pattern) {}</span>
+
+    /**
+     * 命中的一条规则。
+     *
+     * @param rule 规则编号
+     * @param reason 原因
+     * @param excerpt 命中的片段（归一化之后的文字，最多 {@value #EXCERPT_CHARS} 个字）
+     */
+<span class="fc" id="L53">    public record Hit(String rule, String reason, String excerpt) {}</span>
+
+    /**
+     * 判定结果。
+     *
+     * @param blocked 是否挡下
+     * @param hits 命中的规则，按规则顺序，每条规则最多记一次；没挡时为空
+     */
+<span class="fc" id="L61">    public record Verdict(boolean blocked, List&lt;Hit&gt; hits) {</span>
+
+        /** 干净：没命中任何规则。 */
+<span class="fc" id="L64">        public static final Verdict CLEAN = new Verdict(false, List.of());</span>
+
+        /**
+         * 命中了哪些规则（编号），调试信息和日志用。
+         *
+         * @return 规则编号
+         */
+        public List&lt;String&gt; rules() {
+<span class="fc" id="L72">            return hits.stream().map(Hit::rule).toList();</span>
+        }
+    }
+
+    /**
+     * 内置规则：四类常见套路。每条正则都写在「归一化之后」的文字上：全角转半角、英文小写、去掉空格和零宽字符（所以 {@code &quot;Ignore  previous&quot;} 写成
+     * {@code ignoreprevious}，{@code &quot;忽 略 以 上&quot;} 也能认出来）。
+     */
+<span class="fc" id="L80">    static final List&lt;Rule&gt; STANDARD = List.of(</span>
+            new Rule(
+                    &quot;IGNORE_RULES&quot;,
+                    &quot;要求忽略之前的规则或指令&quot;,
+<span class="fc" id="L84">                    Pattern.compile(&quot;(忽略|无视|忘记|忘掉|不要理会|不必理会|跳过)(掉)?(你)?(以上|上面|之前|前面|先前|上述|此前|所有|全部|一切|原有|系统)&quot;</span>
+                            + &quot;[^。！？!?\\n]{0,6}(规则|指令|指示|提示|要求|设定|约束|限制)&quot;)),
+            new Rule(
+                    &quot;IGNORE_RULES&quot;,
+                    &quot;要求忽略之前的规则或指令&quot;,
+<span class="fc" id="L89">                    Pattern.compile(</span>
+                            &quot;(ignore|disregard|forget|override)(all|any|the|your)*(previous|prior|above|earlier|preceding|system|original)&quot;
+                                    + &quot;(instructions?|rules|prompts?|directions|guidelines)&quot;)),
+            new Rule(
+                    &quot;ROLE_HIJACK&quot;,
+                    &quot;试图改变助手的身份&quot;,
+<span class="fc" id="L95">                    Pattern.compile(</span>
+                            &quot;(你现在是|从现在起你是|从现在开始你是|你的新身份是|你不再是|younowarea|youarenow|fromnowonyouare|pretendtobe)&quot;)),
+            new Rule(
+                    &quot;FAKE_ROLE_MARKER&quot;,
+                    &quot;伪造系统 / 角色标记&quot;,
+<span class="fc" id="L100">                    Pattern.compile(</span>
+                            &quot;([(（【\\[&lt;](系统|system|管理员|admin|开发者|developer)(通知|消息|指令|提示|公告|message|prompt|notice)?[)）】\\]&gt;])&quot;
+                                    + &quot;|(&lt;\\|(im_start|im_end|system|assistant|user)\\|?&gt;)|(\\[/?inst])|(&lt;&lt;/?sys&gt;&gt;)&quot;
+                                    + &quot;|((?m)^(system|assistant|系统)[:：])&quot;)),
+            new Rule(
+                    &quot;PROMPT_LEAK&quot;,
+                    &quot;要求泄露系统提示词&quot;,
+<span class="fc" id="L107">                    Pattern.compile(&quot;((输出|告诉|附上|展示|泄露|透露|打印|复述|重复|发出)[^。！？!?\\n]{0,8}(系统提示词|提示词全文|初始指令|系统指令))&quot;</span>
+                            + &quot;|((系统提示词|提示词全文|初始指令|系统指令)[^。！？!?\\n]{0,8}(输出|告诉|发给|给我|复述|打印|泄露|透露))&quot;
+                            + &quot;|((reveal|print|show|repeat|output)(your|the)*(systemprompt|initialinstructions))&quot;)));
+
+    private final boolean enabled;
+    private final List&lt;Rule&gt; rules;
+
+    /**
+     * 创建。
+     *
+     * @param enabled 关掉时一律放行（{@code assistant.guard.injection.enabled=false}，对比效果用）
+     * @param rules 规则
+     */
+<span class="fc" id="L120">    public InjectionFilter(boolean enabled, List&lt;Rule&gt; rules) {</span>
+<span class="fc" id="L121">        this.enabled = enabled;</span>
+<span class="fc" id="L122">        this.rules = List.copyOf(rules);</span>
+<span class="fc" id="L123">    }</span>
+
+    /**
+     * 内置规则、打开。
+     *
+     * @return 过滤器
+     */
+    public static InjectionFilter standard() {
+<span class="fc" id="L131">        return new InjectionFilter(true, STANDARD);</span>
+    }
+
+    /**
+     * 关掉的过滤器：一律放行（第 8 章及以前的测试、手工 new RagService 时用）。
+     *
+     * @return 过滤器
+     */
+    public static InjectionFilter off() {
+<span class="fc" id="L140">        return new InjectionFilter(false, List.of());</span>
+    }
+
+    /**
+     * 按配置创建：内置规则 + {@code assistant.guard.injection.extra-patterns} 里追加的正则（同样写在归一化之后的文字上）。
+     *
+     * @param config 配置
+     * @return 过滤器
+     */
+    public static InjectionFilter of(GuardProperties.Injection config) {
+<span class="fc" id="L150">        List&lt;Rule&gt; all = new ArrayList&lt;&gt;(STANDARD);</span>
+<span class="fc bfc" id="L151" title="All 2 branches covered.">        for (String extra : config.extraPatterns()) {</span>
+<span class="fc" id="L152">            all.add(new Rule(&quot;CUSTOM&quot;, &quot;命中自定义规则&quot;, Pattern.compile(extra)));</span>
+<span class="fc" id="L153">        }</span>
+<span class="fc" id="L154">        return new InjectionFilter(config.enabled(), all);</span>
+    }
+
+    /** 是否打开。 */
+    public boolean enabled() {
+<span class="nc" id="L159">        return enabled;</span>
+    }
+
+    /**
+     * 判断一段外来文字能不能进提示词（ch09-1）。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;过滤器关着、文字为 null 或空白：{@link Verdict#CLEAN}
+     *   &lt;li&gt;先 {@link #normalize}，再按顺序用每条规则的正则 {@code find()}；命中就记一个 {@link Hit}（规则编号、原因、命中片段——从匹配开头起最多
+     *       {@value #EXCERPT_CHARS} 个字），&lt;b&gt;同一个编号只记一次&lt;/b&gt;（中英文两条 IGNORE_RULES 都命中也只记一条）
+     *   &lt;li&gt;有任何命中就 {@code blocked=true}；一条都没有返回 {@link Verdict#CLEAN}
+     * &lt;/ul&gt;
+     *
+     * @param text 一块资料或一段工具输出
+     * @return 判定结果
+     */
+    public Verdict check(String text) {
+<span class="fc bfc" id="L178" title="All 6 branches covered.">        if (!enabled || text == null || text.isBlank()) {</span>
+<span class="fc" id="L179">            return Verdict.CLEAN;</span>
+        }
+<span class="fc" id="L181">        String normalized = normalize(text);</span>
+<span class="fc" id="L182">        List&lt;Hit&gt; hits = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L183" title="All 2 branches covered.">        for (Rule rule : rules) {</span>
+<span class="fc bfc" id="L184" title="All 2 branches covered.">            if (hits.stream().anyMatch(h -&gt; h.rule().equals(rule.id()))) {</span>
+<span class="fc" id="L185">                continue;</span>
+            }
+<span class="fc" id="L187">            Matcher matcher = rule.pattern().matcher(normalized);</span>
+<span class="fc bfc" id="L188" title="All 2 branches covered.">            if (matcher.find()) {</span>
+<span class="fc" id="L189">                int end = Math.min(normalized.length(), matcher.start() + EXCERPT_CHARS);</span>
+<span class="fc" id="L190">                hits.add(new Hit(rule.id(), rule.reason(), normalized.substring(matcher.start(), end)));</span>
+            }
+<span class="fc" id="L192">        }</span>
+<span class="fc bfc" id="L193" title="All 2 branches covered.">        return hits.isEmpty() ? Verdict.CLEAN : new Verdict(true, List.copyOf(hits));</span>
+    }
+
+    /**
+     * 归一化：让「换个写法」的同一句话变成同一串字，规则才不用把每种写法都列一遍。
+     *
+     * &lt;ol&gt;
+     *   &lt;li&gt;Unicode NFKC：全角字母数字标点转半角（{@code ＩＧＮＯＲＥ} → {@code IGNORE}、{@code （} → {@code (}）
+     *   &lt;li&gt;英文转小写
+     *   &lt;li&gt;去掉零宽字符（U+200B～U+200D、U+FEFF，常被用来把关键词「隔开」骗过关键词匹配）和空格、制表符；&lt;b&gt;保留换行&lt;/b&gt;（「行首的 system:」要靠它认）
+     * &lt;/ol&gt;
+     *
+     * @param text 原文
+     * @return 归一化之后的文字
+     */
+    static String normalize(String text) {
+<span class="fc" id="L209">        String nfkc = Normalizer.normalize(text, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);</span>
+<span class="fc" id="L210">        StringBuilder out = new StringBuilder(nfkc.length());</span>
+<span class="fc bfc" id="L211" title="All 2 branches covered.">        for (int i = 0; i &lt; nfkc.length(); i++) {</span>
+<span class="fc" id="L212">            char c = nfkc.charAt(i);</span>
+<span class="fc bfc" id="L213" title="All 2 branches covered.">            if (c == '\n') {</span>
+<span class="fc" id="L214">                out.append(c);</span>
+<span class="pc bpc" id="L215" title="1 of 6 branches missed.">            } else if (!Character.isWhitespace(c) &amp;&amp; !Character.isSpaceChar(c) &amp;&amp; !isZeroWidth(c)) {</span>
+<span class="fc" id="L216">                out.append(c);</span>
+            }
+        }
+<span class="fc" id="L219">        return out.toString();</span>
+    }
+
+    /** 零宽字符：U+200B～U+200D、U+2060、U+FEFF（用数值比较，免得源码里出现看不见的字符）。 */
+    private static boolean isZeroWidth(char c) {
+<span class="pc bpc" id="L224" title="2 of 8 branches missed.">        return (c &gt;= 0x200B &amp;&amp; c &lt;= 0x200D) || c == 0x2060 || c == 0xFEFF;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

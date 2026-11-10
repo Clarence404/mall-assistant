@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>McpClientController.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.mcp.client</a> &gt; <span class="el_source">McpClientController.java</span></div><h1>McpClientController.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.mcp.client;
+
+import java.util.List;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * 调试接口：{@code GET /api/mcp/client/tools}，看看连上的外部 MCP 服务有哪些工具、哪些交给了对话模型（第 8 章引入）。
+ *
+ * &lt;p&gt;所在层：接口层（调试用）。下游是 {@link ExternalMcpTools#describe}。客户端关闭（默认）时返回空列表。
+ */
+@RestController
+public class McpClientController {
+
+    private final ExternalMcpTools tools;
+
+    /**
+     * 创建。
+     *
+     * @param tools 外部工具
+     */
+<span class="fc" id="L22">    public McpClientController(ExternalMcpTools tools) {</span>
+<span class="fc" id="L23">        this.tools = tools;</span>
+<span class="fc" id="L24">    }</span>
+
+    /**
+     * 外部工具列表。
+     *
+     * @return 每个外部工具一行：原名、交给模型时的名字（没交给模型时为 null）、说明（截短）
+     */
+    @GetMapping(&quot;/api/mcp/client/tools&quot;)
+    public List&lt;ExternalMcpTools.ToolInfo&gt; tools() {
+<span class="nc" id="L33">        return tools.describe();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

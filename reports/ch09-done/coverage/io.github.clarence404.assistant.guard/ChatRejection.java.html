@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ChatRejection.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.guard</a> &gt; <span class="el_source">ChatRejection.java</span></div><h1>ChatRejection.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.guard;
+
+import java.time.Duration;
+import org.springframework.http.HttpStatus;
+
+/**
+ * 对话请求在调模型之前就被挡下：太频繁、太忙、今天的 Token 用完了（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：上线保护。{@link ChatGuard#admit} 抛出；阻塞接口由 {@code ApiExceptionHandler} 转成 ProblemDetail（带 {@code code} 和
+ * {@code Retry-After}），流式接口由 {@code ChatController} 转成 {@code error} 事件（和第 6 章「会话正忙」一样，流一开始就是 200，只能用事件告诉页面）。
+ * 错误码和第 1 章的 MODEL_* 是同一套用法：页面按 code 分支、按 message 显示。
+ */
+public class ChatRejection extends RuntimeException {
+
+    /** 被挡的原因，name() 就是错误码。 */
+<span class="fc" id="L16">    public enum Reason {</span>
+        /** 同一个调用方一分钟内问得太多。 */
+<span class="fc" id="L18">        RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, &quot;提问太频繁了&quot;, &quot;提问太频繁了，请稍等一会儿再问。&quot;),</span>
+        /** 整个实例同时在处理的对话太多，等了一会儿也没有空位。 */
+<span class="fc" id="L20">        TOO_BUSY(HttpStatus.SERVICE_UNAVAILABLE, &quot;智能客服正忙&quot;, &quot;现在咨询的人比较多，请稍等几秒再试。&quot;),</span>
+        /** 这个调用方今天的 Token 用量到了上限。 */
+<span class="fc" id="L22">        TOKEN_BUDGET_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, &quot;今日额度已用完&quot;, &quot;今天的智能客服额度已经用完了，明天再来，或联系人工客服。&quot;);</span>
+
+        private final HttpStatus status;
+        private final String title;
+        private final String message;
+
+<span class="fc" id="L28">        Reason(HttpStatus status, String title, String message) {</span>
+<span class="fc" id="L29">            this.status = status;</span>
+<span class="fc" id="L30">            this.title = title;</span>
+<span class="fc" id="L31">            this.message = message;</span>
+<span class="fc" id="L32">        }</span>
+
+        /** HTTP 状态码：429 是「你」的问题（太频繁、额度用完），503 是「我们」的问题（忙）。 */
+        public HttpStatus status() {
+<span class="fc" id="L36">            return status;</span>
+        }
+
+        /** ProblemDetail 的 title。 */
+        public String title() {
+<span class="fc" id="L41">            return title;</span>
+        }
+
+        /** 给用户看的提示。 */
+        public String message() {
+<span class="fc" id="L46">            return message;</span>
+        }
+    }
+
+    private final Reason reason;
+    private final Duration retryAfter;
+
+    /**
+     * 创建。
+     *
+     * @param reason 原因
+     * @param retryAfter 建议多久之后再试（填进 {@code Retry-After}），不知道时为 null
+     */
+    public ChatRejection(Reason reason, Duration retryAfter) {
+<span class="fc" id="L60">        super(reason.title());</span>
+<span class="fc" id="L61">        this.reason = reason;</span>
+<span class="fc" id="L62">        this.retryAfter = retryAfter;</span>
+<span class="fc" id="L63">    }</span>
+
+    /** 原因。 */
+    public Reason reason() {
+<span class="fc" id="L67">        return reason;</span>
+    }
+
+    /** 建议多久之后再试；不知道时为 null。 */
+    public Duration retryAfter() {
+<span class="fc" id="L72">        return retryAfter;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

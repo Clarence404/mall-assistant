@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ModelCall.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.ops</a> &gt; <span class="el_source">ModelCall.java</span></div><h1>ModelCall.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.ops;
+
+/**
+ * 一轮对话里的一次模型调用：哪一步、用了多少 Token、花了多久（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：上线运维的数据。{@link UsageAdvisor} 每次调用完生成一个，加进这一轮的 {@link TurnRecord}；阻塞接口在响应的 {@code usage.calls} 里、
+ * 流式接口在最后的 {@code usage} 事件里，页面调试面板「Token」一栏逐行显示。
+ *
+ * @param stage 哪一步：{@code intent}（意图识别）、{@code condense}（追问改写）、{@code answer}（第 3 章的回答，含工具调用的几轮）、
+ *     {@code rag}（带资料的回答）、{@code agent}（Agent 的一步）、{@code summary}（摘要记忆）、{@code other}（没标的）
+ * @param model 模型名（响应里带的；没有时为 null）
+ * @param inputTokens 输入 Token
+ * @param outputTokens 输出 Token
+ * @param estimated 是否估算
+ * @param durationMs 耗时，毫秒
+ */
+<span class="fc" id="L17">public record ModelCall(</span>
+        String stage, String model, int inputTokens, int outputTokens, boolean estimated, long durationMs) {
+
+    /** 输入 + 输出。 */
+    public int totalTokens() {
+<span class="nc" id="L22">        return inputTokens + outputTokens;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

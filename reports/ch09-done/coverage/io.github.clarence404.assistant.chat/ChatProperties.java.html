@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ChatProperties.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.chat</a> &gt; <span class="el_source">ChatProperties.java</span></div><h1>ChatProperties.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.chat;
+
+import java.time.Duration;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
+
+/**
+ * 对话相关配置，前缀 {@code assistant.chat}。
+ *
+ * &lt;p&gt;所在层：业务层的配置（第 1 章引入 streamTimeout，第 2 章加 refuseMinConfidence）。由 {@code AssistantApplication} 上的
+ * {@code @ConfigurationPropertiesScan} 绑定，注入 {@link ChatService}。{@code @DefaultValue} 是 yml 里没写时的默认值；
+ * 也可以用环境变量覆盖，如 {@code ASSISTANT_CHAT_STREAM_TIMEOUT=60s}（Spring Boot 的宽松绑定）。
+ *
+ * @param streamTimeout 流式输出时，首个片段以及相邻两个片段之间最多等多久；超过就按超时结束
+ * @param refuseMinConfidence 意图为 OUT_OF_SCOPE 且把握不低于这个值时才直接拒答；低于它照常交给模型回答，宁可多答一句，不错拒正常问题
+ */
+@ConfigurationProperties(&quot;assistant.chat&quot;)
+<span class="fc" id="L18">public record ChatProperties(</span>
+        @DefaultValue(&quot;30s&quot;) Duration streamTimeout,
+        @DefaultValue(&quot;0.6&quot;) double refuseMinConfidence) {}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

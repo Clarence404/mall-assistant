@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>McpRejection.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.mcp</a> &gt; <span class="el_source">McpRejection.java</span></div><h1>McpRejection.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.mcp;
+
+/**
+ * MCP 工具调用被拦下：没登录、登录过期、调得太频繁等（第 8 章引入）。
+ *
+ * &lt;p&gt;所在层：MCP 的错误。{@link McpGate#enter} 抛出，{@link MallMcpTools} 接住后翻成 {@code isError=true} 的工具结果，消息原样给对面的模型看。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么翻成工具结果、而不是 MCP 协议错误&lt;/b&gt;：MCP 有两种失败。协议错误（JSON-RPC error）表示「这次调用本身坏了」（方法不存在、参数不是 JSON），
+ * 客户端多半直接报错给人看；工具结果里的 {@code isError=true} 表示「工具执行了，但没办成」，会交还给模型，模型能据此告诉用户「请先登录」。
+ * 没登录、太频繁属于后者。还有一层：Spring AI 把工具方法抛出的异常转成结果时，会把异常信息（含根因）原样拼进结果，
+ * 自己接住再写固定话术，才能保证不会把内部细节漏给对面。
+ */
+public class McpRejection extends RuntimeException {
+
+    /**
+     * 创建。
+     *
+     * @param message 给对面模型看的原因（固定话术，不含任何令牌、内部地址）
+     */
+    public McpRejection(String message) {
+<span class="fc" id="L21">        super(message, null, false, false);</span>
+<span class="fc" id="L22">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

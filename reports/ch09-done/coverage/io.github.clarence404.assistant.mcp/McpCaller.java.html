@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>McpCaller.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.mcp</a> &gt; <span class="el_source">McpCaller.java</span></div><h1>McpCaller.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.mcp;
+
+import io.github.clarence404.assistant.mall.MallToken;
+import io.github.clarence404.assistant.memory.ConversationOwner;
+
+/**
+ * 一次 MCP 工具调用是谁发起的：商城确认过的用户（或匿名），以及他的令牌（第 8 章引入）。
+ *
+ * &lt;p&gt;所在层：MCP 的领域模型。{@link McpGate#enter} 得出它，{@link McpMallService} 用令牌调商城、用归属登记待确认操作。
+ *
+ * @param owner 归属：第 6 章的 {@link ConversationOwner}，匿名或商城用户（用户 ID 由商城 {@code /api/users/me} 确认，不是我们自己解析令牌）
+ * @param token 商城令牌；匿名时为 null。只在代码里用，{@link #toString()} 打了码
+ */
+<span class="fc" id="L14">public record McpCaller(ConversationOwner owner, String token) {</span>
+
+    /** 匿名调用方。 */
+<span class="fc" id="L17">    public static final McpCaller ANONYMOUS = new McpCaller(ConversationOwner.ANONYMOUS, null);</span>
+
+    /** 是否登录了商城。 */
+    public boolean loggedIn() {
+<span class="pc bpc" id="L21" title="1 of 4 branches missed.">        return token != null &amp;&amp; owner.kind() == ConversationOwner.Kind.USER;</span>
+    }
+
+    /** 打码：record 默认的 toString 会把令牌原文打出来。 */
+    @Override
+    public String toString() {
+<span class="fc" id="L27">        return &quot;McpCaller[&quot; + owner.key() + &quot;, &quot; + MallToken.mask(token) + &quot;]&quot;;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

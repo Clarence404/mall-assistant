@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AfterSalesApplication.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.aftersales</a> &gt; <span class="el_source">AfterSalesApplication.java</span></div><h1>AfterSalesApplication.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.aftersales;
+
+import java.time.Instant;
+
+/**
+ * 一张售后申请单：用户确认后由智能客服记下来，状态「待人工审核」（第 7 章引入）。
+ *
+ * &lt;p&gt;所在层：售后申请的领域模型。{@code agent.ConfirmationService} 在用户点确认后创建，存进 {@link AfterSalesStore}（内存或 PostgreSQL）；
+ * {@code GET /api/agent/after-sales} 列出自己的申请单。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么记在智能客服这边、而且只「记」不「办」&lt;/b&gt;：配套的商城 mall-evolution 没有用户侧的售后 / 退款接口，退款要走支付渠道、要核对签收和
+ * 商品状况，本来就该由人来审。所以 Agent 能做的只是把「谁、哪一单、要退款还是退货、为什么」整理成一张申请单交给人工客服——&lt;b&gt;不动钱、不改订单&lt;/b&gt;。
+ * 真实系统里这一步应该调商城自己的售后接口（创建售后单，由商城的售后流程去审核、退款），本地这张表只是为了把 Agent 的流程走通。
+ *
+ * @param id 申请单号，如 AS20261109-3F2A9C1B
+ * @param ownerKey 谁的：商城用户（{@code user:10001}），和第 6 章的会话归属同一个写法
+ * @param orderNo 订单号
+ * @param type 售后类型
+ * @param reason 用户说的原因
+ * @param status 状态，现在只有「待人工审核」
+ * @param confirmationId 由哪一次确认生成：同一个确认只会生成一张申请单（重复点确认、并发点确认都不会多出一张）
+ * @param createdAt 提交时间
+ */
+<span class="fc" id="L24">public record AfterSalesApplication(</span>
+        String id,
+        String ownerKey,
+        String orderNo,
+        Type type,
+        String reason,
+        Status status,
+        String confirmationId,
+        Instant createdAt) {
+
+    /** 售后类型：按订单状态由代码决定，不让模型填。 */
+<span class="fc" id="L35">    public enum Type {</span>
+        /** 仅退款：已付款、还没发货。 */
+<span class="fc" id="L37">        REFUND_ONLY(&quot;仅退款&quot;),</span>
+        /** 退货退款：已发货或已收货，要先把东西寄回来。 */
+<span class="fc" id="L39">        RETURN_REFUND(&quot;退货退款&quot;);</span>
+
+        private final String text;
+
+<span class="fc" id="L43">        Type(String text) {</span>
+<span class="fc" id="L44">            this.text = text;</span>
+<span class="fc" id="L45">        }</span>
+
+        /** 中文名。 */
+        public String text() {
+<span class="fc" id="L49">            return text;</span>
+        }
+    }
+
+    /** 申请单状态。 */
+<span class="fc" id="L54">    public enum Status {</span>
+        /** 待人工审核：客服 24 小时内处理（见知识库「售后与投诉 &gt; 申请售后」）。 */
+<span class="fc" id="L56">        PENDING_REVIEW(&quot;待人工审核&quot;);</span>
+
+        private final String text;
+
+<span class="fc" id="L60">        Status(String text) {</span>
+<span class="fc" id="L61">            this.text = text;</span>
+<span class="fc" id="L62">        }</span>
+
+        /** 中文名。 */
+        public String text() {
+<span class="fc" id="L66">            return text;</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

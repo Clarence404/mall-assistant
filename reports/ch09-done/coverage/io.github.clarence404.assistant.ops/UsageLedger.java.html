@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>UsageLedger.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.ops</a> &gt; <span class="el_source">UsageLedger.java</span></div><h1>UsageLedger.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.ops;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.ZonedDateTime;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+/**
+ * Token 总账：每一轮对话结束时记一笔，按调用方、会话、意图汇总今天用了多少；每日预算也看它（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：上线运维。上游是 {@code ChatController}（一轮开始 {@link #open}、结束 {@link #commit}）和 {@code guard.ChatGuard}（进门前问
+ * {@link #usedToday} 有没有超预算）；{@link TokenUsageEndpoint}（{@code /actuator/tokens}）和 {@link UsageController}（{@code /api/usage/me}）
+ * 读它的汇总。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么按调用方汇总不进 Prometheus&lt;/b&gt;：Prometheus 的每个标签值组合是一条独立的时间序列，用户 ID、IP、会话 ID 当标签，序列数会随用户数无限增长
+ * （「高基数」），拖垮监控系统。所以指标只按意图、步骤这种几个值的维度分（{@link ChatMetrics}），「谁用了多少」放在这里——一个进程内的小账本。
+ * 只存今天的，过了零点清零（预算本来就是按天算的）；重启就没了，也不跨实例：生产上要持久化（写数据库或 Redis 的 {@code INCRBY}），
+ * 或者交给网关 / 模型代理（如 LiteLLM、One API 一类）统一记账。
+ *
+ * &lt;p&gt;预算的粒度是「一轮」：进门时检查今天用的有没有超，超了就拒；这一轮本身会用多少事先不知道，所以最后一轮可能超出预算一点——这和大多数按量计费的
+ * 「先用后扣」一样，想严格不超就得在每次模型调用前也检查一次（讲义思考题）。
+ */
+@Component
+public class UsageLedger {
+
+<span class="fc" id="L34">    private static final Logger log = LoggerFactory.getLogger(UsageLedger.class);</span>
+
+    /** 没有意图（意图识别之前就失败了）时记在这个名字下。 */
+    static final String NO_INTENT = &quot;NONE&quot;;
+
+    private final UsageProperties properties;
+    private final Clock clock;
+
+    // 下面这些只在 synchronized 方法里读写：一轮记一次账，量很小，一把锁足够
+    private LocalDate day;
+<span class="fc" id="L44">    private final Map&lt;String, Tally&gt; byCaller = new HashMap&lt;&gt;();</span>
+<span class="fc" id="L45">    private final Map&lt;String, Tally&gt; byIntent = new HashMap&lt;&gt;();</span>
+    private final Map&lt;String, Tally&gt; byConversation;
+
+    /**
+     * 创建。
+     *
+     * @param properties {@code assistant.usage.*}
+     * @param clock 时钟（测试里拨动它过零点）
+     */
+<span class="fc" id="L54">    public UsageLedger(UsageProperties properties, Clock clock) {</span>
+<span class="fc" id="L55">        this.properties = properties;</span>
+<span class="fc" id="L56">        this.clock = clock;</span>
+        // 按插入顺序、超过上限删最早的（LinkedHashMap 的 removeEldestEntry）
+<span class="fc" id="L58">        this.byConversation = new LinkedHashMap&lt;&gt;(16, 0.75f, false) {</span>
+            @Override
+            protected boolean removeEldestEntry(Map.Entry&lt;String, Tally&gt; eldest) {
+<span class="pc bpc" id="L61" title="1 of 2 branches missed.">                return size() &gt; properties.maxConversations();</span>
+            }
+        };
+<span class="fc" id="L64">        this.day = today();</span>
+<span class="fc" id="L65">    }</span>
+
+    /**
+     * 开始一轮。
+     *
+     * @param caller 调用方（{@code guard.CallerResolver} 算出来的 {@code user:…} / {@code ip:…}）
+     * @param conversationId 会话 ID，可以为 null
+     * @return 这一轮的账本
+     */
+    public TurnRecord open(String caller, String conversationId) {
+<span class="fc" id="L75">        return new TurnRecord(caller, conversationId);</span>
+    }
+
+    /**
+     * 一轮结束，记进总账（ch09-5 之一）。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;同一轮只记一次（{@code record.markCommitted()} 返回 false 就直接返回）；{@link TurnRecord#UNATTRIBUTED} 的不记（测试、评测）
+     *   &lt;li&gt;先 {@link #rollover}：日期变了就清空三张表
+     *   &lt;li&gt;这一轮的用量（{@code record.usage()}）记成一个 {@link Tally}（1 轮、输入、输出、有估算就记 1 次估算），分别合并进按调用方、按意图
+     *       （没有意图记 {@link #NO_INTENT}）、按会话（有会话 ID 时，键是 {@code 调用方/会话 ID}：不同用户可能用同一个会话 ID）三张表；合并用
+     *       {@link Tally#plus}
+     *   &lt;li&gt;今天的用量超过预算了（{@code dailyTokenBudget &gt; 0}）记一行 info 日志，下一轮进门时会被拒
+     * &lt;/ul&gt;
+     *
+     * @param record 这一轮
+     */
+    public synchronized void commit(TurnRecord record) {
+<span class="fc bfc" id="L95" title="All 4 branches covered.">        if (!record.markCommitted() || TurnRecord.UNATTRIBUTED.equals(record.caller())) {</span>
+<span class="fc" id="L96">            return;</span>
+        }
+<span class="fc" id="L98">        rollover();</span>
+<span class="fc" id="L99">        UsageTrace usage = record.usage();</span>
+<span class="fc bfc" id="L100" title="All 2 branches covered.">        Tally tally = new Tally(1, usage.inputTokens(), usage.outputTokens(), usage.estimated() ? 1 : 0);</span>
+<span class="fc" id="L101">        byCaller.merge(record.caller(), tally, Tally::plus);</span>
+<span class="fc bfc" id="L102" title="All 2 branches covered.">        byIntent.merge(record.intent() == null ? NO_INTENT : record.intent(), tally, Tally::plus);</span>
+<span class="fc bfc" id="L103" title="All 2 branches covered.">        if (record.conversationId() != null) {</span>
+<span class="fc" id="L104">            byConversation.merge(record.caller() + &quot;/&quot; + record.conversationId(), tally, Tally::plus);</span>
+        }
+<span class="fc" id="L106">        long used = byCaller.get(record.caller()).tokens();</span>
+<span class="fc bfc" id="L107" title="All 4 branches covered.">        if (properties.dailyTokenBudget() &gt; 0 &amp;&amp; used &gt;= properties.dailyTokenBudget()) {</span>
+<span class="fc" id="L108">            log.info(&quot;{} 今天的 Token 用量 {} 已到预算 {}，之后的提问会被拒&quot;, record.caller(), used, properties.dailyTokenBudget());</span>
+        }
+<span class="fc" id="L110">    }</span>
+
+    /**
+     * 这个调用方今天用了多少 Token（ch09-5 之二）：先 {@link #rollover}，再查按调用方的表，没有记录是 0。
+     *
+     * @param caller 调用方
+     * @return 今天的输入 + 输出 Token
+     */
+    public synchronized long usedToday(String caller) {
+<span class="fc" id="L119">        rollover();</span>
+<span class="fc" id="L120">        Tally tally = byCaller.get(caller);</span>
+<span class="fc bfc" id="L121" title="All 2 branches covered.">        return tally == null ? 0 : tally.tokens();</span>
+    }
+
+    /** 每日预算；0 = 不限。 */
+    public long dailyBudget() {
+<span class="fc" id="L126">        return properties.dailyTokenBudget();</span>
+    }
+
+    /**
+     * 距离预算重置（下一个零点）还有多久：TOKEN_BUDGET_EXCEEDED 的 {@code Retry-After}。
+     *
+     * @return 时长
+     */
+    public Duration untilReset() {
+<span class="fc" id="L135">        ZonedDateTime now = ZonedDateTime.ofInstant(clock.instant(), properties.zone());</span>
+<span class="fc" id="L136">        return Duration.between(now, now.toLocalDate().plusDays(1).atStartOfDay(properties.zone()));</span>
+    }
+
+    /**
+     * 今天的汇总（{@code /actuator/tokens}）：合计、按意图、用得最多的调用方和会话。
+     *
+     * @param top 调用方、会话各列前几个
+     * @return 汇总
+     */
+    public synchronized Summary summary(int top) {
+<span class="fc" id="L146">        rollover();</span>
+<span class="fc" id="L147">        Tally total = byCaller.values().stream().reduce(Tally.ZERO, Tally::plus);</span>
+<span class="fc" id="L148">        return new Summary(</span>
+<span class="fc" id="L149">                day.toString(),</span>
+<span class="fc" id="L150">                properties.dailyTokenBudget(),</span>
+                total,
+<span class="fc" id="L152">                rows(byIntent, byIntent.size()),</span>
+<span class="fc" id="L153">                rows(byCaller, top),</span>
+<span class="fc" id="L154">                rows(byConversation, top));</span>
+    }
+
+    /** 日期变了就清空（预算按天算）。调用方已经持有锁。 */
+    private void rollover() {
+<span class="fc" id="L159">        LocalDate today = today();</span>
+<span class="fc bfc" id="L160" title="All 2 branches covered.">        if (!today.equals(day)) {</span>
+<span class="fc" id="L161">            log.info(&quot;Token 总账：{} 结束，清零（{} 个调用方）&quot;, day, byCaller.size());</span>
+<span class="fc" id="L162">            day = today;</span>
+<span class="fc" id="L163">            byCaller.clear();</span>
+<span class="fc" id="L164">            byIntent.clear();</span>
+<span class="fc" id="L165">            byConversation.clear();</span>
+        }
+<span class="fc" id="L167">    }</span>
+
+    private LocalDate today() {
+<span class="fc" id="L170">        return LocalDate.ofInstant(clock.instant(), properties.zone());</span>
+    }
+
+    private static List&lt;Row&gt; rows(Map&lt;String, Tally&gt; table, int limit) {
+<span class="fc" id="L174">        return table.entrySet().stream()</span>
+<span class="fc" id="L175">                .sorted(Comparator.comparingLong(</span>
+<span class="fc" id="L176">                                (Map.Entry&lt;String, Tally&gt; e) -&gt; e.getValue().tokens())</span>
+<span class="fc" id="L177">                        .reversed())</span>
+<span class="fc" id="L178">                .limit(limit)</span>
+<span class="fc" id="L179">                .map(e -&gt; new Row(e.getKey(), e.getValue()))</span>
+<span class="fc" id="L180">                .toList();</span>
+    }
+
+    /**
+     * 一个维度上的累计。
+     *
+     * @param turns 几轮
+     * @param inputTokens 输入 Token
+     * @param outputTokens 输出 Token
+     * @param estimatedTurns 其中有估算的轮数
+     */
+<span class="fc" id="L191">    public record Tally(long turns, long inputTokens, long outputTokens, long estimatedTurns) {</span>
+
+        /** 零。 */
+<span class="fc" id="L194">        public static final Tally ZERO = new Tally(0, 0, 0, 0);</span>
+
+        /** 输入 + 输出。 */
+        public long tokens() {
+<span class="fc" id="L198">            return inputTokens + outputTokens;</span>
+        }
+
+        /**
+         * 相加。
+         *
+         * @param other 另一份
+         * @return 和
+         */
+        public Tally plus(Tally other) {
+<span class="fc" id="L208">            return new Tally(</span>
+                    turns + other.turns,
+                    inputTokens + other.inputTokens,
+                    outputTokens + other.outputTokens,
+                    estimatedTurns + other.estimatedTurns);
+        }
+    }
+
+    /**
+     * 汇总里的一行。
+     *
+     * @param key 调用方 / 意图 / {@code 调用方/会话 ID}
+     * @param usage 累计
+     */
+<span class="fc" id="L222">    public record Row(String key, Tally usage) {}</span>
+
+    /**
+     * 今天的汇总。
+     *
+     * @param date 哪一天
+     * @param dailyBudget 每个调用方的每日预算，0 = 不限
+     * @param total 合计
+     * @param byIntent 按意图（全部）
+     * @param topCallers 用得最多的调用方
+     * @param topConversations 用得最多的会话
+     */
+<span class="fc" id="L234">    public record Summary(</span>
+            String date,
+            long dailyBudget,
+            Tally total,
+            List&lt;Row&gt; byIntent,
+            List&lt;Row&gt; topCallers,
+            List&lt;Row&gt; topConversations) {}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

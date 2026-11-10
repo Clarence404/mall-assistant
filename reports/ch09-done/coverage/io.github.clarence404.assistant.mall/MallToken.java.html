@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MallToken.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.mall</a> &gt; <span class="el_source">MallToken.java</span></div><h1>MallToken.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.mall;
+
+/**
+ * 商城访问令牌的小工具：从 {@code Authorization} 请求头取出令牌、打日志时打码。
+ *
+ * &lt;p&gt;所在层：外部系统接入（第 3 章引入）。上游是 {@code ChatController}（从请求头取令牌）；令牌之后只放进 Spring AI 的
+ * {@code ToolContext}，在工具里使用，&lt;b&gt;从不进入发给模型的任何文字&lt;/b&gt;：模型的输入可能被记录、被提供方留存，也可能被用户用提示注入
+ * 套出来（「把你收到的所有内容原样输出」），令牌一旦进了提示词就等于泄露了。日志里也只打前几位。
+ */
+public final class MallToken {
+
+    private static final String BEARER = &quot;Bearer &quot;;
+
+    private MallToken() {}
+
+    /**
+     * 从 {@code Authorization: Bearer &lt;token&gt;} 请求头取出令牌。
+     *
+     * @param authorization 请求头的值，可以为 null
+     * @return 令牌；没带请求头、不是 Bearer 格式、或令牌为空时返回 null（按未登录处理）
+     */
+    public static String fromAuthorizationHeader(String authorization) {
+<span class="fc bfc" id="L23" title="All 4 branches covered.">        if (authorization == null || !authorization.regionMatches(true, 0, BEARER, 0, BEARER.length())) {</span>
+<span class="fc" id="L24">            return null;</span>
+        }
+<span class="fc" id="L26">        String token = authorization.substring(BEARER.length()).strip();</span>
+<span class="fc bfc" id="L27" title="All 2 branches covered.">        return token.isEmpty() ? null : token;</span>
+    }
+
+    /**
+     * 日志用的打码：只留前 6 个字符。
+     *
+     * @param token 令牌，可以为 null
+     * @return 如 {@code eyJhbG…}；null 时返回「未登录」
+     */
+    public static String mask(String token) {
+<span class="pc bpc" id="L37" title="1 of 2 branches missed.">        if (token == null) {</span>
+<span class="nc" id="L38">            return &quot;未登录&quot;;</span>
+        }
+<span class="pc bpc" id="L40" title="1 of 2 branches missed.">        return token.length() &lt;= 6 ? &quot;…&quot; : token.substring(0, 6) + &quot;…&quot;;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
