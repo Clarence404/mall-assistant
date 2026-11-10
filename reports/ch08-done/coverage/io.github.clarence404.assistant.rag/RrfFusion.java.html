@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RrfFusion.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.rag</a> &gt; <span class="el_source">RrfFusion.java</span></div><h1>RrfFusion.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.rag;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * RRF（Reciprocal Rank Fusion，倒数排名融合）：把几个检索器各自的排名合成一个排名（第 5 章引入）。
+ *
+ * &lt;p&gt;所在层：RAG 的检索。{@link RagRetriever} 把向量检索、关键词检索的两份排名交给它。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么不直接把分数加起来&lt;/b&gt;：两种分数根本不是一个尺度——余弦相似度在 0～1 之间、真实模型多半挤在 0.4～0.8；BM25 没有上限，
+ * 问题越长分越高。硬加要先归一化，怎么归一都有点拍脑袋。RRF 干脆不看分数、只看&lt;b&gt;名次&lt;/b&gt;：在每个检索器里排第 r 名的块得
+ * {@code 1 / (k + r)} 分，几个检索器的得分相加。两边都排得靠前的块总分最高；只被一边找到的块也有分，不会被埋没。
+ *
+ * &lt;p&gt;k 的作用：k 越大，第 1 名和第 10 名的分差越小，越「民主」；k 越小越偏向各自的第一名。原论文（Cormack 等，2009）用 60，
+ * Elasticsearch、OpenSearch 的混合检索默认也是 60。
+ */
+public final class RrfFusion {
+
+    private RrfFusion() {}
+
+    /**
+     * 融合。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;每份排名里第 r 名（r 从 &lt;b&gt;1&lt;/b&gt; 开始）的键得 {@code 1.0 / (k + r)} 分；同一个键出现在几份排名里，分数相加
+     *   &lt;li&gt;同一份排名里重复出现的键只按第一次（名次最靠前的那次）算
+     *   &lt;li&gt;按总分从高到低返回；总分相同时，按键第一次出现的先后（先看第一份排名，再看第二份……）
+     * &lt;/ul&gt;
+     *
+     * @param rankings 若干份排名，每份是按相关性从高到低的键列表（如 {@code returns.md#3}）
+     * @param k 平滑常数，大于 0
+     * @return 融合后的排名与分数
+     */
+    public static List&lt;Fused&gt; fuse(List&lt;List&lt;String&gt;&gt; rankings, int k) {
+        // LinkedHashMap 记住键第一次出现的顺序，排序时作为同分的先后
+<span class="fc" id="L42">        Map&lt;String, Double&gt; scores = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L43" title="All 2 branches covered.">        for (List&lt;String&gt; ranking : rankings) {</span>
+<span class="fc" id="L44">            List&lt;String&gt; seen = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L45" title="All 2 branches covered.">            for (String key : ranking) {</span>
+<span class="fc bfc" id="L46" title="All 2 branches covered.">                if (seen.contains(key)) {</span>
+<span class="fc" id="L47">                    continue;</span>
+                }
+<span class="fc" id="L49">                seen.add(key);</span>
+<span class="fc" id="L50">                int rank = seen.size();</span>
+<span class="fc" id="L51">                scores.merge(key, 1.0 / (k + rank), Double::sum);</span>
+<span class="fc" id="L52">            }</span>
+<span class="fc" id="L53">        }</span>
+<span class="fc" id="L54">        List&lt;Fused&gt; fused = new ArrayList&lt;&gt;(scores.size());</span>
+<span class="fc" id="L55">        scores.forEach((key, score) -&gt; fused.add(new Fused(key, score)));</span>
+        // 稳定排序：同分时保持第一次出现的先后
+<span class="fc" id="L57">        fused.sort(Comparator.comparingDouble(Fused::score).reversed());</span>
+<span class="fc" id="L58">        return fused;</span>
+    }
+
+    /**
+     * 融合后的一项。
+     *
+     * @param key 块的键
+     * @param score RRF 总分；只用来排序，绝对值没有含义（两份排名都排第 1、k=60 时是 2/61 ≈ 0.0328）
+     */
+<span class="fc" id="L67">    public record Fused(String key, double score) {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

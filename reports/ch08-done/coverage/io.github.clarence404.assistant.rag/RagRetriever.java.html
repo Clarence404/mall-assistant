@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RagRetriever.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.rag</a> &gt; <span class="el_source">RagRetriever.java</span></div><h1>RagRetriever.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.rag;
+
+import io.github.clarence404.assistant.knowledge.KnowledgeException;
+import io.github.clarence404.assistant.knowledge.KnowledgeHit;
+import io.github.clarence404.assistant.knowledge.KnowledgeSearchService;
+import io.github.clarence404.assistant.knowledge.KnowledgeStore;
+import io.github.clarence404.assistant.knowledge.StoredDocument;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+/**
+ * RAG 的「检索」一步：向量检索 + 关键词检索，RRF 融合，按门槛筛选，整理成编了号的引用来源（第 5 章引入）。
+ *
+ * &lt;p&gt;所在层：业务层。上游是 {@link RagService}；下游是第 4 章的 {@link KnowledgeSearchService}（向量检索，复用同一个向量库）、
+ * {@link KnowledgeStore#chunks()}（关键词索引的原料）、{@link KeywordIndex}、{@link RrfFusion} 和 {@link ContextPacker}。
+ *
+ * &lt;p&gt;流程：
+ *
+ * &lt;ol&gt;
+ *   &lt;li&gt;向量检索取前 {@code candidateK} 块（带余弦相似度）；开了混合检索时，关键词检索（BM25）也取前 {@code candidateK} 块
+ *   &lt;li&gt;两份排名用 RRF 融合（{@link #rank}）；只用向量检索时就按相似度排
+ *   &lt;li&gt;按门槛筛选、取前 topK（{@link #select}）：检索&lt;b&gt;总能&lt;/b&gt;返回「最像的几块」，哪怕问题和知识库毫不相干，所以必须有门槛，
+ *       把「最像但其实不相关」的块扔掉；一块都不剩，上层就不调模型、直接说没找到
+ *   &lt;li&gt;去重、合并同一节的相邻块、按上下文预算截断、编号（{@link ContextPacker#pack}）
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;关键词索引建在内存里：第一次用到时从库里取出全部块建好，之后每次检索先看库里的文档汇总（{@link KnowledgeStore#documents()}，
+ * 不调模型）变没变，变了（重新入库过）才重建。几十到几千块时这样最简单；块更多时应改用数据库的全文检索。
+ */
+@Service
+public class RagRetriever {
+
+    /** 向量检索器的名字（{@link RagSource#foundBy()} 里用）。 */
+    public static final String VECTOR = &quot;vector&quot;;
+
+    /** 关键词检索器的名字。 */
+    public static final String KEYWORD = &quot;keyword&quot;;
+
+<span class="fc" id="L44">    private static final Logger log = LoggerFactory.getLogger(RagRetriever.class);</span>
+
+    private final KnowledgeSearchService searchService;
+    private final KnowledgeStore store;
+    private final RagProperties properties;
+    private volatile CachedIndex cachedIndex;
+
+    /**
+     * 创建检索器。
+     *
+     * @param searchService 第 4 章的相似度检索
+     * @param store 知识库存储（取全部块建关键词索引）
+     * @param properties {@code assistant.rag.*}
+     */
+<span class="fc" id="L58">    public RagRetriever(KnowledgeSearchService searchService, KnowledgeStore store, RagProperties properties) {</span>
+<span class="fc" id="L59">        this.searchService = searchService;</span>
+<span class="fc" id="L60">        this.store = store;</span>
+<span class="fc" id="L61">        this.properties = properties;</span>
+<span class="fc" id="L62">    }</span>
+
+    /**
+     * 当前配置。
+     *
+     * @return {@code assistant.rag.*}
+     */
+    public RagProperties properties() {
+<span class="fc" id="L70">        return properties;</span>
+    }
+
+    /**
+     * 按配置的 topK 检索。
+     *
+     * @param query 检索用的问题
+     * @return 检索结果
+     * @throws KnowledgeException 向量模型 / 向量库不可用，或知识库需要重建
+     */
+    public Retrieval retrieve(String query) {
+<span class="fc" id="L81">        return retrieve(query, query, properties.topK());</span>
+    }
+
+    /**
+     * 检索。向量检索和关键词检索可以用不同的问法：开了「问题改写」时，向量检索用改写后的问题，关键词检索用原话 + 改写后的问题（多一些字面线索）。
+     *
+     * @param vectorQuery 向量检索用的问题
+     * @param keywordQuery 关键词检索用的问题
+     * @param topK 最多留几块（评测时传不同的 k）
+     * @return 检索结果
+     * @throws KnowledgeException 向量模型 / 向量库不可用，或知识库需要重建
+     */
+    public Retrieval retrieve(String vectorQuery, String keywordQuery, int topK) {
+<span class="fc" id="L94">        long start = System.nanoTime();</span>
+<span class="fc" id="L95">        List&lt;KnowledgeHit&gt; vectorHits = searchService.search(vectorQuery, properties.candidateK());</span>
+        List&lt;KeywordIndex.KeywordHit&gt; keywordHits =
+<span class="fc bfc" id="L97" title="All 2 branches covered.">                properties.hybrid() ? keywordIndex().search(keywordQuery, properties.candidateK()) : List.of();</span>
+<span class="fc" id="L98">        List&lt;RagCandidate&gt; ranked = rank(vectorHits, keywordHits);</span>
+<span class="fc" id="L99">        List&lt;RagCandidate&gt; selected = select(ranked, topK);</span>
+<span class="fc" id="L100">        List&lt;RagSource&gt; sources =</span>
+<span class="fc" id="L101">                ContextPacker.pack(selected, properties.contextBudgetChars(), properties.snippetChars());</span>
+<span class="fc" id="L102">        long ms = (System.nanoTime() - start) / 1_000_000;</span>
+<span class="fc" id="L103">        log.debug(</span>
+                &quot;RAG 检索：向量 {} 块、关键词 {} 块，通过门槛 {} 块，交给模型 {} 条，{} ms&quot;,
+<span class="fc" id="L105">                vectorHits.size(),</span>
+<span class="fc" id="L106">                keywordHits.size(),</span>
+<span class="fc" id="L107">                selected.size(),</span>
+<span class="fc" id="L108">                sources.size(),</span>
+<span class="fc" id="L109">                ms);</span>
+<span class="fc" id="L110">        return new Retrieval(sources, ranked, vectorHits.size(), keywordHits.size(), selected.size(), ms);</span>
+    }
+
+    /**
+     * 两路结果融合成一个排名。只用向量检索时按相似度排，fusedScore 就是相似度；混合检索时用 {@link RrfFusion}，两路都找到的块带上两个分数。
+     *
+     * @param vectorHits 向量检索结果，按相似度从高到低
+     * @param keywordHits 关键词检索结果，按 BM25 从高到低（没开混合检索时为空）
+     * @return 融合后的候选，按 fusedScore 从高到低
+     */
+    List&lt;RagCandidate&gt; rank(List&lt;KnowledgeHit&gt; vectorHits, List&lt;KeywordIndex.KeywordHit&gt; keywordHits) {
+<span class="fc" id="L121">        Map&lt;String, KnowledgeHit&gt; byVector = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L122">        vectorHits.forEach(h -&gt; byVector.putIfAbsent(RagChunk.from(h).key(), h));</span>
+<span class="fc" id="L123">        Map&lt;String, KeywordIndex.KeywordHit&gt; byKeyword = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L124">        keywordHits.forEach(h -&gt; byKeyword.putIfAbsent(h.chunk().key(), h));</span>
+
+<span class="fc bfc" id="L126" title="All 2 branches covered.">        if (!properties.hybrid()) {</span>
+<span class="fc" id="L127">            return byVector.values().stream()</span>
+<span class="fc" id="L128">                    .map(h -&gt; new RagCandidate(RagChunk.from(h), h.score(), null, null, h.score(), List.of(VECTOR)))</span>
+<span class="fc" id="L129">                    .toList();</span>
+        }
+<span class="fc" id="L131">        List&lt;RrfFusion.Fused&gt; fused = RrfFusion.fuse(</span>
+<span class="fc" id="L132">                List.of(List.copyOf(byVector.keySet()), List.copyOf(byKeyword.keySet())), properties.rrfK());</span>
+<span class="fc" id="L133">        List&lt;RagCandidate&gt; ranked = new ArrayList&lt;&gt;(fused.size());</span>
+<span class="fc bfc" id="L134" title="All 2 branches covered.">        for (RrfFusion.Fused f : fused) {</span>
+<span class="fc" id="L135">            KnowledgeHit v = byVector.get(f.key());</span>
+<span class="fc" id="L136">            KeywordIndex.KeywordHit k = byKeyword.get(f.key());</span>
+<span class="fc" id="L137">            List&lt;String&gt; foundBy = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L138" title="All 2 branches covered.">            if (v != null) {</span>
+<span class="fc" id="L139">                foundBy.add(VECTOR);</span>
+            }
+<span class="fc bfc" id="L141" title="All 2 branches covered.">            if (k != null) {</span>
+<span class="fc" id="L142">                foundBy.add(KEYWORD);</span>
+            }
+<span class="fc" id="L144">            ranked.add(new RagCandidate(</span>
+<span class="fc bfc" id="L145" title="All 2 branches covered.">                    v != null ? RagChunk.from(v) : k.chunk(),</span>
+<span class="fc bfc" id="L146" title="All 2 branches covered.">                    v != null ? v.score() : null,</span>
+<span class="fc bfc" id="L147" title="All 2 branches covered.">                    k != null ? k.score() : null,</span>
+<span class="fc bfc" id="L148" title="All 2 branches covered.">                    k != null ? k.coverage() : null,</span>
+<span class="fc" id="L149">                    f.score(),</span>
+<span class="fc" id="L150">                    List.copyOf(foundBy)));</span>
+<span class="fc" id="L151">        }</span>
+<span class="fc" id="L152">        return ranked;</span>
+    }
+
+    /**
+     * 按门槛筛选并取前 topK。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;候选算「相关」的条件（满足其一即可）：向量相似度不为 null 且 ≥ {@link #minScore()}（第 6 章起按当前向量模型取）；或覆盖率不为 null 且 ≥
+     *       {@code keyword-min-coverage}
+     *   &lt;li&gt;保持 ranked 的先后，取前 {@code topK} 个相关的
+     * &lt;/ul&gt;
+     *
+     * &lt;p&gt;为什么两个门槛：向量相似度和 BM25 不是一个尺度（见 {@link RrfFusion}），只被关键词检索找到的块没有相似度，用覆盖率判断
+     * （「问题里的词有一半以上出现在这块里」）。门槛定多少要拿真实模型实测：太高，正常问题也说「没找到」；太低，八竿子打不着的问题也会拿几块
+     * 不相关的资料去问模型，模型就可能硬凑一个答案。
+     *
+     * @param ranked 融合后的候选，按 fusedScore 从高到低
+     * @param topK 最多留几个
+     * @return 相关的候选，最多 topK 个；一个都不相关时为空列表
+     */
+    List&lt;RagCandidate&gt; select(List&lt;RagCandidate&gt; ranked, int topK) {
+<span class="fc" id="L175">        double minScore = minScore();</span>
+<span class="fc" id="L176">        return ranked.stream()</span>
+<span class="fc bfc" id="L177" title="All 4 branches covered.">                .filter(c -&gt; (c.vectorScore() != null &amp;&amp; c.vectorScore() &gt;= minScore)</span>
+<span class="fc bfc" id="L178" title="All 4 branches covered.">                        || (c.coverage() != null &amp;&amp; c.coverage() &gt;= properties.keywordMinCoverage()))</span>
+<span class="fc" id="L179">                .limit(topK)</span>
+<span class="fc" id="L180">                .toList();</span>
+    }
+
+    /**
+     * 当前向量模型的相似度门槛（第 6 章补充）：{@code assistant.rag.model-profiles} 里按模型名配了的用配置的，否则用 {@code min-score}。
+     *
+     * @return 门槛
+     */
+    public double minScore() {
+<span class="fc" id="L189">        return properties.minScoreFor(searchService.modelName());</span>
+    }
+
+    /** 关键词索引：库里的文档汇总没变就复用，变了（重新入库过）就从全部块重建。 */
+    KeywordIndex keywordIndex() {
+<span class="fc" id="L194">        List&lt;StoredDocument&gt; signature = store.documents();</span>
+<span class="fc" id="L195">        CachedIndex current = cachedIndex;</span>
+<span class="fc bfc" id="L196" title="All 4 branches covered.">        if (current == null || !current.signature().equals(signature)) {</span>
+<span class="fc" id="L197">            List&lt;RagChunk&gt; chunks = store.chunks().stream().map(RagChunk::from).toList();</span>
+<span class="fc" id="L198">            current = new CachedIndex(signature, KeywordIndex.build(chunks));</span>
+<span class="fc" id="L199">            cachedIndex = current;</span>
+<span class="fc" id="L200">            log.info(&quot;关键词索引已建好：{} 块&quot;, chunks.size());</span>
+        }
+<span class="fc" id="L202">        return current.index();</span>
+    }
+
+    /** 建好的关键词索引和建它时库里的文档汇总（用来判断要不要重建）。 */
+<span class="fc" id="L206">    private record CachedIndex(List&lt;StoredDocument&gt; signature, KeywordIndex index) {}</span>
+
+    /**
+     * 一次检索的结果。
+     *
+     * @param sources 编了号、交给模型的引用来源；为空表示没有相关的资料
+     * @param ranked 融合后、筛选前的全部候选（评测与调试用）
+     * @param vectorCandidates 向量检索返回了几块
+     * @param keywordCandidates 关键词检索返回了几块（没开混合检索时为 0）
+     * @param passed 通过门槛的候选数（取前 topK 之后）
+     * @param durationMs 耗时，毫秒（含把问题向量化的一次模型调用）
+     */
+<span class="fc" id="L218">    public record Retrieval(</span>
+            List&lt;RagSource&gt; sources,
+            List&lt;RagCandidate&gt; ranked,
+            int vectorCandidates,
+            int keywordCandidates,
+            int passed,
+            long durationMs) {}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

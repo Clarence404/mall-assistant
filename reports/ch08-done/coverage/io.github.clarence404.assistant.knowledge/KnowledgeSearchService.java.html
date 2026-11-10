@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>KnowledgeSearchService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">KnowledgeSearchService.java</span></div><h1>KnowledgeSearchService.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.util.List;
+import java.util.Map;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.vectorstore.SearchRequest;
+import org.springframework.stereotype.Service;
+
+/**
+ * 相似度检索与知识库概况（第 4 章引入）。本章只做检索调试，不接进对话；第 5 章 RAG 会用检索结果来回答。
+ *
+ * &lt;p&gt;所在层：业务层。上游是 {@link KnowledgeController}（{@code GET /api/knowledge/search}、{@code /stats}）；下游是
+ * {@link KnowledgeStore}。
+ *
+ * &lt;p&gt;检索是怎么做的：问题先经向量模型变成向量（带查询前缀，见 {@link PrefixedEmbeddingModel}），向量库在全部块里找余弦相似度最高的
+ * topK 块。注意它找的是「意思相近」，不是「包含关键词」：问「东西坏了能退吗」也能找到「质量问题退换货」，哪怕一个字都不一样；
+ * 反过来，只差一个数字的两句话（「7 天」和「15 天」）向量几乎一样，所以检索结果只是「候选」，回答时还要靠模型读原文。
+ */
+@Service
+public class KnowledgeSearchService {
+
+    private final KnowledgeStore store;
+    private final KnowledgeEmbedding embedding;
+    private final KnowledgeProperties properties;
+
+    /**
+     * 创建检索服务。
+     *
+     * @param store 知识库存储
+     * @param embedding 当前向量模型
+     * @param properties 知识库配置（topK 的默认值与上限）
+     */
+<span class="fc" id="L33">    public KnowledgeSearchService(KnowledgeStore store, KnowledgeEmbedding embedding, KnowledgeProperties properties) {</span>
+<span class="fc" id="L34">        this.store = store;</span>
+<span class="fc" id="L35">        this.embedding = embedding;</span>
+<span class="fc" id="L36">        this.properties = properties;</span>
+<span class="fc" id="L37">    }</span>
+
+    /**
+     * 当前向量模型的名字（第 6 章：RAG 按模型选相似度门槛用）。
+     *
+     * @return 模型名，如 {@code bge-m3}
+     */
+    public String modelName() {
+<span class="fc" id="L45">        return embedding.modelName();</span>
+    }
+
+    /**
+     * 检索：库里有别的模型生成的块时先报 409（{@link KnowledgeIngestionService#ensureSameModel}），再做相似度检索。
+     *
+     * @param query 问题，不能为空
+     * @param topK 返回几块；null 用默认值，超出 1 到上限的范围时收紧到范围内
+     * @return 按相似度从高到低排列的命中块；库是空的时候返回空列表
+     * @throws KnowledgeException 向量模型或向量库不可用（503），或需要重建（409）
+     */
+    public List&lt;KnowledgeHit&gt; search(String query, Integer topK) {
+<span class="fc bfc" id="L57" title="All 2 branches covered.">        int k = topK == null</span>
+<span class="fc" id="L58">                ? properties.search().defaultTopK()</span>
+<span class="fc" id="L59">                : Math.clamp(topK, 1, properties.search().maxTopK());</span>
+        try {
+<span class="fc" id="L61">            KnowledgeIngestionService.ensureSameModel(store.documents(), embedding, store);</span>
+<span class="fc" id="L62">            return similaritySearch(query, k);</span>
+<span class="fc" id="L63">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L64">            throw KnowledgeException.classify(e, embedding.modelName(), store.location());</span>
+        }
+    }
+
+    /**
+     * 真正的相似度检索与结果换算。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;用 {@code SearchRequest.builder().query(query).topK(topK).similarityThresholdAll().build()} 调
+     *       {@code store.vectorStore().similaritySearch(...)}。{@code similarityThresholdAll()} 表示不按分数过滤，调试时想看到
+     *       「最像的几块到底有多像」，哪怕分数很低
+     *   &lt;li&gt;每个结果转成 {@link KnowledgeHit}：content = {@code getText()}，source / title / headingPath / chunkIndex / docVersion 取元数据
+     *       （键名见 {@link ChunkMetadata}，chunkIndex 从 JSON 读回来可能是 Integer 也可能是 Long，用 {@code Number#intValue()}）
+     *   &lt;li&gt;&lt;b&gt;score&lt;/b&gt; = {@code Document#getScore()}，即余弦相似度。两种库口径一致：SimpleVectorStore 直接算余弦相似度；
+     *       PgVectorStore 查出的是余弦距离，已经换算成 1 − 距离。保留 4 位小数（{@code Math.round(x * 10000) / 10000.0}）；
+     *       getScore() 为 null 时按 0 处理
+     *   &lt;li&gt;&lt;b&gt;distance&lt;/b&gt; = 1 − score，同样保留 4 位小数
+     *   &lt;li&gt;结果按 score 从高到低排列（向量库已经排好，不用再排）
+     * &lt;/ul&gt;
+     *
+     * @param query 问题
+     * @param topK 返回几块，已经收紧到合法范围
+     * @return 命中块
+     */
+    List&lt;KnowledgeHit&gt; similaritySearch(String query, int topK) {
+<span class="fc" id="L91">        SearchRequest request = SearchRequest.builder()</span>
+<span class="fc" id="L92">                .query(query)</span>
+<span class="fc" id="L93">                .topK(topK)</span>
+<span class="fc" id="L94">                .similarityThresholdAll()</span>
+<span class="fc" id="L95">                .build();</span>
+<span class="fc" id="L96">        List&lt;Document&gt; results = store.vectorStore().similaritySearch(request);</span>
+<span class="fc" id="L97">        return results.stream().map(KnowledgeSearchService::toHit).toList();</span>
+    }
+
+    private static KnowledgeHit toHit(Document document) {
+<span class="fc" id="L101">        Map&lt;String, Object&gt; metadata = document.getMetadata();</span>
+<span class="pc bpc" id="L102" title="1 of 2 branches missed.">        double score = round(document.getScore() == null ? 0.0 : document.getScore());</span>
+<span class="fc" id="L103">        Object index = metadata.get(ChunkMetadata.CHUNK_INDEX);</span>
+<span class="fc" id="L104">        return new KnowledgeHit(</span>
+<span class="fc" id="L105">                document.getText(),</span>
+<span class="fc" id="L106">                text(metadata, ChunkMetadata.SOURCE),</span>
+<span class="fc" id="L107">                text(metadata, ChunkMetadata.TITLE),</span>
+<span class="fc" id="L108">                text(metadata, ChunkMetadata.HEADING_PATH),</span>
+<span class="pc bpc" id="L109" title="1 of 2 branches missed.">                index instanceof Number n ? n.intValue() : null,</span>
+<span class="fc" id="L110">                text(metadata, ChunkMetadata.DOC_VERSION),</span>
+                score,
+<span class="fc" id="L112">                round(1.0 - score));</span>
+    }
+
+    private static double round(double value) {
+<span class="fc" id="L116">        return Math.round(value * 10_000) / 10_000.0;</span>
+    }
+
+    /**
+     * 知识库概况。模型不可用时也能返回：维度第一次会调一次模型探测（之后用缓存），探测失败就为 null 并在 warning 里说明；
+     * 库里的文档汇总直接查存储，不需要模型。
+     *
+     * @return 概况
+     * @throws KnowledgeException 向量库连不上
+     */
+    public KnowledgeStats stats() {
+<span class="fc" id="L127">        List&lt;StoredDocument&gt; documents = store.documents();</span>
+<span class="fc" id="L128">        String warning = null;</span>
+<span class="fc" id="L129">        Integer dimensions = null;</span>
+<span class="pc bpc" id="L130" title="1 of 2 branches missed.">        if (!embedding.configured()) {</span>
+<span class="nc" id="L131">            warning = &quot;没有配置向量模型，知识库不可用。&quot;;</span>
+        } else {
+            try {
+<span class="fc" id="L134">                dimensions = embedding.dimensions();</span>
+<span class="fc" id="L135">                KnowledgeIngestionService.ensureSameModel(documents, embedding, store);</span>
+<span class="fc" id="L136">            } catch (KnowledgeException e) {</span>
+<span class="fc" id="L137">                warning = e.getMessage();</span>
+<span class="fc" id="L138">            }</span>
+<span class="pc bpc" id="L139" title="1 of 4 branches missed.">            if (warning == null &amp;&amp; documents.isEmpty()) {</span>
+<span class="nc" id="L140">                warning = &quot;知识库还是空的：点「入库」或调用 POST /api/knowledge/ingest。&quot;;</span>
+            }
+        }
+<span class="fc" id="L143">        return new KnowledgeStats(</span>
+<span class="fc" id="L144">                store.type(),</span>
+<span class="fc" id="L145">                store.location(),</span>
+<span class="fc" id="L146">                embedding.modelName(),</span>
+<span class="fc bfc" id="L147" title="All 2 branches covered.">                dimensions != null ? dimensions : embedding.dimensionsIfKnown(),</span>
+<span class="fc" id="L148">                embedding.profile().queryPrefix(),</span>
+<span class="fc" id="L149">                embedding.profile().documentPrefix(),</span>
+<span class="fc" id="L150">                documents.size(),</span>
+<span class="fc" id="L151">                documents.stream().mapToInt(StoredDocument::chunkCount).sum(),</span>
+                documents,
+                warning);
+    }
+
+    private static String text(Map&lt;String, Object&gt; metadata, String key) {
+<span class="fc" id="L157">        Object value = metadata.get(key);</span>
+<span class="pc bpc" id="L158" title="1 of 2 branches missed.">        return value == null ? &quot;&quot; : value.toString();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
