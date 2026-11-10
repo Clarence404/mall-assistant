@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ChatMetrics.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.ops</a> &gt; <span class="el_source">ChatMetrics.java</span></div><h1>ChatMetrics.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.ops;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Duration;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+/**
+ * 智能客服的业务指标：请求数与错误码、耗时分位、Token、限流次数、RAG 命中、注入拦截、Agent 步数（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：上线运维。{@code ChatController}（每轮结束 {@link #turn}）、{@code guard.ChatGuard}（被挡 {@link #rejected}）、{@link UsageAdvisor}
+ * （每次模型调用 {@link #modelCall}）、{@code ChatService} / {@code ExternalMcpTools}（注入拦截 {@link #injectionBlocked}）调它。
+ * 指标经 Micrometer 注册到 Spring Boot 的 {@code MeterRegistry}，{@code /actuator/prometheus} 按 Prometheus 文本格式输出（点换成下划线、计数器加
+ * {@code _total}、计时器是 {@code _seconds_bucket / _count / _sum}）。仓库根目录 {@code monitoring/grafana/} 下的面板和 {@code monitoring/prometheus/} 下的告警规则就是按这些名字写的。
+ *
+ * &lt;p&gt;&lt;b&gt;标签只用几个值的维度&lt;/b&gt;：端点（chat / stream）、意图（9 个）、结果（OK 或错误码）、步骤、原因。&lt;b&gt;不用&lt;/b&gt;用户 ID、IP、会话 ID、问题原文：
+ * Prometheus 里每个标签组合是一条时间序列，值无限多的标签会把它撑爆（「高基数」）。「谁用了多少」看 {@link UsageLedger}。
+ *
+ * &lt;table&gt;
+ *   &lt;caption&gt;指标一览&lt;/caption&gt;
+ *   &lt;tr&gt;&lt;th&gt;Micrometer 名字&lt;/th&gt;&lt;th&gt;类型&lt;/th&gt;&lt;th&gt;标签&lt;/th&gt;&lt;th&gt;回答什么问题&lt;/th&gt;&lt;/tr&gt;
+ *   &lt;tr&gt;&lt;td&gt;assistant.chat.requests&lt;/td&gt;&lt;td&gt;计数&lt;/td&gt;&lt;td&gt;endpoint、intent、outcome&lt;/td&gt;&lt;td&gt;每秒多少请求、错误率、各错误码占比&lt;/td&gt;&lt;/tr&gt;
+ *   &lt;tr&gt;&lt;td&gt;assistant.chat.duration&lt;/td&gt;&lt;td&gt;计时（直方图）&lt;/td&gt;&lt;td&gt;endpoint、intent&lt;/td&gt;&lt;td&gt;p50 / p95 / p99 一轮多久&lt;/td&gt;&lt;/tr&gt;
+ *   &lt;tr&gt;&lt;td&gt;assistant.guard.rejections&lt;/td&gt;&lt;td&gt;计数&lt;/td&gt;&lt;td&gt;reason&lt;/td&gt;&lt;td&gt;限流、太忙、超预算各挡了多少&lt;/td&gt;&lt;/tr&gt;
+ *   &lt;tr&gt;&lt;td&gt;assistant.model.tokens&lt;/td&gt;&lt;td&gt;计数&lt;/td&gt;&lt;td&gt;type（input / output）、stage、estimated&lt;/td&gt;&lt;td&gt;Token 消耗速度，哪一步最费&lt;/td&gt;&lt;/tr&gt;
+ *   &lt;tr&gt;&lt;td&gt;assistant.model.calls&lt;/td&gt;&lt;td&gt;计数&lt;/td&gt;&lt;td&gt;stage、outcome&lt;/td&gt;&lt;td&gt;模型调用次数与失败&lt;/td&gt;&lt;/tr&gt;
+ *   &lt;tr&gt;&lt;td&gt;assistant.rag.retrievals&lt;/td&gt;&lt;td&gt;计数&lt;/td&gt;&lt;td&gt;result&lt;/td&gt;&lt;td&gt;规则问题有多少检索到了、多少没找到、多少降级&lt;/td&gt;&lt;/tr&gt;
+ *   &lt;tr&gt;&lt;td&gt;assistant.injection.blocked&lt;/td&gt;&lt;td&gt;计数&lt;/td&gt;&lt;td&gt;where（rag / mcp）、rule&lt;/td&gt;&lt;td&gt;注入过滤挡了多少（突然变多 = 知识库被人改了，或误杀）&lt;/td&gt;&lt;/tr&gt;
+ *   &lt;tr&gt;&lt;td&gt;assistant.agent.steps&lt;/td&gt;&lt;td&gt;分布&lt;/td&gt;&lt;td&gt;stop&lt;/td&gt;&lt;td&gt;Agent 一件事走几步、为什么停&lt;/td&gt;&lt;/tr&gt;
+ *   &lt;tr&gt;&lt;td&gt;assistant.model.circuit.state&lt;/td&gt;&lt;td&gt;仪表&lt;/td&gt;&lt;td&gt;&lt;/td&gt;&lt;td&gt;熔断器状态（{@code guard.ModelCircuitBreaker} 注册）&lt;/td&gt;&lt;/tr&gt;
+ *   &lt;tr&gt;&lt;td&gt;assistant.chat.inflight&lt;/td&gt;&lt;td&gt;仪表&lt;/td&gt;&lt;td&gt;&lt;/td&gt;&lt;td&gt;正在处理的对话数（{@code guard.ChatGuard} 注册）&lt;/td&gt;&lt;/tr&gt;
+ * &lt;/table&gt;
+ */
+@Component
+public class ChatMetrics {
+
+    /** 成功的结果标签。 */
+    public static final String OK = &quot;OK&quot;;
+
+    private final MeterRegistry registry;
+
+    /**
+     * 创建（Spring 注入）：有 Actuator 时用它的注册表，没有时（极少数精简的测试上下文）用一个只在内存里的。
+     *
+     * @param registry 注册表
+     */
+    @Autowired
+    public ChatMetrics(ObjectProvider&lt;MeterRegistry&gt; registry) {
+<span class="fc" id="L54">        this(registry.getIfAvailable(SimpleMeterRegistry::new));</span>
+<span class="fc" id="L55">    }</span>
+
+    /**
+     * 测试用。
+     *
+     * @param registry 注册表
+     */
+<span class="fc" id="L62">    public ChatMetrics(MeterRegistry registry) {</span>
+<span class="fc" id="L63">        this.registry = registry;</span>
+<span class="fc" id="L64">    }</span>
+
+    /**
+     * 不接任何监控的（测试里手工组装时用）。
+     *
+     * @return 指标
+     */
+    public static ChatMetrics noop() {
+<span class="fc" id="L72">        return new ChatMetrics(new SimpleMeterRegistry());</span>
+    }
+
+    /** 注册表（{@code ChatGuard} 注册仪表用）。 */
+    public MeterRegistry registry() {
+<span class="fc" id="L77">        return registry;</span>
+    }
+
+    /**
+     * 一轮对话结束：请求数、耗时；走了 RAG 的记检索结果，走了 Agent 的记步数。
+     *
+     * @param endpoint {@code chat}（阻塞）或 {@code stream}（流式）
+     * @param record 这一轮
+     * @param outcome {@link #OK} 或错误码
+     */
+    public void turn(String endpoint, TurnRecord record, String outcome) {
+<span class="fc bfc" id="L88" title="All 2 branches covered.">        String intent = record.intent() == null ? UsageLedger.NO_INTENT : record.intent();</span>
+<span class="fc" id="L89">        Counter.builder(&quot;assistant.chat.requests&quot;)</span>
+<span class="fc" id="L90">                .description(&quot;对话请求数&quot;)</span>
+<span class="fc" id="L91">                .tags(&quot;endpoint&quot;, endpoint, &quot;intent&quot;, intent, &quot;outcome&quot;, outcome)</span>
+<span class="fc" id="L92">                .register(registry)</span>
+<span class="fc" id="L93">                .increment();</span>
+<span class="fc" id="L94">        Timer.builder(&quot;assistant.chat.duration&quot;)</span>
+<span class="fc" id="L95">                .description(&quot;一轮对话的耗时（从进门到最后一个字）&quot;)</span>
+<span class="fc" id="L96">                .tags(&quot;endpoint&quot;, endpoint, &quot;intent&quot;, intent)</span>
+<span class="fc" id="L97">                .publishPercentileHistogram()</span>
+<span class="fc" id="L98">                .minimumExpectedValue(Duration.ofMillis(50))</span>
+<span class="fc" id="L99">                .maximumExpectedValue(Duration.ofMinutes(3))</span>
+<span class="fc" id="L100">                .register(registry)</span>
+<span class="fc" id="L101">                .record(Duration.ofNanos(record.elapsedNanos()));</span>
+<span class="fc bfc" id="L102" title="All 2 branches covered.">        if (record.ragResult() != null) {</span>
+<span class="fc" id="L103">            Counter.builder(&quot;assistant.rag.retrievals&quot;)</span>
+<span class="fc" id="L104">                    .description(&quot;RAG 检索结果&quot;)</span>
+<span class="fc" id="L105">                    .tag(&quot;result&quot;, record.ragResult())</span>
+<span class="fc" id="L106">                    .register(registry)</span>
+<span class="fc" id="L107">                    .increment();</span>
+        }
+<span class="fc bfc" id="L109" title="All 2 branches covered.">        if (record.agentSteps() &gt;= 0) {</span>
+<span class="fc" id="L110">            DistributionSummary.builder(&quot;assistant.agent.steps&quot;)</span>
+<span class="fc" id="L111">                    .description(&quot;Agent 一件事走了几步&quot;)</span>
+<span class="pc bpc" id="L112" title="1 of 2 branches missed.">                    .tag(&quot;stop&quot;, record.agentStop() == null ? &quot;UNKNOWN&quot; : record.agentStop())</span>
+<span class="fc" id="L113">                    .register(registry)</span>
+<span class="fc" id="L114">                    .record(record.agentSteps());</span>
+        }
+<span class="fc" id="L116">    }</span>
+
+    /**
+     * 进门时被挡下（也算一次请求，结果是原因）。
+     *
+     * @param endpoint {@code chat} 或 {@code stream}
+     * @param reason 原因（错误码）
+     */
+    public void rejected(String endpoint, String reason) {
+<span class="nc" id="L125">        Counter.builder(&quot;assistant.guard.rejections&quot;)</span>
+<span class="nc" id="L126">                .description(&quot;被限流、并发上限、每日预算挡下的请求&quot;)</span>
+<span class="nc" id="L127">                .tag(&quot;reason&quot;, reason)</span>
+<span class="nc" id="L128">                .register(registry)</span>
+<span class="nc" id="L129">                .increment();</span>
+<span class="nc" id="L130">        Counter.builder(&quot;assistant.chat.requests&quot;)</span>
+<span class="nc" id="L131">                .tags(&quot;endpoint&quot;, endpoint, &quot;intent&quot;, UsageLedger.NO_INTENT, &quot;outcome&quot;, reason)</span>
+<span class="nc" id="L132">                .register(registry)</span>
+<span class="nc" id="L133">                .increment();</span>
+<span class="nc" id="L134">    }</span>
+
+    /**
+     * 一次模型调用成功：Token 与调用次数。
+     *
+     * @param call 调用
+     */
+    public void modelCall(ModelCall call) {
+<span class="fc" id="L142">        String estimated = String.valueOf(call.estimated());</span>
+<span class="fc" id="L143">        tokens(&quot;input&quot;, call.stage(), estimated).increment(call.inputTokens());</span>
+<span class="fc" id="L144">        tokens(&quot;output&quot;, call.stage(), estimated).increment(call.outputTokens());</span>
+<span class="fc" id="L145">        calls(call.stage(), OK).increment();</span>
+<span class="fc" id="L146">    }</span>
+
+    /**
+     * 一次模型调用失败。
+     *
+     * @param stage 步骤
+     */
+    public void modelCallFailed(String stage) {
+<span class="fc" id="L154">        calls(stage, &quot;ERROR&quot;).increment();</span>
+<span class="fc" id="L155">    }</span>
+
+    /**
+     * 提示注入过滤挡下了一块。
+     *
+     * @param where {@code rag}（知识库资料）或 {@code mcp}（外部 MCP 工具）
+     * @param rule 规则编号
+     */
+    public void injectionBlocked(String where, String rule) {
+<span class="nc" id="L164">        Counter.builder(&quot;assistant.injection.blocked&quot;)</span>
+<span class="nc" id="L165">                .description(&quot;被提示注入过滤挡下的资料块 / 工具输出&quot;)</span>
+<span class="nc" id="L166">                .tags(&quot;where&quot;, where, &quot;rule&quot;, rule)</span>
+<span class="nc" id="L167">                .register(registry)</span>
+<span class="nc" id="L168">                .increment();</span>
+<span class="nc" id="L169">    }</span>
+
+    private Counter tokens(String type, String stage, String estimated) {
+<span class="fc" id="L172">        return Counter.builder(&quot;assistant.model.tokens&quot;)</span>
+<span class="fc" id="L173">                .description(&quot;模型调用的 Token 数&quot;)</span>
+<span class="fc" id="L174">                .tags(&quot;type&quot;, type, &quot;stage&quot;, stage, &quot;estimated&quot;, estimated)</span>
+<span class="fc" id="L175">                .register(registry);</span>
+    }
+
+    private Counter calls(String stage, String outcome) {
+<span class="fc" id="L179">        return Counter.builder(&quot;assistant.model.calls&quot;)</span>
+<span class="fc" id="L180">                .description(&quot;模型调用次数&quot;)</span>
+<span class="fc" id="L181">                .tags(&quot;stage&quot;, stage, &quot;outcome&quot;, outcome)</span>
+<span class="fc" id="L182">                .register(registry);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ConversationController.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.memory</a> &gt; <span class="el_source">ConversationController.java</span></div><h1>ConversationController.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.memory;
+
+import io.github.clarence404.assistant.mall.MallToken;
+import jakarta.validation.constraints.Pattern;
+import java.util.List;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * 会话接口（第 6 章引入）：{@code GET /api/conversations/{id}/messages} 查看会话的全部消息（页面刷新后恢复历史、调试用），
+ * {@code DELETE /api/conversations/{id}} 清空会话。
+ *
+ * &lt;p&gt;所在层：接口层。上游是 {@code static/index.html}；下游是 {@link ConversationMemory}。和对话接口一样，商城令牌在
+ * {@code Authorization: Bearer} 请求头里，用来确认会话归属：别人的会话和不存在的会话一样返回 404。
+ *
+ * &lt;p&gt;会话 ID 在路径里，格式不对（不是小写 UUID）直接 400：Spring MVC 看到参数上的 {@code @Pattern}，会自动做方法参数校验。
+ */
+@RestController
+public class ConversationController {
+
+    private final ConversationMemory memory;
+
+    /**
+     * 创建。
+     *
+     * @param memory 对话记忆
+     */
+<span class="fc" id="L33">    public ConversationController(ConversationMemory memory) {</span>
+<span class="fc" id="L34">        this.memory = memory;</span>
+<span class="fc" id="L35">    }</span>
+
+    /**
+     * 查看会话。
+     *
+     * @param id 会话 ID（小写 UUID）
+     * @param authorization {@code Authorization} 请求头，没登录时不带
+     * @return 200 {@code {&quot;conversationId&quot;: &quot;...&quot;, &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;text&quot;: &quot;...&quot;, &quot;at&quot;: &quot;...&quot;}, ...]}}；不存在、已过期或不是你的
+     *     404；登录失效 401；商城或记忆库不可用 503（均为 ProblemDetail，带 code）
+     */
+    @GetMapping(&quot;/api/conversations/{id}/messages&quot;)
+    public ConversationHistory messages(
+            @PathVariable @Pattern(regexp = ConversationIds.PATTERN) String id,
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
+<span class="fc" id="L49">        return new ConversationHistory(id, memory.messages(id, MallToken.fromAuthorizationHeader(authorization)));</span>
+    }
+
+    /**
+     * 清空会话：删掉记忆里这个会话的全部消息，之后同一个 ID 就是新会话。
+     *
+     * @param id 会话 ID（小写 UUID）
+     * @param authorization {@code Authorization} 请求头，没登录时不带
+     * @return 204；不存在或不是你的 404；正在回答 409；登录失效 401；商城或记忆库不可用 503
+     */
+    @DeleteMapping(&quot;/api/conversations/{id}&quot;)
+    public ResponseEntity&lt;Void&gt; clear(
+            @PathVariable @Pattern(regexp = ConversationIds.PATTERN) String id,
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
+<span class="fc" id="L63">        memory.clear(id, MallToken.fromAuthorizationHeader(authorization));</span>
+<span class="fc" id="L64">        return ResponseEntity.noContent().build();</span>
+    }
+
+    /**
+     * 会话的全部消息。
+     *
+     * @param conversationId 会话 ID
+     * @param messages 消息，按时间从早到晚
+     */
+<span class="fc" id="L73">    public record ConversationHistory(String conversationId, List&lt;ConversationMessage&gt; messages) {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

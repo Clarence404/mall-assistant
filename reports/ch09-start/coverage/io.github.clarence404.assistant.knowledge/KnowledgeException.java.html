@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>KnowledgeException.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">KnowledgeException.java</span></div><h1>KnowledgeException.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.sql.SQLException;
+import org.springframework.dao.DataAccessException;
+
+/**
+ * 知识库操作失败：已归类（{@link KnowledgeFailure}）并带一句能直接给用户看的说明（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：错误处理。知识库各处抛出，{@code error.ApiExceptionHandler} 转成 ProblemDetail；启动时自动入库遇到它只打警告。
+ */
+public class KnowledgeException extends RuntimeException {
+
+    private static final int MAX_CAUSE_DEPTH = 16;
+
+    private final KnowledgeFailure failure;
+
+    /**
+     * 创建异常。
+     *
+     * @param failure 分类，决定状态码和错误码
+     * @param detail 给用户看的说明（ProblemDetail 的 detail），不含堆栈、密码等内部细节
+     * @param cause 原始异常，只写日志；可以为 null
+     */
+    public KnowledgeException(KnowledgeFailure failure, String detail, Throwable cause) {
+<span class="fc" id="L25">        super(detail, cause);</span>
+<span class="fc" id="L26">        this.failure = failure;</span>
+<span class="fc" id="L27">    }</span>
+
+    /** 失败分类。 */
+    public KnowledgeFailure failure() {
+<span class="fc" id="L31">        return failure;</span>
+    }
+
+    /**
+     * 把入库 / 检索时抛出的任意异常归类：已归类的原样返回；cause 链上有数据库异常（{@link DataAccessException}、{@link SQLException}）
+     * 的算向量库不可用；其余算向量模型不可用。
+     *
+     * &lt;p&gt;为什么要沿 cause 链找：{@code VectorStore#add} 里先调向量模型、再写库，两种失败从同一个方法里抛出来；而且 PgVectorStore
+     * 按条件删除失败时会把 SQL 异常包成 {@code IllegalStateException}，只看最外层会误判成模型的问题。
+     *
+     * @param error 任意异常
+     * @param embeddingModel 当前向量模型名，写进说明里
+     * @param location 向量库位置，写进说明里
+     * @return 归好类的异常，从不返回 null
+     */
+    public static KnowledgeException classify(Throwable error, String embeddingModel, String location) {
+<span class="fc bfc" id="L47" title="All 2 branches covered.">        if (error instanceof KnowledgeException known) {</span>
+<span class="fc" id="L48">            return known;</span>
+        }
+<span class="fc" id="L50">        Throwable current = error;</span>
+<span class="pc bpc" id="L51" title="1 of 4 branches missed.">        for (int depth = 0; current != null &amp;&amp; depth &lt; MAX_CAUSE_DEPTH; depth++) {</span>
+<span class="pc bpc" id="L52" title="2 of 4 branches missed.">            if (current instanceof DataAccessException || current instanceof SQLException) {</span>
+<span class="nc" id="L53">                return new KnowledgeException(</span>
+                        KnowledgeFailure.VECTOR_STORE_UNAVAILABLE,
+                        &quot;向量库 &quot; + location + &quot; 连不上或执行出错，请确认 PostgreSQL（带 pgvector 扩展）已启动、连接配置正确。&quot;,
+                        error);
+            }
+<span class="fc" id="L58">            current = current.getCause();</span>
+        }
+<span class="fc" id="L60">        return embeddingUnavailable(embeddingModel, error);</span>
+    }
+
+    /**
+     * 向量模型不可用。
+     *
+     * @param embeddingModel 模型名
+     * @param cause 原始异常
+     * @return 归好类的异常
+     */
+    public static KnowledgeException embeddingUnavailable(String embeddingModel, Throwable cause) {
+<span class="fc" id="L71">        return new KnowledgeException(</span>
+                KnowledgeFailure.EMBEDDING_UNAVAILABLE,
+                &quot;向量模型 &quot; + embeddingModel + &quot; 连不上或调用出错，请确认模型服务已启动并已下载该模型（Ollama：ollama pull &quot; + embeddingModel + &quot;）。&quot;,
+                cause);
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

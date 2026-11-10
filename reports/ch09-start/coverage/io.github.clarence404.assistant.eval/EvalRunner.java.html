@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>EvalRunner.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.eval</a> &gt; <span class="el_source">EvalRunner.java</span></div><h1>EvalRunner.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.eval;
+
+import io.github.clarence404.assistant.chat.ChatReply;
+import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.ops.UsageTrace;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * 评测运行器：把一份评测集逐条交给 {@link EvalTarget}，判定、计时、数 Token，汇总成 {@link EvalReport}（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：评测。调用方是测试：{@code EvalRunnerTest}（假的被测对象）、{@code EvalGateTest}（CI 里的评测门禁，回放录制的真实模型输出）、
+ * {@code EvalIT}（设了环境变量时对真实 Ollama 跑，出报告、可选录制与更新基线）。
+ *
+ * &lt;p&gt;一条用例怎么跑：有 {@code history} 的先按顺序问前几轮（同一个会话 ID，不判定），再问 {@code message}——只有这一句被判定、被计时；
+ * Token 把所有轮次都算上（多轮的代价就在这里）。抛异常（模型挂了、超时）记为不通过，原因是错误码，不让一条用例的失败打断整次评测。
+ * 用例之间互不影响：每条多轮用例用一个新的会话 ID。
+ */
+public class EvalRunner {
+
+<span class="fc" id="L25">    private static final Logger log = LoggerFactory.getLogger(EvalRunner.class);</span>
+
+    private final EvalTarget target;
+    private final EvalJudge judge;
+
+    /**
+     * 不请裁判。
+     *
+     * @param target 被测对象
+     */
+    public EvalRunner(EvalTarget target) {
+<span class="fc" id="L36">        this(target, null);</span>
+<span class="fc" id="L37">    }</span>
+
+    /**
+     * 请一个 LLM 裁判给 RAG 回答打分（只进报告，不影响通过与否）。
+     *
+     * @param target 被测对象
+     * @param judge 裁判，可以为 null
+     */
+<span class="fc" id="L45">    public EvalRunner(EvalTarget target, EvalJudge judge) {</span>
+<span class="fc" id="L46">        this.target = target;</span>
+<span class="fc" id="L47">        this.judge = judge;</span>
+<span class="fc" id="L48">    }</span>
+
+    /**
+     * 跑一遍。
+     *
+     * @param set 评测集
+     * @param model 被测的模型（写进报告，如 {@code qwen2.5:1.5b}、{@code replay:qwen2.5:1.5b}）
+     * @return 报告
+     */
+    public EvalReport run(EvalSet set, String model) {
+<span class="fc" id="L58">        String startedAt = Instant.now().toString();</span>
+<span class="fc" id="L59">        List&lt;EvalResult&gt; results = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L60" title="All 2 branches covered.">        for (EvalCase c : set.cases()) {</span>
+<span class="fc" id="L61">            EvalResult result = runCase(c);</span>
+<span class="fc" id="L62">            log.info(</span>
+                    &quot;[{}] {} {} ms {}&quot;,
+<span class="fc" id="L64">                    c.id(),</span>
+<span class="pc bpc" id="L65" title="1 of 2 branches missed.">                    result.passed() ? &quot;通过&quot; : &quot;不通过&quot;,</span>
+<span class="fc" id="L66">                    result.durationMs(),</span>
+<span class="pc bpc" id="L67" title="1 of 2 branches missed.">                    result.passed() ? &quot;&quot; : result.failures());</span>
+<span class="fc" id="L68">            results.add(result);</span>
+<span class="fc" id="L69">        }</span>
+<span class="fc" id="L70">        return new EvalReport(model, set.name(), set.version(), startedAt, EvalReport.summarize(results), results);</span>
+    }
+
+    /**
+     * 跑一条用例。
+     *
+     * @param c 用例
+     * @return 结果
+     */
+    EvalResult runCase(EvalCase c) {
+<span class="fc bfc" id="L80" title="All 2 branches covered.">        String conversationId = c.history().isEmpty() ? null : UUID.randomUUID().toString();</span>
+<span class="fc" id="L81">        long input = 0;</span>
+<span class="fc" id="L82">        long output = 0;</span>
+<span class="fc" id="L83">        boolean estimated = false;</span>
+<span class="fc" id="L84">        long durationMs = 0;</span>
+        List&lt;String&gt; failures;
+<span class="fc" id="L86">        Integer score = null;</span>
+<span class="fc" id="L87">        String reason = null;</span>
+        try {
+<span class="fc bfc" id="L89" title="All 2 branches covered.">            for (String earlier : c.history()) {</span>
+<span class="fc" id="L90">                UsageTrace usage =</span>
+<span class="fc" id="L91">                        target.ask(earlier, conversationId, c.login()).usage();</span>
+<span class="pc bpc" id="L92" title="1 of 2 branches missed.">                if (usage != null) {</span>
+<span class="fc" id="L93">                    input += usage.inputTokens();</span>
+<span class="fc" id="L94">                    output += usage.outputTokens();</span>
+<span class="fc" id="L95">                    estimated |= usage.estimated();</span>
+                }
+<span class="fc" id="L97">            }</span>
+<span class="fc" id="L98">            long start = System.nanoTime();</span>
+<span class="fc" id="L99">            ChatReply reply = target.ask(c.message(), conversationId, c.login());</span>
+<span class="fc" id="L100">            durationMs = (System.nanoTime() - start) / 1_000_000;</span>
+<span class="pc bpc" id="L101" title="1 of 2 branches missed.">            if (reply.usage() != null) {</span>
+<span class="fc" id="L102">                input += reply.usage().inputTokens();</span>
+<span class="fc" id="L103">                output += reply.usage().outputTokens();</span>
+<span class="fc" id="L104">                estimated |= reply.usage().estimated();</span>
+            }
+<span class="fc" id="L106">            failures = EvalChecks.judge(c, reply);</span>
+<span class="fc bfc" id="L107" title="All 4 branches covered.">            if (judge != null &amp;&amp; shouldJudge(c, reply)) {</span>
+<span class="fc" id="L108">                EvalJudge.Verdict verdict = judge.judge(c.message(), reply.sources(), reply.reply());</span>
+<span class="pc bpc" id="L109" title="1 of 2 branches missed.">                if (verdict != null) {</span>
+<span class="fc" id="L110">                    score = verdict.score();</span>
+<span class="fc" id="L111">                    reason = verdict.reason();</span>
+                }
+            }
+<span class="fc" id="L114">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L115">            failures = List.of(&quot;调用失败：&quot; + ModelCallException.from(e).failure().name() + &quot;（&quot; + e.getMessage() + &quot;）&quot;);</span>
+<span class="fc" id="L116">        }</span>
+<span class="fc" id="L117">        return new EvalResult(</span>
+<span class="fc" id="L118">                c.id(),</span>
+<span class="fc" id="L119">                c.category(),</span>
+<span class="fc" id="L120">                failures.isEmpty(),</span>
+                failures,
+                durationMs,
+                input,
+                output,
+                estimated,
+                score,
+                reason);
+    }
+
+    /** 只给「带着资料调了模型」的规则类回答打分：短路、降级的回答是代码写的，没什么可评的。 */
+    private static boolean shouldJudge(EvalCase c, ChatReply reply) {
+<span class="pc bpc" id="L132" title="1 of 4 branches missed.">        return (c.category() == EvalCase.Category.RAG || c.category() == EvalCase.Category.INJECTION)</span>
+<span class="pc bpc" id="L133" title="1 of 2 branches missed.">                &amp;&amp; reply.rag() != null</span>
+<span class="pc bpc" id="L134" title="1 of 2 branches missed.">                &amp;&amp; reply.rag().shortCircuit() == null</span>
+<span class="pc bpc" id="L135" title="1 of 2 branches missed.">                &amp;&amp; reply.sources() != null</span>
+<span class="pc bpc" id="L136" title="1 of 2 branches missed.">                &amp;&amp; !reply.sources().isEmpty();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

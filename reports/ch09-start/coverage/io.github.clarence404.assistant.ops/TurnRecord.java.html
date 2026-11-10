@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>TurnRecord.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.ops</a> &gt; <span class="el_source">TurnRecord.java</span></div><h1>TurnRecord.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.ops;
+
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * 一轮对话的「账本」：谁问的、哪个会话、什么意图，以及这一轮里每次模型调用的 Token、RAG 的结果、Agent 走了几步（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：上线运维。{@code ChatController} 在一轮开始时 {@link UsageLedger#open} 一个，交给 {@code ChatService}；{@link UsageAdvisor}
+ * 每次模型调用后往里加一条 {@link ModelCall}；这一轮结束时（成功、失败、页面关掉都算）{@link UsageLedger#commit} 记进总账、
+ * {@link ChatMetrics#turn} 记进指标。
+ *
+ * &lt;p&gt;&lt;b&gt;Advisor 怎么知道「这次调用属于哪一轮」&lt;/b&gt;：模型调用散在意图识别、追问改写、回答、Agent 的每一步里，不想给每个方法都加一个参数，就用两种办法把它
+ * 「带」到 advisor 那里：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;阻塞调用：{@link #bind()} 把它放进当前线程的 {@link ThreadLocal}，advisor 在同一个线程里用 {@link #current()} 取到。用完一定要 close
+ *       （try-with-resources），虚拟线程虽然不复用，平台线程池里的线程是复用的，忘了清就会串到下一个请求
+ *   &lt;li&gt;流式调用：模型的流在别的线程上推数据，ThreadLocal 跟不过去；{@code ChatService} 在拼请求时用
+ *       {@code .advisors(a -&gt; a.param(TurnRecord.CONTEXT_KEY, record))} 把它放进这次请求的上下文，advisor 从 {@code request.context()} 里取
+ * &lt;/ul&gt;
+ *
+ * 两样都没有（如 {@code /api/intent} 调试接口、知识库的问题改写）时 advisor 只记指标，不进任何人的账。
+ */
+public final class TurnRecord {
+
+    /** 放进 ChatClient 请求上下文里的键。 */
+<span class="fc" id="L29">    public static final String CONTEXT_KEY = TurnRecord.class.getName();</span>
+
+    /** 没有调用方信息时的归属（测试、评测、调试接口）。 */
+    public static final String UNATTRIBUTED = &quot;unattributed&quot;;
+
+<span class="fc" id="L34">    private static final ThreadLocal&lt;TurnRecord&gt; CURRENT = new ThreadLocal&lt;&gt;();</span>
+
+    private final String caller;
+    private final String conversationId;
+<span class="fc" id="L38">    private final long startNanos = System.nanoTime();</span>
+<span class="fc" id="L39">    private final List&lt;ModelCall&gt; calls = new CopyOnWriteArrayList&lt;&gt;();</span>
+<span class="fc" id="L40">    private final AtomicBoolean committed = new AtomicBoolean();</span>
+    private volatile String intent;
+    private volatile String ragResult;
+    private volatile int blockedChunks;
+<span class="fc" id="L44">    private volatile int agentSteps = -1;</span>
+    private volatile String agentStop;
+
+    /**
+     * 创建（一般经 {@link UsageLedger#open}）。
+     *
+     * @param caller 调用方：{@code user:&lt;商城用户 ID&gt;}、{@code ip:&lt;地址&gt;}，不知道时 {@link #UNATTRIBUTED}
+     * @param conversationId 会话 ID，单轮时为 null
+     */
+<span class="fc" id="L53">    public TurnRecord(String caller, String conversationId) {</span>
+<span class="pc bpc" id="L54" title="1 of 2 branches missed.">        this.caller = caller == null ? UNATTRIBUTED : caller;</span>
+<span class="fc" id="L55">        this.conversationId = conversationId;</span>
+<span class="fc" id="L56">    }</span>
+
+    /**
+     * 不属于任何调用方的一轮（前几章的测试手工调 ChatService、评测运行器用）：照样收集每次调用的 Token，只是不进总账。
+     *
+     * @return 一轮
+     */
+    public static TurnRecord detached() {
+<span class="fc" id="L64">        return new TurnRecord(UNATTRIBUTED, null);</span>
+    }
+
+    /**
+     * 当前线程上绑定的那一轮。
+     *
+     * @return 一轮；没有绑定时为 null
+     */
+    public static TurnRecord current() {
+<span class="fc" id="L73">        return CURRENT.get();</span>
+    }
+
+    /**
+     * 把这一轮绑定到当前线程，close 时恢复成绑定之前的（可以嵌套）。
+     *
+     * @return 用 try-with-resources 关闭的句柄
+     */
+    public Binding bind() {
+<span class="fc" id="L82">        TurnRecord previous = CURRENT.get();</span>
+<span class="fc" id="L83">        CURRENT.set(this);</span>
+<span class="fc" id="L84">        return () -&gt; {</span>
+<span class="fc bfc" id="L85" title="All 2 branches covered.">            if (previous == null) {</span>
+<span class="fc" id="L86">                CURRENT.remove();</span>
+            } else {
+<span class="fc" id="L88">                CURRENT.set(previous);</span>
+            }
+<span class="fc" id="L90">        };</span>
+    }
+
+    /** 绑定句柄：close 不抛受检异常。 */
+    @FunctionalInterface
+    public interface Binding extends AutoCloseable {
+        @Override
+        void close();
+    }
+
+    /**
+     * 记一次模型调用（{@link UsageAdvisor}）。
+     *
+     * @param call 调用
+     */
+    public void add(ModelCall call) {
+<span class="fc" id="L106">        calls.add(call);</span>
+<span class="fc" id="L107">    }</span>
+
+    /** 这一轮到现在为止的用量。 */
+    public UsageTrace usage() {
+<span class="fc" id="L111">        return UsageTrace.of(calls);</span>
+    }
+
+    /** 这一轮的每次调用。 */
+    public List&lt;ModelCall&gt; calls() {
+<span class="fc" id="L116">        return List.copyOf(calls);</span>
+    }
+
+    /**
+     * 识别出的意图（{@code ChatService#begin}）。
+     *
+     * @param intent 意图名，如 {@code POLICY}
+     */
+    public void intent(String intent) {
+<span class="fc" id="L125">        this.intent = intent;</span>
+<span class="fc" id="L126">    }</span>
+
+    /**
+     * RAG 的结果（{@code ChatService} 的 RAG 路径）。
+     *
+     * @param result {@code HIT}（有资料、调了模型）、{@code NO_MATCH}、{@code ALL_BLOCKED}、{@code KNOWLEDGE_UNAVAILABLE}、{@code DEGRADED}
+     * @param blocked 被提示注入过滤挡下的资料块数
+     */
+    public void rag(String result, int blocked) {
+<span class="fc" id="L135">        this.ragResult = result;</span>
+<span class="fc" id="L136">        this.blockedChunks = blocked;</span>
+<span class="fc" id="L137">    }</span>
+
+    /**
+     * Agent 走了几步、为什么停（{@code ChatService} 的 Agent 路径）。
+     *
+     * @param steps 步数
+     * @param stop 停止原因
+     */
+    public void agent(int steps, String stop) {
+<span class="fc" id="L146">        this.agentSteps = steps;</span>
+<span class="fc" id="L147">        this.agentStop = stop;</span>
+<span class="fc" id="L148">    }</span>
+
+    /**
+     * 标记已经记过账（{@link UsageLedger#commit} 用，保证一轮只记一次：流式接口在 usage 事件和 doFinally 里都会尝试记）。
+     *
+     * @return 第一次调用时为 true
+     */
+    boolean markCommitted() {
+<span class="nc" id="L156">        return committed.compareAndSet(false, true);</span>
+    }
+
+    public String caller() {
+<span class="fc" id="L160">        return caller;</span>
+    }
+
+    public String conversationId() {
+<span class="nc" id="L164">        return conversationId;</span>
+    }
+
+    /** 意图；还没识别出来时为 null。 */
+    public String intent() {
+<span class="fc" id="L169">        return intent;</span>
+    }
+
+    /** RAG 结果；不走 RAG 时为 null。 */
+    public String ragResult() {
+<span class="fc" id="L174">        return ragResult;</span>
+    }
+
+    public int blockedChunks() {
+<span class="nc" id="L178">        return blockedChunks;</span>
+    }
+
+    /** Agent 步数；不走 Agent 时为 -1。 */
+    public int agentSteps() {
+<span class="fc" id="L183">        return agentSteps;</span>
+    }
+
+    /** Agent 停止原因；不走 Agent 时为 null。 */
+    public String agentStop() {
+<span class="fc" id="L188">        return agentStop;</span>
+    }
+
+    /** 从开始到现在过了多少纳秒。 */
+    public long elapsedNanos() {
+<span class="fc" id="L193">        return System.nanoTime() - startNanos;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

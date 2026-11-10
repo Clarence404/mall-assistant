@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>GuardProperties.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.guard</a> &gt; <span class="el_source">GuardProperties.java</span></div><h1>GuardProperties.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.guard;
+
+import java.time.Duration;
+import java.util.List;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
+
+/**
+ * 上线保护的配置，前缀 {@code assistant.guard}（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：上线保护的配置。{@link ChatGuard}（限流、并发）、{@link ModelCircuitBreaker}（熔断）、{@link InjectionFilter}（提示注入过滤）
+ * 和 {@code ChatService}（降级）读它。默认值见 {@code application.yml}；测试里统一调宽（{@code src/test/resources/config/application.yml}），
+ * 免得前八章共用一个 Spring 上下文的接口测试被限流、被熔断。
+ *
+ * @param enabled 限流与并发上限的总开关；关掉时对话接口不限次数、不限并发（熔断、注入过滤、预算各有自己的开关）
+ * @param requestsPerMinute 每个调用方（登录用户按商城用户 ID，匿名按 IP）每分钟最多问几次
+ * @param maxConcurrent 整个实例同时最多处理几轮对话（每轮要调一到几次模型）；模型服务一次只能算几个请求，排队太长大家一起超时
+ * @param acquireTimeout 没有空位时最多等多久，等不到返回 TOO_BUSY（503）
+ * @param circuit 熔断
+ * @param injection 提示注入过滤
+ * @param degrade 降级：模型不可用时规则类问题直接给检索到的原文
+ */
+@ConfigurationProperties(&quot;assistant.guard&quot;)
+<span class="fc" id="L24">public record GuardProperties(</span>
+        @DefaultValue(&quot;true&quot;) boolean enabled,
+        @DefaultValue(&quot;20&quot;) int requestsPerMinute,
+        @DefaultValue(&quot;8&quot;) int maxConcurrent,
+        @DefaultValue(&quot;2s&quot;) Duration acquireTimeout,
+        @DefaultValue Circuit circuit,
+        @DefaultValue Injection injection,
+        @DefaultValue Degrade degrade) {
+
+    /**
+     * 熔断。
+     *
+     * @param enabled 开关
+     * @param failureThreshold 连续失败几次就熔断（不再调模型，直接返回 MODEL_CIRCUIT_OPEN）
+     * @param openDuration 熔断多久之后放一个请求去试（半开）
+     */
+<span class="fc" id="L40">    public record Circuit(</span>
+            @DefaultValue(&quot;true&quot;) boolean enabled,
+            @DefaultValue(&quot;5&quot;) int failureThreshold,
+            @DefaultValue(&quot;30s&quot;) Duration openDuration) {}
+
+    /**
+     * 提示注入过滤。
+     *
+     * @param enabled 开关
+     * @param extraPatterns 追加的正则（写在归一化之后的文字上：小写、半角、没有空格）
+     */
+    public record Injection(@DefaultValue(&quot;true&quot;) boolean enabled, List&lt;String&gt; extraPatterns) {
+
+        /** 紧凑构造器：没配置时是空列表。 */
+<span class="fc" id="L54">        public Injection {</span>
+<span class="pc bpc" id="L55" title="1 of 2 branches missed.">            extraPatterns = extraPatterns == null ? List.of() : List.copyOf(extraPatterns);</span>
+<span class="fc" id="L56">        }</span>
+    }
+
+    /**
+     * 降级。
+     *
+     * @param enabled 开关；关掉时模型不可用就和第 5 章一样返回 503
+     * @param excerptChars 降级回答里每段原文最多多少字
+     */
+<span class="fc" id="L65">    public record Degrade(</span>
+            @DefaultValue(&quot;true&quot;) boolean enabled,
+            @DefaultValue(&quot;200&quot;) int excerptChars) {}
+
+    /**
+     * 全部用默认值（测试里手工组装时用）。
+     *
+     * @return 配置
+     */
+    public static GuardProperties defaults() {
+<span class="fc" id="L75">        return new GuardProperties(</span>
+                true,
+                20,
+                8,
+<span class="fc" id="L79">                Duration.ofSeconds(2),</span>
+<span class="fc" id="L80">                new Circuit(true, 5, Duration.ofSeconds(30)),</span>
+<span class="fc" id="L81">                new Injection(true, List.of()),</span>
+                new Degrade(true, 200));
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

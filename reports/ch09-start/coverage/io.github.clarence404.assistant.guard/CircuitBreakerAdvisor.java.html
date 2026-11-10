@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CircuitBreakerAdvisor.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.guard</a> &gt; <span class="el_source">CircuitBreakerAdvisor.java</span></div><h1>CircuitBreakerAdvisor.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.guard;
+
+import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.error.ModelFailure;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
+import org.springframework.core.Ordered;
+import org.springframework.stereotype.Component;
+import reactor.core.publisher.Flux;
+
+/**
+ * 把 {@link ModelCircuitBreaker} 挂到每一次模型调用上（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：模型接入。{@code ops.OpsConfig} 用 {@code ChatClientCustomizer} 把它加进共享 ChatClient 的默认 advisor，所以意图识别、追问改写、回答、
+ * RAG、Agent 的每一步都经过它，业务代码一行不用改。
+ *
+ * &lt;p&gt;&lt;b&gt;Advisor 是什么&lt;/b&gt;：Spring AI 的 ChatClient 把一次调用做成一条「链」，请求从外往里经过每个 advisor，最里面是真正调模型的
+ * {@code ChatModelCallAdvisor}，响应再从里往外回来——和 Servlet 的 Filter、Spring 的 AOP 是一个思路。记忆、工具调用循环（2.0 起是
+ * {@code ToolCallingAdvisor}）、RAG 的现成组件都是 advisor。{@link #getOrder()} 越小越靠外。
+ *
+ * &lt;p&gt;它排在最外层（{@link #ORDER}）：熔断时连 Token 记账（{@code ops.UsageAdvisor}）都不经过，也不会进到工具调用循环里。一次 ChatClient 调用算一次，
+ * 原生工具调用的几轮模型请求合起来算一次成功或失败。
+ */
+@Component
+public class CircuitBreakerAdvisor implements CallAdvisor, StreamAdvisor {
+
+    /** 顺序：比 Token 记账（+200）和工具调用循环（{@code ToolCallingAdvisor} 默认 +300）都靠外。 */
+    public static final int ORDER = Ordered.HIGHEST_PRECEDENCE + 100;
+
+    private final ModelCircuitBreaker breaker;
+
+    /**
+     * 创建。
+     *
+     * @param breaker 熔断器
+     */
+<span class="fc" id="L41">    public CircuitBreakerAdvisor(ModelCircuitBreaker breaker) {</span>
+<span class="fc" id="L42">        this.breaker = breaker;</span>
+<span class="fc" id="L43">    }</span>
+
+    /** 阻塞调用：先问能不能调，不能就直接抛 MODEL_CIRCUIT_OPEN；调了按结果报告成功或失败。 */
+    @Override
+    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+<span class="pc bpc" id="L48" title="1 of 2 branches missed.">        if (!breaker.tryAcquire()) {</span>
+<span class="nc" id="L49">            throw new ModelCallException(ModelFailure.MODEL_CIRCUIT_OPEN, null);</span>
+        }
+        try {
+<span class="fc" id="L52">            ChatClientResponse response = chain.nextCall(request);</span>
+<span class="fc" id="L53">            breaker.onSuccess();</span>
+<span class="fc" id="L54">            return response;</span>
+<span class="fc" id="L55">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L56">            breaker.onFailure();</span>
+<span class="fc" id="L57">            throw e;</span>
+        }
+    }
+
+    /**
+     * 流式调用：订阅时才问（{@link Flux#defer}），流正常结束算成功、出错算失败；页面中途关掉（取消）两样都不算，半开时由熔断器自己的超时兜底。
+     */
+    @Override
+    public Flux&lt;ChatClientResponse&gt; adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
+<span class="fc" id="L66">        return Flux.defer(() -&gt; {</span>
+<span class="pc bpc" id="L67" title="1 of 2 branches missed.">            if (!breaker.tryAcquire()) {</span>
+<span class="nc" id="L68">                return Flux.error(new ModelCallException(ModelFailure.MODEL_CIRCUIT_OPEN, null));</span>
+            }
+<span class="fc" id="L70">            return chain.nextStream(request).doOnComplete(breaker::onSuccess).doOnError(e -&gt; breaker.onFailure());</span>
+        });
+    }
+
+    @Override
+    public String getName() {
+<span class="fc" id="L76">        return &quot;circuitBreaker&quot;;</span>
+    }
+
+    @Override
+    public int getOrder() {
+<span class="fc" id="L81">        return ORDER;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

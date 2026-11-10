@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>EvalResult.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.eval</a> &gt; <span class="el_source">EvalResult.java</span></div><h1>EvalResult.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.eval;
+
+import java.util.List;
+
+/**
+ * 一条用例的结果（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：评测的数据。{@link EvalRunner} 生成，{@link EvalReport} 汇总，报告和基线文件里逐条列出。
+ *
+ * @param id 用例编号
+ * @param category 类别
+ * @param passed 是否通过（{@code failures} 为空）
+ * @param failures 没满足的期望，一条一句话；通过时为空
+ * @param durationMs 最后一轮（被判定的那一句）的耗时，毫秒；多轮用例前几轮不算
+ * @param inputTokens 这条用例所有轮次的输入 Token
+ * @param outputTokens 这条用例所有轮次的输出 Token
+ * @param estimated Token 里有没有估算的
+ * @param judgeScore LLM 裁判给的分（1～5）；没请裁判或裁判失败时为 null
+ * @param judgeReason 裁判的理由
+ */
+public record EvalResult(
+        String id,
+        EvalCase.Category category,
+        boolean passed,
+        List&lt;String&gt; failures,
+        long durationMs,
+        long inputTokens,
+        long outputTokens,
+        boolean estimated,
+        Integer judgeScore,
+        String judgeReason) {
+
+    /** 紧凑构造器：失败原因为 null 时当作空列表。 */
+<span class="fc" id="L34">    public EvalResult {</span>
+<span class="pc bpc" id="L35" title="1 of 2 branches missed.">        failures = failures == null ? List.of() : List.copyOf(failures);</span>
+<span class="fc" id="L36">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

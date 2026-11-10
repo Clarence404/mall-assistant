@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ChatClientJudge.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.eval</a> &gt; <span class="el_source">ChatClientJudge.java</span></div><h1>ChatClientJudge.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.eval;
+
+import io.github.clarence404.assistant.ops.UsageAdvisor;
+import io.github.clarence404.assistant.rag.RagSource;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.ChatOptions;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * 用一个 ChatClient 当裁判：把资料、问题、回答交给它，要它按「忠实度」打 1～5 分（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：评测。背后的模型由调用方决定——真实评测（{@code EvalIT}）里用环境变量 {@code EVAL_JUDGE} 选：Ollama 上更大的模型，或者本机的 Claude CLI
+ * （{@code claude-cli}，第 1 章扩展的命令行模型）。被评的小模型和裁判最好不是同一个：自己给自己打分，偏差最大。
+ *
+ * &lt;p&gt;提示词的写法：给出明确的评分标准（每一档什么样），要求先找依据再给分，温度 0；打分只看「忠实」和「答没答」，不看文笔——文笔是最容易让裁判偏心的地方。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么不用结构化输出&lt;/b&gt;：第一版用了 {@code entity(Verdict.class)}，换成 Claude CLI（haiku）当裁判时，它先写一段 Markdown 分析、结构化输出的
+ * 重试用完也没交出合格的 JSON，几乎每条都解析失败。「先分析再给分」本来就是裁判提示词想要的，所以改成：让它随便分析，最后一行只写一个 JSON 对象，
+ * 代码从回答里找最后一个 {@code {&quot;score&quot;: …}} 解析、校验分数范围。裁判的输出和被评模型的输出一样，是不可信的、要自己解析和校验的数据。
+ */
+public class ChatClientJudge implements EvalJudge {
+
+<span class="fc" id="L30">    private static final Logger log = LoggerFactory.getLogger(ChatClientJudge.class);</span>
+<span class="fc" id="L31">    private static final JsonMapper JSON = JsonMapper.builder().build();</span>
+
+    /** 回答里最后一个带 score 的 JSON 对象（不跨行嵌套，裁判的结论就一行）。 */
+<span class="fc" id="L34">    private static final Pattern VERDICT = Pattern.compile(&quot;\\{[^{}]*\&quot;score\&quot;[^{}]*}&quot;);</span>
+
+    /** 裁判的系统提示词。 */
+    static final String SYSTEM = &quot;&quot;&quot;
+            你是一名严格的评审员，检查电商客服的回答是否忠于给定的参考资料。
+            评分标准（只看忠实度和是否回答了问题，不看文笔）：
+            5 分：每个说法都能在资料里找到依据，并且回答了用户的问题；
+            4 分：基本忠于资料、回答了问题，有少量资料里没有但不矛盾的客套话；
+            3 分：回答了问题，但有个别说法在资料里找不到依据；
+            2 分：有和资料矛盾的说法，或编造了资料里没有的规则、数字、时限；
+            1 分：大部分是编造的，或者没有回答问题。
+            先简短地逐条找依据，最后一行只输出一个 JSON 对象，不要代码块：{&quot;score&quot;: 1 到 5 的整数, &quot;reason&quot;: &quot;一句中文说明扣分点（满分就说依据在哪一条）&quot;}&quot;&quot;&quot;;
+
+    /** 交给裁判的用户消息。 */
+    static final String USER = &quot;&quot;&quot;
+            &lt;参考资料&gt;
+            {sources}
+            &lt;/参考资料&gt;
+
+            &lt;用户问题&gt;{question}&lt;/用户问题&gt;
+
+            &lt;客服回答&gt;
+            {answer}
+            &lt;/客服回答&gt;&quot;&quot;&quot;;
+
+    private final ChatClient chatClient;
+
+    /**
+     * 创建。
+     *
+     * @param chatClient 裁判模型的 ChatClient
+     */
+<span class="fc" id="L66">    public ChatClientJudge(ChatClient chatClient) {</span>
+<span class="fc" id="L67">        this.chatClient = chatClient;</span>
+<span class="fc" id="L68">    }</span>
+
+    @Override
+    public Verdict judge(String question, List&lt;RagSource&gt; sources, String answer) {
+<span class="fc" id="L72">        String context =</span>
+<span class="fc" id="L73">                sources.stream().map(s -&gt; &quot;[&quot; + s.index() + &quot;] &quot; + s.content()).collect(Collectors.joining(&quot;\n\n&quot;));</span>
+        try {
+<span class="fc" id="L75">            String output = chatClient</span>
+<span class="fc" id="L76">                    .prompt()</span>
+<span class="fc" id="L77">                    .system(SYSTEM)</span>
+<span class="fc" id="L78">                    .user(u -&gt; u.text(USER)</span>
+<span class="fc" id="L79">                            .param(&quot;sources&quot;, context)</span>
+<span class="fc" id="L80">                            .param(&quot;question&quot;, question)</span>
+<span class="fc" id="L81">                            .param(&quot;answer&quot;, answer))</span>
+<span class="fc" id="L82">                    .options(ChatOptions.builder().temperature(0.0))</span>
+<span class="fc" id="L83">                    .advisors(UsageAdvisor.stage(&quot;judge&quot;))</span>
+<span class="fc" id="L84">                    .call()</span>
+<span class="fc" id="L85">                    .content();</span>
+<span class="fc" id="L86">            Verdict verdict = parse(output);</span>
+<span class="pc bpc" id="L87" title="1 of 2 branches missed.">            if (verdict == null) {</span>
+<span class="nc" id="L88">                log.warn(&quot;裁判没有给出有效的分数：{}&quot;, abbreviate(output));</span>
+            }
+<span class="fc" id="L90">            return verdict;</span>
+<span class="fc" id="L91">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L92">            log.warn(&quot;裁判打分失败：{}&quot;, e.toString());</span>
+<span class="fc" id="L93">            return null;</span>
+        }
+    }
+
+    /**
+     * 从裁判的回答里取出结论：最后一个带 {@code &quot;score&quot;} 的 JSON 对象，分数必须是 1～5。
+     *
+     * @param output 裁判的原样输出
+     * @return 结论；找不到或不合格时为 null
+     */
+    static Verdict parse(String output) {
+<span class="fc bfc" id="L104" title="All 2 branches covered.">        if (output == null) {</span>
+<span class="fc" id="L105">            return null;</span>
+        }
+<span class="fc" id="L107">        Matcher matcher = VERDICT.matcher(output);</span>
+<span class="fc" id="L108">        String last = null;</span>
+<span class="fc bfc" id="L109" title="All 2 branches covered.">        while (matcher.find()) {</span>
+<span class="fc" id="L110">            last = matcher.group();</span>
+        }
+<span class="fc bfc" id="L112" title="All 2 branches covered.">        if (last == null) {</span>
+<span class="fc" id="L113">            return null;</span>
+        }
+        try {
+<span class="fc" id="L116">            Verdict verdict = JSON.readValue(last, Verdict.class);</span>
+<span class="pc bpc" id="L117" title="1 of 4 branches missed.">            return verdict.score() &gt;= 1 &amp;&amp; verdict.score() &lt;= 5 ? verdict : null;</span>
+<span class="fc" id="L118">        } catch (JacksonException e) {</span>
+<span class="fc" id="L119">            return null;</span>
+        }
+    }
+
+    private static String abbreviate(String text) {
+<span class="nc bnc" id="L124" title="All 2 branches missed.">        if (text == null) {</span>
+<span class="nc" id="L125">            return &quot;null&quot;;</span>
+        }
+<span class="nc" id="L127">        String oneLine = text.replace('\n', ' ');</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">        return oneLine.length() &lt;= 120 ? oneLine : oneLine.substring(0, 120) + &quot;…&quot;;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

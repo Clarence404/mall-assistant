@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ModelCircuitBreaker.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.guard</a> &gt; <span class="el_source">ModelCircuitBreaker.java</span></div><h1>ModelCircuitBreaker.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.guard;
+
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+/**
+ * 模型调用的熔断器：连续失败到一定次数就「断开」，一段时间内不再调模型、直接失败；时间到了放一个请求去试，成功就恢复（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：上线保护。{@link CircuitBreakerAdvisor} 在每次模型调用前问 {@link #tryAcquire}、调用后报告 {@link #onSuccess} / {@link #onFailure}；
+ * 它挂在共享 ChatClient 的默认 advisor 上，意图识别、追问改写、回答、RAG、Agent 的每一步都经过它。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么要熔断&lt;/b&gt;：模型服务挂了的时候，每个请求都要等到超时（连接 3 秒、读 60 秒）才失败——用户白等一分钟，虚拟线程、并发名额也被占满，
+ * 后面的人连「排队」都排不上。熔断之后同样是失败，但是&lt;b&gt;立刻&lt;/b&gt;失败（MODEL_CIRCUIT_OPEN），规则类问题还能降级成直接给原文（{@code ChatService}，ch09-8）。
+ *
+ * &lt;p&gt;三个状态（经典的断路器模式，Resilience4j 等库也是这个模型）：
+ *
+ * &lt;pre&gt;
+ * CLOSED（正常） --连续失败 N 次--&amp;gt; OPEN（熔断，直接拒绝）
+ * OPEN --过了 open-duration--&amp;gt; HALF_OPEN（只放一个请求去试）
+ * HALF_OPEN --试的那个成功--&amp;gt; CLOSED；--失败--&amp;gt; OPEN（重新计时）
+ * &lt;/pre&gt;
+ *
+ * &lt;p&gt;为什么自己写而不用 Resilience4j：三个状态几十行代码，读得懂比少写几行重要；生产上用成熟的库（滑动窗口按失败率算、慢调用也算失败、指标现成）。
+ * 只在一个进程里有效：每个实例各自判断，这对熔断恰好是对的（每个实例到模型服务的网络可能不一样）。
+ */
+@Component
+public class ModelCircuitBreaker {
+
+<span class="fc" id="L37">    private static final Logger log = LoggerFactory.getLogger(ModelCircuitBreaker.class);</span>
+
+    /** 状态。 */
+<span class="fc" id="L40">    public enum State {</span>
+        /** 正常：放行，数连续失败次数。 */
+<span class="fc" id="L42">        CLOSED,</span>
+        /** 熔断：直接拒绝，等 open-duration 过去。 */
+<span class="fc" id="L44">        OPEN,</span>
+        /** 半开：放一个请求去试，其余照样拒绝。 */
+<span class="fc" id="L46">        HALF_OPEN</span>
+    }
+
+    private final GuardProperties.Circuit properties;
+    private final Clock clock;
+
+    // 下面四个字段只在 synchronized 方法里读写：状态转换要「看一眼再改」，不加锁两个线程会同时把 OPEN 改成 HALF_OPEN、各放一个请求
+<span class="fc" id="L53">    private State state = State.CLOSED;</span>
+    private int consecutiveFailures;
+    private Instant openedAt;
+    private Instant probeStartedAt;
+
+    /**
+     * 创建（Spring 注入）。
+     *
+     * @param properties {@code assistant.guard.*}
+     * @param clock 时钟
+     * @param registry 指标注册表（有 Actuator 时才有）：注册一个表示当前状态的 gauge
+     */
+    @Autowired
+    public ModelCircuitBreaker(GuardProperties properties, Clock clock, ObjectProvider&lt;MeterRegistry&gt; registry) {
+<span class="fc" id="L67">        this(properties.circuit(), clock);</span>
+<span class="fc" id="L68">        registry.ifAvailable(r -&gt; Gauge.builder(</span>
+<span class="fc" id="L69">                        &quot;assistant.model.circuit.state&quot;, this, b -&gt; b.state().ordinal())</span>
+<span class="fc" id="L70">                .description(&quot;模型熔断器状态：0 正常，1 熔断，2 半开&quot;)</span>
+<span class="fc" id="L71">                .register(r));</span>
+<span class="fc" id="L72">    }</span>
+
+    /**
+     * 测试用。
+     *
+     * @param properties 熔断配置
+     * @param clock 时钟（测试里拨动它）
+     */
+<span class="fc" id="L80">    public ModelCircuitBreaker(GuardProperties.Circuit properties, Clock clock) {</span>
+<span class="fc" id="L81">        this.properties = properties;</span>
+<span class="fc" id="L82">        this.clock = clock;</span>
+<span class="fc" id="L83">    }</span>
+
+    /**
+     * 这次能不能调模型（ch09-7 之一）。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;熔断关着（{@code enabled=false}）：永远 true
+     *   &lt;li&gt;CLOSED：true
+     *   &lt;li&gt;OPEN：从 {@code openedAt} 起还没过 {@code openDuration}：false；过了：转成 HALF_OPEN、记下 {@code probeStartedAt = 现在}，放这一个（true）
+     *   &lt;li&gt;HALF_OPEN：已经有一个在试了，其余一律 false；但如果那个试探的请求过了 {@code openDuration} 还没有结果（被取消了、卡住了），当它没了，
+     *       放这一个重新试（同样记下 {@code probeStartedAt}）
+     * &lt;/ul&gt;
+     *
+     * @return 放行时为 true
+     */
+    public synchronized boolean tryAcquire() {
+        // TODO ch09-7：没开 → true；CLOSED → true；
+        // OPEN：还没到 openedAt + openDuration → false；到了就转 HALF_OPEN、probeStartedAt = 现在、true；
+        // HALF_OPEN：probeStartedAt + openDuration 之前 → false（已经有一个在试）；之后当它丢了，
+        // probeStartedAt = 现在、true
+<span class="fc" id="L105">        return true;</span>
+    }
+
+    /**
+     * 一次模型调用成功（ch09-7 之二）：连续失败清零；半开时试成了，回到 CLOSED。
+     */
+    public synchronized void onSuccess() {
+        // TODO ch09-7：回到 CLOSED，连续失败次数清零
+<span class="fc" id="L113">    }</span>
+
+    /**
+     * 一次模型调用失败（ch09-7 之三）。
+     *
+     * &lt;p&gt;要求（测试按这个写）：半开时试的那个失败了 → 直接回到 OPEN，{@code openedAt = 现在}（重新计时）；CLOSED 时连续失败次数加一，到了
+     * {@code failureThreshold} 就转成 OPEN（{@code openedAt = 现在}）并记一条 warn 日志；已经是 OPEN 时（熔断前就发出去的请求陆续失败）不用管。
+     */
+    public synchronized void onFailure() {
+        // TODO ch09-7：HALF_OPEN → OPEN（openedAt = 现在）；
+        // CLOSED → 连续失败次数加一，到了 failureThreshold 就 OPEN（openedAt = 现在）并记 warn 日志；OPEN 时不用管
+<span class="fc" id="L124">    }</span>
+
+    /**
+     * 当前状态（只读，指标和调试用；OPEN 到期之后要等下一次 {@link #tryAcquire} 才会变成 HALF_OPEN）。
+     *
+     * @return 状态
+     */
+    public synchronized State state() {
+<span class="fc" id="L132">        return state;</span>
+    }
+
+    /**
+     * 距离下一次试探还有多久（填 Retry-After 用）。
+     *
+     * @return 时长；不在 OPEN 时为 0
+     */
+    public synchronized Duration remaining() {
+<span class="nc bnc" id="L141" title="All 2 branches missed.">        if (state != State.OPEN) {</span>
+<span class="nc" id="L142">            return Duration.ZERO;</span>
+        }
+<span class="nc" id="L144">        Duration left = Duration.between(clock.instant(), openedAt.plus(properties.openDuration()));</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">        return left.isNegative() ? Duration.ZERO : left;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

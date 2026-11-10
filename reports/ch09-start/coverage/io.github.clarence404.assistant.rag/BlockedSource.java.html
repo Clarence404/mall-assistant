@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>BlockedSource.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.rag</a> &gt; <span class="el_source">BlockedSource.java</span></div><h1>BlockedSource.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.rag;
+
+import java.util.List;
+
+/**
+ * 被提示注入过滤挡下的一块资料：检索到了，但没交给模型（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：接口层的数据。{@link RagService#screen} 生成，放在 {@link RagTrace#blocked()} 里；页面调试面板「引用来源」一栏用红色列出，
+ * 告诉开发者「这块资料被挡了、为什么」——知识库被人改了，还是规则误杀了正常的文档。
+ *
+ * @param source 来源文件名
+ * @param headingPath 标题路径
+ * @param rules 命中的规则编号（{@code IGNORE_RULES}、{@code FAKE_ROLE_MARKER}……）
+ * @param reason 第一条命中规则的原因（给人看）
+ * @param excerpt 命中的片段（归一化之后的文字）
+ */
+<span class="nc" id="L17">public record BlockedSource(String source, String headingPath, List&lt;String&gt; rules, String reason, String excerpt) {}</span>
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

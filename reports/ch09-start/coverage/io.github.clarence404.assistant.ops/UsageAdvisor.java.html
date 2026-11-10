@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>UsageAdvisor.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.ops</a> &gt; <span class="el_source">UsageAdvisor.java</span></div><h1>UsageAdvisor.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.ops;
+
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.core.Ordered;
+import org.springframework.stereotype.Component;
+import reactor.core.publisher.Flux;
+
+/**
+ * Token 记账的 advisor：每次模型调用结束后取出用了多少 Token（取不到就估算），记进这一轮的 {@link TurnRecord} 和指标（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：模型接入。和 {@code guard.CircuitBreakerAdvisor} 一起由 {@link OpsConfig} 加进共享 ChatClient 的默认 advisor；顺序在熔断之内、
+ * 工具调用循环（{@code ToolCallingAdvisor}）之外，所以原生工具调用的几轮模型请求合起来记一次（Spring AI 2.0 会把几轮的用量累加好再交出来）。
+ *
+ * &lt;p&gt;&lt;b&gt;用量从哪来&lt;/b&gt;：每家模型在响应里都会报告这一次用了多少 Token——Ollama 是 {@code prompt_eval_count} / {@code eval_count}，OpenAI 兼容接口是
+ * {@code usage.prompt_tokens} / {@code completion_tokens}，Claude CLI 的 JSON 里有 {@code usage}。Spring AI 把它们统一成
+ * {@code ChatResponse.getMetadata().getUsage()}。流式调用时用量只在最后一段里（Ollama 的 {@code done: true} 那一段）。
+ *
+ * &lt;p&gt;&lt;b&gt;Spring AI 自己也记&lt;/b&gt;：有 Actuator 时，Spring AI 的模型调用自带观测，Prometheus 里能看到 {@code gen_ai_client_token_usage_total}（按模型、输入 / 输出分）
+ * 和 {@code gen_ai_client_operation_seconds}。那是「模型」视角；这里要的是「业务」视角——这一轮是谁问的、哪个意图、哪一步花的，所以还得自己记一份。
+ * 另外 {@code CliChatModel} 是本项目自己写的，没有接 Spring AI 的观测，它的用量只有这里记得到。
+ */
+@Component
+public class UsageAdvisor implements CallAdvisor, StreamAdvisor {
+
+    /** 顺序：熔断（+100）之内，工具调用循环（+300）之外。 */
+    public static final int ORDER = Ordered.HIGHEST_PRECEDENCE + 200;
+
+    /** 请求上下文里「这是哪一步」的键。 */
+    public static final String STAGE_KEY = &quot;assistant.stage&quot;;
+
+    /** 没标步骤的调用。 */
+    public static final String OTHER = &quot;other&quot;;
+
+    private final ChatMetrics metrics;
+
+    /**
+     * 创建。
+     *
+     * @param metrics 指标
+     */
+<span class="fc" id="L54">    public UsageAdvisor(ChatMetrics metrics) {</span>
+<span class="fc" id="L55">        this.metrics = metrics;</span>
+<span class="fc" id="L56">    }</span>
+
+    /**
+     * 给一次 ChatClient 调用标上步骤：{@code chatClient.prompt()...advisors(UsageAdvisor.stage(&quot;intent&quot;)).call()}。
+     *
+     * @param stage 步骤名，见 {@link ModelCall#stage()}
+     * @return advisor 参数
+     */
+    public static Consumer&lt;ChatClient.AdvisorSpec&gt; stage(String stage) {
+<span class="fc" id="L65">        return a -&gt; a.param(STAGE_KEY, stage);</span>
+    }
+
+    /**
+     * 给一次 ChatClient 调用标上步骤并带上这一轮（流式调用用：流在别的线程上跑，ThreadLocal 跟不过去）。
+     *
+     * @param stage 步骤名
+     * @param record 这一轮
+     * @return advisor 参数
+     */
+    public static Consumer&lt;ChatClient.AdvisorSpec&gt; stage(String stage, TurnRecord record) {
+<span class="fc" id="L76">        return a -&gt; a.params(Map.of(STAGE_KEY, stage, TurnRecord.CONTEXT_KEY, record));</span>
+    }
+
+    /** 阻塞调用：调完取用量、记账；失败只记一次失败的调用指标。 */
+    @Override
+    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+<span class="fc" id="L82">        TurnRecord record = recordOf(request);</span>
+<span class="fc" id="L83">        String stage = stageOf(request);</span>
+<span class="fc" id="L84">        long start = System.nanoTime();</span>
+        ChatClientResponse response;
+        try {
+<span class="fc" id="L87">            response = chain.nextCall(request);</span>
+<span class="fc" id="L88">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L89">            metrics.modelCallFailed(stage);</span>
+<span class="fc" id="L90">            throw e;</span>
+<span class="fc" id="L91">        }</span>
+<span class="fc" id="L92">        ChatResponse chat = response.chatResponse();</span>
+<span class="fc" id="L93">        record(record, stage, modelOf(chat), usageOf(chat, request.prompt()), start);</span>
+<span class="fc" id="L94">        return response;</span>
+    }
+
+    /**
+     * 流式调用：边推边把文字拼起来、记下带用量的那一段，流正常结束时记账（中途出错、取消的不记 Token，只记失败指标）。
+     * 这一轮在订阅时确定：请求上下文里有就用它，没有就看订阅时的线程上有没有绑定。
+     */
+    @Override
+    public Flux&lt;ChatClientResponse&gt; adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
+<span class="fc" id="L103">        return Flux.defer(() -&gt; {</span>
+<span class="fc" id="L104">            TurnRecord record = recordOf(request);</span>
+<span class="fc" id="L105">            String stage = stageOf(request);</span>
+<span class="fc" id="L106">            long start = System.nanoTime();</span>
+<span class="fc" id="L107">            StringBuilder text = new StringBuilder();</span>
+<span class="fc" id="L108">            AtomicReference&lt;ChatResponse&gt; withUsage = new AtomicReference&lt;&gt;();</span>
+<span class="fc" id="L109">            return chain.nextStream(request)</span>
+<span class="fc" id="L110">                    .doOnNext(r -&gt; {</span>
+<span class="fc" id="L111">                        ChatResponse chat = r.chatResponse();</span>
+<span class="pc bpc" id="L112" title="1 of 2 branches missed.">                        if (chat == null) {</span>
+<span class="nc" id="L113">                            return;</span>
+                        }
+<span class="fc" id="L115">                        String piece = textOf(chat);</span>
+<span class="pc bpc" id="L116" title="1 of 2 branches missed.">                        if (piece != null) {</span>
+<span class="fc" id="L117">                            text.append(piece);</span>
+                        }
+<span class="fc bfc" id="L119" title="All 2 branches covered.">                        if (hasUsage(chat.getMetadata().getUsage())) {</span>
+<span class="fc" id="L120">                            withUsage.set(chat);</span>
+                        }
+<span class="fc" id="L122">                    })</span>
+<span class="fc" id="L123">                    .doOnError(e -&gt; metrics.modelCallFailed(stage))</span>
+<span class="fc" id="L124">                    .doOnComplete(() -&gt; {</span>
+<span class="fc" id="L125">                        ChatResponse last = withUsage.get();</span>
+<span class="fc bfc" id="L126" title="All 2 branches covered.">                        TokenUsage usage = last != null</span>
+<span class="fc" id="L127">                                ? usageOf(last, request.prompt())</span>
+<span class="fc" id="L128">                                : new TokenUsage(</span>
+<span class="fc" id="L129">                                        TokenEstimator.estimate(request.prompt().getInstructions()),</span>
+<span class="fc" id="L130">                                        TokenEstimator.estimate(text.toString()),</span>
+                                        true);
+<span class="fc" id="L132">                        record(record, stage, modelOf(last), usage, start);</span>
+<span class="fc" id="L133">                    });</span>
+        });
+    }
+
+    /**
+     * 从一次响应里取 Token 用量，取不到就估算（ch09-4 之二）。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;{@code response} 不为 null、{@code getMetadata().getUsage()} 的输入或输出 Token 有一个大于 0：用它（为 null 的那一项按 0），
+     *       {@code estimated=false}
+     *   &lt;li&gt;否则估算：输入 = {@link TokenEstimator#estimate(java.util.List)}（{@code prompt.getInstructions()}）；输出 =
+     *       {@link TokenEstimator#estimate(String)}（第一个结果的文字，没有结果按空串）；{@code estimated=true}
+     * &lt;/ul&gt;
+     *
+     * Spring AI 在模型没报告用量时给的是 {@code EmptyUsage}（两项都是 0），不是 null，所以要按「大于 0」判断。
+     *
+     * @param response 模型响应，可以为 null
+     * @param prompt 这次发出去的提示词
+     * @return 用量
+     */
+    public static TokenUsage usageOf(ChatResponse response, Prompt prompt) {
+        // TODO ch09-4：response 不为 null 且 getMetadata().getUsage() 的输入或输出有一个大于 0（hasUsage）
+        // → new TokenUsage(输入, 输出, false)（null 按 0，orZero）；
+        // 否则估算：输入 TokenEstimator.estimate(prompt.getInstructions())，
+        // 输出 TokenEstimator.estimate(textOf(response))（response 为 null 按 null），estimated = true
+<span class="fc" id="L160">        return TokenUsage.NONE;</span>
+    }
+
+    /** 记进这一轮（如果有）和指标。 */
+    private void record(TurnRecord record, String stage, String model, TokenUsage usage, long start) {
+<span class="fc" id="L165">        ModelCall call = new ModelCall(</span>
+                stage,
+                model,
+<span class="fc" id="L168">                usage.input(),</span>
+<span class="fc" id="L169">                usage.output(),</span>
+<span class="fc" id="L170">                usage.estimated(),</span>
+<span class="fc" id="L171">                (System.nanoTime() - start) / 1_000_000);</span>
+<span class="fc bfc" id="L172" title="All 2 branches covered.">        if (record != null) {</span>
+<span class="fc" id="L173">            record.add(call);</span>
+        }
+<span class="fc" id="L175">        metrics.modelCall(call);</span>
+<span class="fc" id="L176">    }</span>
+
+    private static boolean hasUsage(Usage usage) {
+<span class="pc bpc" id="L179" title="2 of 6 branches missed.">        return usage != null &amp;&amp; (orZero(usage.getPromptTokens()) &gt; 0 || orZero(usage.getCompletionTokens()) &gt; 0);</span>
+    }
+
+    private static int orZero(Integer value) {
+<span class="pc bpc" id="L183" title="1 of 2 branches missed.">        return value == null ? 0 : value;</span>
+    }
+
+    private static String textOf(ChatResponse response) {
+<span class="fc" id="L187">        Generation result = response.getResult();</span>
+<span class="pc bpc" id="L188" title="2 of 4 branches missed.">        return result == null || result.getOutput() == null</span>
+<span class="nc" id="L189">                ? null</span>
+<span class="fc" id="L190">                : result.getOutput().getText();</span>
+    }
+
+    private static String modelOf(ChatResponse response) {
+<span class="fc bfc" id="L194" title="All 2 branches covered.">        if (response == null) {</span>
+<span class="fc" id="L195">            return null;</span>
+        }
+<span class="fc" id="L197">        String model = response.getMetadata().getModel();</span>
+<span class="pc bpc" id="L198" title="1 of 4 branches missed.">        return model == null || model.isBlank() ? null : model;</span>
+    }
+
+    /** 这一轮：请求上下文里的优先（流式），其次是当前线程上绑定的（阻塞）。 */
+    private static TurnRecord recordOf(ChatClientRequest request) {
+<span class="fc bfc" id="L203" title="All 2 branches covered.">        return request.context().get(TurnRecord.CONTEXT_KEY) instanceof TurnRecord record</span>
+<span class="fc" id="L204">                ? record</span>
+<span class="fc" id="L205">                : TurnRecord.current();</span>
+    }
+
+    private static String stageOf(ChatClientRequest request) {
+<span class="fc bfc" id="L209" title="All 2 branches covered.">        return request.context().get(STAGE_KEY) instanceof String stage ? stage : OTHER;</span>
+    }
+
+    @Override
+    public String getName() {
+<span class="fc" id="L214">        return &quot;tokenUsage&quot;;</span>
+    }
+
+    @Override
+    public int getOrder() {
+<span class="fc" id="L219">        return ORDER;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

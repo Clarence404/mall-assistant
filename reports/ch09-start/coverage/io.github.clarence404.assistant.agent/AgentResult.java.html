@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AgentResult.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">AgentResult.java</span></div><h1>AgentResult.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+/**
+ * 一次办事的结果：给用户的回答、调试信息，以及（如果提出了写操作）待确认操作（第 7 章引入）。
+ *
+ * &lt;p&gt;所在层：业务层的输出。{@link AgentService#run} 返回；{@code ChatService} 把 reply 当作这一轮的回答（阻塞接口的 {@code reply}、流式的最后一段
+ * {@code token}），trace 放进 {@code agent} 字段，confirmation 放进 {@code confirmation} 字段（流式已经在步骤之后推过 {@code confirm} 事件）。
+ *
+ * @param reply 给用户的回答：finish 时是模型的回答，其余情况是代码写好的固定话术
+ * @param trace 调试信息
+ * @param confirmation 待确认操作；没提出写操作时为 null
+ */
+<span class="fc" id="L13">public record AgentResult(String reply, AgentTrace trace, PendingConfirmation confirmation) {}</span>
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

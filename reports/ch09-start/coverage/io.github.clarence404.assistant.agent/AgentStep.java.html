@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AgentStep.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">AgentStep.java</span></div><h1>AgentStep.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+/**
+ * Agent 的一步：想了什么、选了哪个工具、参数、结果、耗时（第 7 章引入）。
+ *
+ * &lt;p&gt;所在层：接口层的数据。{@link AgentLoop} / {@link NativeAgentRunner} 每走一步生成一个；阻塞接口放在响应的 {@code agent.steps} 里，
+ * 流式接口作为 {@code step} 事件&lt;b&gt;边走边推&lt;/b&gt;（页面能看着 Agent 一步一步干活，而不是干等十几秒）；页面调试面板「Agent 步骤」一栏显示。
+ * 下一步给模型看的「办事记录」也是用它拼出来的（{@link AgentPlanner}）。
+ *
+ * @param index 第几步，从 1 开始
+ * @param thought 模型这一步的想法（思考摘要）；原生工具调用模式下拿不到，为 null
+ * @param action 工具名（如 queryOrder、finish）；模型输出看不懂时是它填的原样文字或 null
+ * @param kind 这一步的结果类型
+ * @param arguments 参数 JSON；无效时为 {@code {}}
+ * @param observation 结果：只读工具的查询结果（JSON）、写操作的「已生成待确认操作」、被代码拦下的原因，或 finish 的回答
+ * @param durationMs 这一步的耗时（模型想 + 执行），毫秒
+ */
+<span class="fc" id="L18">public record AgentStep(</span>
+        int index, String thought, String action, Kind kind, String arguments, String observation, long durationMs) {
+
+    /** 一步的结果类型。 */
+<span class="fc" id="L22">    public enum Kind {</span>
+        /** 执行了只读工具。 */
+<span class="fc" id="L24">        READ,</span>
+        /** 提出了写操作：已生成待确认操作，等用户点确认（不执行）。 */
+<span class="fc" id="L26">        PROPOSE,</span>
+        /** 被代码拦下：输出看不懂、工具不存在、参数不对、重复调用、写操作校验不过。结果里写着原因，交还给模型改正。 */
+<span class="fc" id="L28">        REJECTED,</span>
+        /** 办完了（或办不了），给用户回答。 */
+<span class="fc" id="L30">        FINISH</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
