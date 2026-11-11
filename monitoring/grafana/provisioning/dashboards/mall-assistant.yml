@@ -1,0 +1,12 @@
+# 第 10 章：Grafana 启动时从 /var/lib/grafana/dashboards 加载面板 JSON（第 9 章写的 monitoring/grafana/mall-assistant-dashboard.json 挂进去）。
+# 改了 JSON 不用重启，30 秒内自动重新读；页面上改的面板保存不回文件（allowUiUpdates: false），要改就改仓库里的 JSON
+apiVersion: 1
+providers:
+  - name: mall-assistant
+    folder: mall-assistant
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

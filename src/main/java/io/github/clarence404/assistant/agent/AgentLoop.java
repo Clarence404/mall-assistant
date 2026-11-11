@@ -142,8 +142,21 @@ public class AgentLoop {
                 run.record(step(run, action, AgentStep.Kind.REJECTED, "没有生成确认：" + proposal.rejection(), start));
                 continue;
             }
-            PendingConfirmation pending = confirmations.create(
-                    proposal.action(), run.task().owner(), run.task().conversationId());
+            PendingConfirmation pending;
+            try {
+                pending = confirmations.create(
+                        proposal.action(), run.task().owner(), run.task().conversationId());
+            } catch (ConfirmationException e) {
+                // 第 10 章：确认存在 Redis 里而 Redis 用不了。不能「先执行再说」，这一轮到此为止
+                run.record(step(
+                        run,
+                        action,
+                        AgentStep.Kind.REJECTED,
+                        "没有生成确认：" + e.failure().message(),
+                        start));
+                return stop(
+                        run, AgentReplies.confirmationUnavailable(), AgentTrace.StopReason.CONFIRMATION_UNAVAILABLE);
+            }
             run.record(step(
                     run,
                     action,

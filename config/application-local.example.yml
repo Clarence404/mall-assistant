@@ -90,3 +90,12 @@ spring:
 #   structured:
 #     format:
 #       console: logstash
+
+# —— 第 10 章：共享状态放进 Redis（默认 memory，只在一个进程里有效）——
+# 限流、并发名额、Token 账、待确认操作、「会话正在回答」标记、归属缓存几个实例共用；和别的系统共用一台 Redis 时选一个没人用的库号（URL 最后一段）
+# assistant:
+#   state:
+#     store: redis
+#     on-redis-error: allow        # Redis 挂了时限流与预算：allow 放行 / reject 返回 503；待确认操作一律 503
+#     redis:
+#       url: redis://:<your-password>@<redis-host>:6379/5

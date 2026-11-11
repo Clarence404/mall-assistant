@@ -1,0 +1,83 @@
+# 第 10 章：告警规则的单元测试（promtool test rules monitoring/prometheus/alerts.test.yml，CI 里也跑）。
+# 写法：input_series 造出一段假的时间序列（'0+1x10' = 从 0 开始每个间隔加 1，共 10 个点），alert_rule_test 断言某个时刻哪些告警在 firing。
+# 为什么要测：PromQL 写错（标签名打错、少了 by、比较方向反了）promtool check rules 查不出来——语法是对的，只是永远不会响。
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 15s
+
+tests:
+  # 实例抓不到：up 连续 1 分钟是 0 才告警；30 秒的时候还没到 for 的时长
+  - interval: 15s
+    input_series:
+      - series: 'up{job="mall-assistant", instance="a:9188"}'
+        values: '1 1 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: MallAssistantDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: MallAssistantDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: mall-assistant
+              instance: a:9188
+            exp_annotations:
+              summary: 智能客服实例 a:9188 抓不到指标
+              description: 进程挂了或网络不通，连续 1 分钟 /actuator/prometheus 没有响应。
+
+  # 模型错误率：5 分钟内一半的请求以 MODEL_* 结束，持续 5 分钟以上
+  - interval: 1m
+    input_series:
+      - series: 'assistant_chat_requests_total{instance="a:9188", endpoint="chat", intent="POLICY", outcome="OK"}'
+        values: '0+10x15'
+      - series: 'assistant_chat_requests_total{instance="a:9188", endpoint="chat", intent="POLICY", outcome="MODEL_UNAVAILABLE"}'
+        values: '0+10x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: MallAssistantHighModelErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: a:9188
+            exp_annotations:
+              summary: 模型错误率超过 20%（a:9188）
+              description: 5 分钟内超过两成的对话以 MODEL_UNAVAILABLE / MODEL_TIMEOUT / MODEL_CIRCUIT_OPEN 结束。
+
+  # 共享状态出错：计数器在涨就告警（按实例和哪一样状态分）；不涨了 5 分钟后恢复
+  - interval: 1m
+    input_series:
+      - series: 'assistant_state_errors_total{instance="b:9189", component="rate:chat"}'
+        values: '0 3 6 9 12 12 12 12 12 12 12 12'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MallAssistantStateStoreErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: b:9189
+              component: rate:chat
+            exp_annotations:
+              summary: 共享状态（Redis）出错（b:9189 / rate:chat）
+              description: Redis 连不上或超时。限流与预算按 assistant.state.on-redis-error 放行或拒绝，待确认操作一律 503；放行期间限流和预算形同虚设，先看 Redis 是否在线。
+      - eval_time: 11m
+        alertname: MallAssistantStateStoreErrors
+        exp_alerts: []
+
+  # 两个实例一个 redis、一个 memory
+  - interval: 1m
+    input_series:
+      - series: 'assistant_state_store_info{instance="a:9188", store="redis"}'
+        values: '1x10'
+      - series: 'assistant_state_store_info{instance="b:9189", store="memory"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: MallAssistantMixedStateStores
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: 各实例的共享状态存储不一致
+              description: 有的实例用 redis、有的用 memory（多半是某个实例漏了 ASSISTANT_STATE_STORE），用 memory 的那个限流、预算、确认都是自己算的。

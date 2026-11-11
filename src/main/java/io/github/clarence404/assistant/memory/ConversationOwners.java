@@ -9,13 +9,12 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
-import java.time.Instant;
 import java.util.HexFormat;
-import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -29,7 +28,8 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>谁是谁</b>：没带商城令牌的是匿名访客；带了令牌的，问商城 {@code GET /api/users/me} 拿到用户 ID。不自己解析令牌：商城令牌是 JWT，
  * 解开中间一段就能看到用户 ID，但我们没有商城的密钥、验不了签名，伪造一个写着别人 ID 的令牌轻而易举；让商城验，拿到的 ID 才可信。结果按令牌的
- * 指纹（SHA-256）缓存 {@code owner-cache-ttl}，不用每句话都问一次商城；缓存里不存令牌原文。
+ * 指纹（SHA-256）缓存 {@code owner-cache-ttl}，不用每句话都问一次商城；缓存里不存令牌原文。第 10 章起缓存是 {@link OwnerCache}
+ * （默认进程内，{@code assistant.state.store=redis} 时放进 Redis，几个实例共用）。
  *
  * <p>另一种做法是「令牌指纹」本身当归属（不问商城）：简单、不依赖商城，但商城令牌 30 分钟就过期，重新登录换了令牌，之前的会话就再也打不开了。
  * 商城有现成的「我是谁」接口，所以用它。
@@ -44,20 +44,31 @@ public class ConversationOwners {
 
     private final MallApiClient mallApi;
     private final MemoryProperties properties;
-    private final Clock clock;
-    private final Map<String, Cached> cache = new ConcurrentHashMap<>();
+    private final OwnerCache cache;
 
     /**
-     * 创建。
+     * 创建：缓存在进程内存里（第 6 章的样子；测试里手工组装时用）。
      *
      * @param mallApi 商城客户端（查当前用户）
      * @param properties {@code assistant.memory.*}（缓存时长）
      * @param clock 时钟（测试里换成可以拨动的）
      */
     public ConversationOwners(MallApiClient mallApi, MemoryProperties properties, Clock clock) {
+        this(mallApi, properties, new MemoryOwnerCache(clock));
+    }
+
+    /**
+     * 创建（Spring 注入，第 10 章）。
+     *
+     * @param mallApi 商城客户端（查当前用户）
+     * @param properties {@code assistant.memory.*}（缓存时长）
+     * @param cache 归属缓存（内存或 Redis，按 {@code assistant.state.store}）
+     */
+    @Autowired
+    public ConversationOwners(MallApiClient mallApi, MemoryProperties properties, OwnerCache cache) {
         this.mallApi = mallApi;
         this.properties = properties;
-        this.clock = clock;
+        this.cache = cache;
     }
 
     /**
@@ -82,15 +93,14 @@ public class ConversationOwners {
             return ConversationOwner.ANONYMOUS;
         }
         String fingerprint = fingerprint(mallToken);
-        Instant now = clock.instant();
-        Cached cached = cache.get(fingerprint);
-        if (cached != null && cached.expiresAt().isAfter(now)) {
-            return cached.owner();
+        Optional<ConversationOwner> cached = cache.get(fingerprint);
+        if (cached.isPresent()) {
+            return cached.get();
         }
         MallResult<MallModels.UserProfile> me = mallApi.me(mallToken);
         if (me.isOk() && me.body().userId() != null) {
             ConversationOwner owner = ConversationOwner.user(me.body().userId());
-            cache.put(fingerprint, new Cached(owner, now.plus(properties.ownerCacheTtl())));
+            cache.put(fingerprint, owner, properties.ownerCacheTtl());
             return owner;
         }
         log.info("确认会话归属失败（令牌 {}）：{}", MallToken.mask(mallToken), me.failure());
@@ -120,8 +130,7 @@ public class ConversationOwners {
 
     /** 清掉过期的缓存项（由 {@link ConversationMemory#sweep} 定期调用）。 */
     void evictExpired() {
-        Instant now = clock.instant();
-        cache.values().removeIf(c -> !c.expiresAt().isAfter(now));
+        cache.evictExpired();
     }
 
     /**
@@ -138,7 +147,4 @@ public class ConversationOwners {
             throw new IllegalStateException(e);
         }
     }
-
-    /** 缓存项：归属与过期时间。 */
-    private record Cached(ConversationOwner owner, Instant expiresAt) {}
 }

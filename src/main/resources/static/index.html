@@ -606,7 +606,8 @@
   const STEP_KINDS = { READ: '只读，已执行', PROPOSE: '写操作，已生成确认卡片（未执行）', REJECTED: '被代码拦下', FINISH: '回答' };
   const STOP_REASONS = {
     FINISHED: '模型说办完了', AWAITING_CONFIRMATION: '提出了写操作，等你点确认', STEP_LIMIT: '到了步数上限',
-    REPEATED: '一直在重复同一个调用', TIMEOUT: '超时', CANCELLED: '已取消', LOGIN_EXPIRED: '登录失效'
+    REPEATED: '一直在重复同一个调用', TIMEOUT: '超时', CANCELLED: '已取消', LOGIN_EXPIRED: '登录失效',
+    CONFIRMATION_UNAVAILABLE: '确认服务不可用'
   };
 
   function resetSteps() {

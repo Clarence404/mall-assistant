@@ -4,13 +4,10 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZonedDateTime;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -22,8 +19,12 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>为什么按调用方汇总不进 Prometheus</b>：Prometheus 的每个标签值组合是一条独立的时间序列，用户 ID、IP、会话 ID 当标签，序列数会随用户数无限增长
  * （「高基数」），拖垮监控系统。所以指标只按意图、步骤这种几个值的维度分（{@link ChatMetrics}），「谁用了多少」放在这里——一个进程内的小账本。
- * 只存今天的，过了零点清零（预算本来就是按天算的）；重启就没了，也不跨实例：生产上要持久化（写数据库或 Redis 的 {@code INCRBY}），
- * 或者交给网关 / 模型代理（如 LiteLLM、One API 一类）统一记账。
+ * 只存今天的，过了零点清零（预算本来就是按天算的）。
+ *
+ * <p><b>第 10 章：账存在哪由 {@link UsageStore} 决定</b>。第 9 章的三张表挪进了 {@link MemoryUsageStore}（默认，重启就没了、不跨实例）；
+ * {@code assistant.state.store=redis} 时是 {@code state.RedisUsageStore}（Redis 的 {@code HINCRBY} / {@code ZINCRBY}，一段 Lua 脚本里原子地加，
+ * 多个实例共用一份账）。这里留下的是规则：一轮只记一次、不记 unattributed、按哪个时区算「今天」、超预算打日志。另一条路是交给网关 / 模型代理
+ * （如 LiteLLM、One API 一类）统一记账。
  *
  * <p>预算的粒度是「一轮」：进门时检查今天用的有没有超，超了就拒；这一轮本身会用多少事先不知道，所以最后一轮可能超出预算一点——这和大多数按量计费的
  * 「先用后扣」一样，想严格不超就得在每次模型调用前也检查一次（讲义思考题）。
@@ -38,30 +39,30 @@ public class UsageLedger {
 
     private final UsageProperties properties;
     private final Clock clock;
-
-    // 下面这些只在 synchronized 方法里读写：一轮记一次账，量很小，一把锁足够
-    private LocalDate day;
-    private final Map<String, Tally> byCaller = new HashMap<>();
-    private final Map<String, Tally> byIntent = new HashMap<>();
-    private final Map<String, Tally> byConversation;
+    private final UsageStore store;
 
     /**
-     * 创建。
+     * 创建：账存在进程内存里（第 9 章的样子；测试里手工组装时用）。
      *
      * @param properties {@code assistant.usage.*}
      * @param clock 时钟（测试里拨动它过零点）
      */
     public UsageLedger(UsageProperties properties, Clock clock) {
+        this(properties, clock, new MemoryUsageStore(properties.maxConversations()));
+    }
+
+    /**
+     * 创建（Spring 注入，第 10 章）。
+     *
+     * @param properties {@code assistant.usage.*}
+     * @param clock 时钟（测试里拨动它过零点）
+     * @param store 账存在哪（内存或 Redis，按 {@code assistant.state.store}）
+     */
+    @Autowired
+    public UsageLedger(UsageProperties properties, Clock clock, UsageStore store) {
         this.properties = properties;
         this.clock = clock;
-        // 按插入顺序、超过上限删最早的（LinkedHashMap 的 removeEldestEntry）
-        this.byConversation = new LinkedHashMap<>(16, 0.75f, false) {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<String, Tally> eldest) {
-                return size() > properties.maxConversations();
-            }
-        };
-        this.day = today();
+        this.store = store;
     }
 
     /**
@@ -82,7 +83,7 @@ public class UsageLedger {
      *
      * <ul>
      *   <li>同一轮只记一次（{@code record.markCommitted()} 返回 false 就直接返回）；{@link TurnRecord#UNATTRIBUTED} 的不记（测试、评测）
-     *   <li>先 {@link #rollover}：日期变了就清空三张表
+     *   <li>日期变了就清零（第 10 章起由 {@link UsageStore} 按传进去的「今天」处理）
      *   <li>这一轮的用量（{@code record.usage()}）记成一个 {@link Tally}（1 轮、输入、输出、有估算就记 1 次估算），分别合并进按调用方、按意图
      *       （没有意图记 {@link #NO_INTENT}）、按会话（有会话 ID 时，键是 {@code 调用方/会话 ID}：不同用户可能用同一个会话 ID）三张表；合并用
      *       {@link Tally#plus}
@@ -91,34 +92,35 @@ public class UsageLedger {
      *
      * @param record 这一轮
      */
-    public synchronized void commit(TurnRecord record) {
+    public void commit(TurnRecord record) {
         if (!record.markCommitted() || TurnRecord.UNATTRIBUTED.equals(record.caller())) {
             return;
         }
-        rollover();
         UsageTrace usage = record.usage();
         Tally tally = new Tally(1, usage.inputTokens(), usage.outputTokens(), usage.estimated() ? 1 : 0);
-        byCaller.merge(record.caller(), tally, Tally::plus);
-        byIntent.merge(record.intent() == null ? NO_INTENT : record.intent(), tally, Tally::plus);
-        if (record.conversationId() != null) {
-            byConversation.merge(record.caller() + "/" + record.conversationId(), tally, Tally::plus);
-        }
-        long used = byCaller.get(record.caller()).tokens();
+        String conversationKey =
+                record.conversationId() == null ? null : record.caller() + "/" + record.conversationId();
+        long used = store.add(
+                today(),
+                new UsageStore.Entry(
+                        record.caller(),
+                        record.intent() == null ? NO_INTENT : record.intent(),
+                        conversationKey,
+                        tally));
         if (properties.dailyTokenBudget() > 0 && used >= properties.dailyTokenBudget()) {
             log.info("{} 今天的 Token 用量 {} 已到预算 {}，之后的提问会被拒", record.caller(), used, properties.dailyTokenBudget());
         }
     }
 
     /**
-     * 这个调用方今天用了多少 Token（ch09-5 之二）：先 {@link #rollover}，再查按调用方的表，没有记录是 0。
+     * 这个调用方今天用了多少 Token（ch09-5 之二）：查按调用方的表，没有记录是 0。
      *
      * @param caller 调用方
      * @return 今天的输入 + 输出 Token
+     * @throws io.github.clarence404.assistant.state.StateUnavailableException Redis 出错、而策略是 reject 时（第 10 章）
      */
-    public synchronized long usedToday(String caller) {
-        rollover();
-        Tally tally = byCaller.get(caller);
-        return tally == null ? 0 : tally.tokens();
+    public long usedToday(String caller) {
+        return store.tokens(today(), caller);
     }
 
     /** 每日预算；0 = 不限。 */
@@ -142,42 +144,21 @@ public class UsageLedger {
      * @param top 调用方、会话各列前几个
      * @return 汇总
      */
-    public synchronized Summary summary(int top) {
-        rollover();
-        Tally total = byCaller.values().stream().reduce(Tally.ZERO, Tally::plus);
-        return new Summary(
-                day.toString(),
-                properties.dailyTokenBudget(),
-                total,
-                rows(byIntent, byIntent.size()),
-                rows(byCaller, top),
-                rows(byConversation, top));
-    }
-
-    /** 日期变了就清空（预算按天算）。调用方已经持有锁。 */
-    private void rollover() {
+    public Summary summary(int top) {
         LocalDate today = today();
-        if (!today.equals(day)) {
-            log.info("Token 总账：{} 结束，清零（{} 个调用方）", day, byCaller.size());
-            day = today;
-            byCaller.clear();
-            byIntent.clear();
-            byConversation.clear();
-        }
+        UsageStore.Totals totals = store.summary(today, top);
+        return new Summary(
+                today.toString(),
+                properties.dailyTokenBudget(),
+                totals.total(),
+                totals.byIntent(),
+                totals.topCallers(),
+                totals.topConversations());
     }
 
+    /** 按 {@code assistant.usage.zone} 算的今天。 */
     private LocalDate today() {
         return LocalDate.ofInstant(clock.instant(), properties.zone());
-    }
-
-    private static List<Row> rows(Map<String, Tally> table, int limit) {
-        return table.entrySet().stream()
-                .sorted(Comparator.comparingLong(
-                                (Map.Entry<String, Tally> e) -> e.getValue().tokens())
-                        .reversed())
-                .limit(limit)
-                .map(e -> new Row(e.getKey(), e.getValue()))
-                .toList();
     }
 
     /**

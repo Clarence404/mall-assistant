@@ -40,7 +40,14 @@ public class ConfirmationException extends RuntimeException {
         /** 410：过了有效期。不自动执行，也不能再确认，要重新说一次（订单状态可能已经变了）。 */
         CONFIRMATION_EXPIRED(HttpStatus.GONE, "确认已过期", "这个确认已经过期，没有执行。请重新说一下要办的事。"),
         /** 409：已经做过相反的决定（确认过又点取消、取消过又点确认）。同样的决定重复提交不报错，返回原来的结果。 */
-        CONFIRMATION_ALREADY_DECIDED(HttpStatus.CONFLICT, "已经处理过", "这个确认已经处理过了，不能改。");
+        CONFIRMATION_ALREADY_DECIDED(HttpStatus.CONFLICT, "已经处理过", "这个确认已经处理过了，不能改。"),
+        /**
+         * 409（第 10 章）：同一个确认正在被另一个请求（可能在另一个实例上）执行，等了一会儿还没有结果。不再执行一次——
+         * 写操作「最多执行一次」：过一会儿刷新看结果，商城那边以「我的订单」为准。
+         */
+        CONFIRMATION_IN_PROGRESS(HttpStatus.CONFLICT, "正在处理", "这个确认正在处理中，请稍后到「我的订单」里看一下结果，不要重复点。"),
+        /** 503（第 10 章）：确认存在 Redis 里，而 Redis 暂时用不了。写操作不「出错就放行」：这次办不了，稍后再说一次。 */
+        CONFIRMATION_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "确认服务暂时不可用", "确认服务暂时不可用，这次没有执行，请稍后再说一次。");
 
         private final HttpStatus status;
         private final String title;

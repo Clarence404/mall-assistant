@@ -4,6 +4,7 @@ import io.github.clarence404.assistant.mall.MallToken;
 import io.github.clarence404.assistant.memory.ConversationException;
 import io.github.clarence404.assistant.memory.ConversationOwner;
 import io.github.clarence404.assistant.memory.ConversationOwners;
+import io.github.clarence404.assistant.state.StateUnavailableException;
 import io.modelcontextprotocol.common.McpTransportContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +37,7 @@ public class McpGate {
     static final String LOGIN_EXPIRED = "商城令牌无效或已过期：请重新登录商城，换一个新的令牌配置到 MCP 客户端的请求头里";
     static final String OWNER_UNVERIFIED = "商城暂时不可用，确认不了你是谁，请稍后再试";
     static final String TOO_MANY_CALLS = "调用太频繁了（每分钟最多 %d 次），请稍后再试；不要在循环里反复调用同一个工具";
+    static final String STATE_UNAVAILABLE = "服务端暂时不可用（限流状态读不到），请稍后再试";
 
     private final ConversationOwners owners;
     private final McpRateLimiter limiter;
@@ -80,12 +82,21 @@ public class McpGate {
         if (loginRequired && !caller.loggedIn()) {
             throw new McpRejection(LOGIN_REQUIRED);
         }
-        if (!limiter.tryAcquire(caller.owner().key())) {
+        if (!tryAcquire(caller.owner().key())) {
             log.warn("MCP 调用太频繁：{} 调 {}", caller.owner().key(), tool);
             throw new McpRejection(TOO_MANY_CALLS.formatted(properties.callsPerMinute()));
         }
         log.info("MCP 工具调用：{}（{}）", tool, caller.owner().key());
         return caller;
+    }
+
+    /** 次数上限；第 10 章：Redis 出错且策略是拒绝时，翻成给对面看的原因（不把 Redis 的异常信息漏出去）。 */
+    private boolean tryAcquire(String key) {
+        try {
+            return limiter.tryAcquire(key);
+        } catch (StateUnavailableException e) {
+            throw new McpRejection(STATE_UNAVAILABLE);
+        }
     }
 
     /** 令牌 → 归属；失败翻成给对面看的原因。 */

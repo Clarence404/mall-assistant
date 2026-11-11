@@ -1,16 +1,16 @@
 package io.github.clarence404.assistant.memory;
 
+import io.github.clarence404.assistant.state.StateUnavailableException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -41,8 +41,9 @@ import org.springframework.stereotype.Service;
  *
  * <p><b>同一个会话的并发</b>：页面在回答完之前不让再发，但用户可能开两个标签页、或者连点两下。两个请求同时读到同样的历史、各自回答、先后写回，
  * 后写的会覆盖先写的（{@code MessageWindowChatMemory#add} 是「读出全部 → 追加 → 整体写回」，不是原子的），而且第二个回答没看到第一轮。
- * 这里用最简单的办法：一个会话同一时间只允许一个请求，后到的直接返回 409「上一条还在回答中」（{@link #busy}，记忆键的集合）。
- * 只在单个进程里有效；部署多个实例时要换成分布式锁（Redis {@code SET NX}）或者带版本号的乐观锁。
+ * 这里用最简单的办法：一个会话同一时间只允许一个请求，后到的直接返回 409「上一条还在回答中」（{@link ConversationLocks}）。
+ * 第 6 章是一个进程内的集合；第 10 章抽成接口，{@code assistant.state.store=redis} 时换成 Redis 的 {@code SET NX PX}（分布式锁），
+ * 两个标签页的请求落在两个实例上也只有一个能答。另一条路是带版本号的乐观锁（写回时版本对不上就重来）。
  *
  * <p><b>过期（TTL）</b>：最后一条消息之后超过 {@code ttl} 没再说话，下次打开时当作新会话、清掉旧历史；后台每隔 {@code sweep-interval} 也扫一遍，
  * 把过期的删掉（内存模式不清理会一直占着内存）。判断依据是消息的时间戳（{@link MemoryMessages#TIMESTAMP}）。
@@ -60,11 +61,11 @@ public class ConversationMemory {
     private final Clock clock;
     private final String store;
 
-    /** 正在回答的会话（记忆键）：同一个会话同时只允许一个请求。 */
-    private final Set<String> busy = ConcurrentHashMap.newKeySet();
+    /** 正在回答的会话（记忆键）：同一个会话同时只允许一个请求。第 10 章起是接口（内存或 Redis）。 */
+    private final ConversationLocks busy;
 
     /**
-     * 创建。
+     * 创建：「正在回答」标记在进程内存里（第 6 章的样子；测试里手工组装时用）。
      *
      * @param chatMemory Spring AI 的对话记忆（存储窗口），见 {@link MemoryConfig}
      * @param repository 它背后的存储（清理过期会话、摘要压缩时直接用）
@@ -80,6 +81,30 @@ public class ConversationMemory {
             ConversationSummarizer summarizer,
             MemoryProperties properties,
             Clock clock) {
+        this(chatMemory, repository, owners, summarizer, properties, clock, new MemoryConversationLocks());
+    }
+
+    /**
+     * 创建（Spring 注入，第 10 章）。
+     *
+     * @param chatMemory Spring AI 的对话记忆（存储窗口），见 {@link MemoryConfig}
+     * @param repository 它背后的存储
+     * @param owners 归属与记忆键
+     * @param summarizer 摘要记忆
+     * @param properties {@code assistant.memory.*}
+     * @param clock 时钟
+     * @param busy 「正在回答」标记（内存或 Redis，按 {@code assistant.state.store}）
+     */
+    @Autowired
+    public ConversationMemory(
+            ChatMemory chatMemory,
+            ChatMemoryRepository repository,
+            ConversationOwners owners,
+            ConversationSummarizer summarizer,
+            MemoryProperties properties,
+            Clock clock,
+            ConversationLocks busy) {
+        this.busy = busy;
         this.chatMemory = chatMemory;
         this.repository = repository;
         this.owners = owners;
@@ -110,9 +135,7 @@ public class ConversationMemory {
             return Conversation.degraded(conversationId, store, e.failure().message() + "这一轮不带历史，也不记录。");
         }
         String key = owners.memoryKey(owner, conversationId);
-        if (!busy.add(key)) {
-            throw new ConversationException(ConversationException.Failure.CONVERSATION_BUSY, null);
-        }
+        String lock = lock(key);
         try {
             List<Message> stored = chatMemory.get(key);
             boolean expired = isExpired(stored);
@@ -131,9 +154,9 @@ public class ConversationMemory {
                     properties.entityTurns(),
                     null,
                     (user, assistant) -> save(key, user, assistant),
-                    () -> busy.remove(key));
+                    () -> unlock(key, lock));
         } catch (RuntimeException e) {
-            busy.remove(key);
+            unlock(key, lock);
             log.warn("读取会话记忆失败，这一轮按单轮回答：{}", e.toString());
             return Conversation.degraded(
                     conversationId,
@@ -219,9 +242,7 @@ public class ConversationMemory {
      */
     public void clear(String conversationId, String mallToken) {
         String key = owners.memoryKey(owners.resolve(mallToken), conversationId);
-        if (!busy.add(key)) {
-            throw new ConversationException(ConversationException.Failure.CONVERSATION_BUSY, null);
-        }
+        String lock = lock(key);
         try {
             if (read(key).isEmpty()) {
                 throw new ConversationException(ConversationException.Failure.CONVERSATION_NOT_FOUND, null);
@@ -232,8 +253,32 @@ public class ConversationMemory {
         } catch (RuntimeException e) {
             throw new ConversationException(ConversationException.Failure.MEMORY_UNAVAILABLE, e);
         } finally {
-            busy.remove(key);
+            unlock(key, lock);
         }
+    }
+
+    /**
+     * 占住会话；已经被占了抛 409（CONVERSATION_BUSY）。
+     *
+     * <p>第 10 章：标记在 Redis 里而 Redis 用不了时，按 {@code on-redis-error}：放行时给的是 {@link ConversationLocks#SKIPPED}（这一轮不加锁，照常回答，极少数并发写回可能互相覆盖，
+     * 比让所有多轮对话都失败好）；拒绝时 {@link ConversationLocks} 抛出的 {@link StateUnavailableException} 转成 503 MEMORY_UNAVAILABLE。
+     */
+    private String lock(String key) {
+        String token;
+        try {
+            token = busy.tryLock(key);
+        } catch (StateUnavailableException e) {
+            throw new ConversationException(ConversationException.Failure.MEMORY_UNAVAILABLE, e);
+        }
+        if (token == null) {
+            throw new ConversationException(ConversationException.Failure.CONVERSATION_BUSY, null);
+        }
+        return token;
+    }
+
+    /** 放开会话（令牌是 {@link ConversationLocks#tryLock} 给的）。 */
+    private void unlock(String key, String token) {
+        busy.unlock(key, token);
     }
 
     /**
@@ -255,7 +300,7 @@ public class ConversationMemory {
         int removed = 0;
         try {
             for (String key : repository.findConversationIds()) {
-                if (!busy.contains(key) && isExpired(repository.findByConversationId(key))) {
+                if (!busy.isLocked(key) && isExpired(repository.findByConversationId(key))) {
                     repository.deleteByConversationId(key);
                     removed++;
                 }

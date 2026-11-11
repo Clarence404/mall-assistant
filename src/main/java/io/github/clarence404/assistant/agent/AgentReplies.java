@@ -70,6 +70,11 @@ public final class AgentReplies {
         return "商城登录已失效，办不了这件事，请重新登录后再说一次。";
     }
 
+    /** 第 10 章：确认存不进去（Redis 不可用），这一轮没有生成确认卡片。 */
+    public static String confirmationUnavailable() {
+        return "确认服务暂时不可用，这次没有生成确认，也没有执行任何操作，请稍后再说一次。";
+    }
+
     /**
      * 模型 finish 时的回答，自称已经办好了就换成 {@link #NOTHING_EXECUTED}。
      *

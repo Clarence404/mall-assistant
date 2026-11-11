@@ -19,7 +19,12 @@ public class ChatRejection extends RuntimeException {
         /** 整个实例同时在处理的对话太多，等了一会儿也没有空位。 */
         TOO_BUSY(HttpStatus.SERVICE_UNAVAILABLE, "智能客服正忙", "现在咨询的人比较多，请稍等几秒再试。"),
         /** 这个调用方今天的 Token 用量到了上限。 */
-        TOKEN_BUDGET_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "今日额度已用完", "今天的智能客服额度已经用完了，明天再来，或联系人工客服。");
+        TOKEN_BUDGET_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "今日额度已用完", "今天的智能客服额度已经用完了，明天再来，或联系人工客服。"),
+        /**
+         * 第 10 章：限流、预算、并发名额放在 Redis 里，而 Redis 暂时用不了、策略是「拒绝」（{@code assistant.state.on-redis-error=reject}）。
+         * 503：是我们的问题。策略是「放行」时不会出现这个错误码。
+         */
+        STATE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "智能客服暂时不可用", "智能客服暂时不可用，请稍后再试。");
 
         private final HttpStatus status;
         private final String title;

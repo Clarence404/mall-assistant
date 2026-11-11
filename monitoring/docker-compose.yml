@@ -1,0 +1,57 @@
+# 第 10 章：把第 9 章的监控文件真正跑起来——Prometheus 抓 mall-assistant 的 /actuator/prometheus、加载告警规则，
+# Grafana 通过 provisioning 自动建数据源、加载面板。版本写死，和 CI 里校验规则用的 promtool 同一个版本。
+#
+# 启动（在这个目录里）：
+#   cp .env.example .env          # 填上 GRAFANA_ADMIN_PASSWORD
+#   docker compose up -d
+# 打开：Prometheus http://<这台机器>:9090（Status → Targets 看抓取状态，Alerts 看告警），Grafana http://<这台机器>:3000（admin / .env 里的口令）
+# 抓谁：prometheus/targets/*.json（file_sd，改了自动生效，不用重启），见 docs/ch10.md「监控跑起来」
+name: mall-assistant-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: mall-assistant-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d       # 学习用：只留 7 天
+      - --storage.tsdb.retention.size=1GB
+      - --web.enable-lifecycle                 # 改了规则可以 curl -X POST :9090/-/reload，不用重启容器
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"    # Linux 上让容器能用这个名字访问宿主机（应用和 Prometheus 在同一台机器时）
+    mem_limit: 512m
+
+  grafana:
+    image: grafana/grafana:11.6.1
+    container_name: mall-assistant-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?在 .env 里设置 GRAFANA_ADMIN_PASSWORD}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"        # 不登录也能看面板（只读 Viewer），改面板要登录
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"  # 不往外发使用统计
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"   # 不在启动时联网装插件（内网机器上会卡住）
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/mall-assistant.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/mall-assistant-dashboard.json:/var/lib/grafana/dashboards/mall-assistant.json:ro
+      - grafana-data:/var/lib/grafana
+    mem_limit: 384m
+
+volumes:
+  prometheus-data:
+  grafana-data:

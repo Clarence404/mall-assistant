@@ -2,7 +2,7 @@
 
 Java Doc「AI」模块的配套练习项目：给 [mall-evolution](https://github.com/Clarence404/mall-evolution) 里的示例商城做一个智能客服，一章一章自己动手写出来。
 
-**版本基线**：JDK 21、Spring Boot 4.1.2、Spring AI 2.0.2（MCP Java SDK 2.1.0）、Micrometer 1.17（Prometheus、Brave 链路 ID）、Testcontainers 2.0.5、Ollama 0.40（默认对话模型 `qwen2.5:0.5b`，向量模型 `bge-m3`）、pgvector 0.8.1（PostgreSQL 17，可选）。
+**版本基线**：JDK 21、Spring Boot 4.1.2、Spring AI 2.0.2（MCP Java SDK 2.1.0）、Micrometer 1.17（Prometheus、Brave 链路 ID）、Testcontainers 2.0.5、Ollama 0.40（默认对话模型 `qwen2.5:0.5b`，向量模型 `bge-m3`）、pgvector 0.8.1（PostgreSQL 17，可选）、Redis 8.10（Spring Data Redis + Lettuce，可选）、Prometheus 3.5.0 与 Grafana 11.6.1（监控，可选）。
 
 [![verify](https://github.com/Clarence404/mall-assistant/actions/workflows/verify.yml/badge.svg)](https://github.com/Clarence404/mall-assistant/actions/workflows/verify.yml) [测试报告](https://clarence404.github.io/mall-assistant/)
 
@@ -40,6 +40,7 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 | 7 | Agent | 售后 Agent：自己写的循环（每一步用结构化输出给出「下一步动作」，步数、重复调用、总时长三道刹车），5 个只读工具直接执行（查订单、列订单、查支付单、查商品、查售后规则复用第 5 章检索），3 个写操作（取消待支付订单、改收货地址、提交售后申请）只生成确认卡片；用户在页面上点「确认」才执行，确认绑定用户与会话、5 分钟过期、幂等、参数不可改，聊天里打「确认」不算，结果写回会话记忆；售后申请单 memory / jdbc；`step` / `confirm` 事件与调试面板「Agent 步骤」；Spring AI 原生工具调用循环作对比；Agent 决策录制回放 | [AI Agent](https://clarence404.github.io/java-doc/ai/5_advanced/0_agent.html)、[Function Calling](https://clarence404.github.io/java-doc/ai/1_concepts/2_function_calling.html)、[多轮对话与记忆](https://clarence404.github.io/java-doc/ai/7_practice/6_memory.html) | [`ch07-start`](https://github.com/Clarence404/mall-assistant/tree/ch07-start) / [`ch07-done`](https://github.com/Clarence404/mall-assistant/tree/ch07-done) |
 | 8 | MCP | 把商城能力暴露成 MCP Server（Spring AI MCP Server，WebMVC + Streamable HTTP，和 8088 同一进程，端点 `/mcp`）：`@McpTool` 暴露查知识库、查商品（不用登录）和列订单、查订单（要登录）；取消订单、改地址、售后只做「提议」——复用第 7 章的提议关与人工确认，返回确认 ID 和确认链接，用户本人在页面上点确认才执行；商城令牌放在 HTTP 头（不做工具参数），按第 6 章问商城确认身份；结果截断、每分钟次数上限、`Origin` 校验；6 篇规则文档作为 MCP 资源；客户端一侧可开关的 MCP Client（白名单、改名、说明与结果截短、不把 ToolContext 发出去）；真 MCP 客户端的协议级测试与回环测试 | [MCP 协议](https://clarence404.github.io/java-doc/ai/5_advanced/1_mcp.html)、[AI Agent](https://clarence404.github.io/java-doc/ai/5_advanced/0_agent.html)、[Agent 实战](https://clarence404.github.io/java-doc/ai/7_practice/7_agent.html) | [`ch08-start`](https://github.com/Clarence404/mall-assistant/tree/ch08-start) / [`ch08-done`](https://github.com/Clarence404/mall-assistant/tree/ch08-done) |
 | 9 | 评估与上线 | 回归评测集（58 条 JSONL，覆盖意图、工具、RAG、多轮、Agent、注入、拒答，内容哈希做版本）与评测运行器（端到端判可判的、出报告、和基线比，退化超阈值即失败，可选 LLM 裁判）；真实模型评测录制 + CI 回放门禁；Token 用量（模型报告优先、取不到估算并标注，按用户 / 会话 / 意图记账，`usage` 字段与调试面板，每日预算 429）；对话接口按用户 / IP 限流、并发上限、模型熔断（`MODEL_CIRCUIT_OPEN`）与降级（规则类问题给原文）；Micrometer 指标走 `/actuator/prometheus`、traceId 进日志与响应头、结构化日志，Grafana 面板与告警规则；知识库资料与外部 MCP 工具的提示注入过滤；上线检查清单 | [LLM 应用评估与上线](https://clarence404.github.io/java-doc/ai/5_advanced/3_llm_eval.html)、[限流](https://clarence404.github.io/java-doc/high-avail/7_rate_limiting.html)、[熔断](https://clarence404.github.io/java-doc/high-avail/5_circuit_breaking.html)、[指标](https://clarence404.github.io/java-doc/observability/2_metrics.html) | [`ch09-start`](https://github.com/Clarence404/mall-assistant/tree/ch09-start) / [`ch09-done`](https://github.com/Clarence404/mall-assistant/tree/ch09-done) |
+| 10 | 生产化：共享状态与监控落地 | 只在一个进程里有效的状态抽成接口（对话与 MCP 的限流、并发名额、Token 账、待确认操作、会话标记、归属缓存），内存实现默认，`assistant.state.store=redis` 时多个实例共享：Lua 脚本的滑动窗口与分布式名额、一轮记账、`SET NX` 抢占保证确认只执行一次、`SET NX PX` + 比较再删除的分布式锁；Redis 挂了限流与预算按策略放行或 503、确认一律拒绝、冷却 5 秒；熔断器每实例一份；同一套契约测试跑两种实现，两个客户端证明共享生效；Prometheus + Grafana 的 compose（file_sd 抓管理端口、provisioning 自动加载面板）、面板 PromQL 修正、告警单元测试与 CI 里的 promtool | [分布式锁](https://clarence404.github.io/java-doc/distributed/3_lock.html)、[Redis 应用场景](https://clarence404.github.io/java-doc/cache/4_redis_scenario.html)、[限流](https://clarence404.github.io/java-doc/high-avail/7_rate_limiting.html)、[告警](https://clarence404.github.io/java-doc/observability/4_alerting.html) | [`ch10-start`](https://github.com/Clarence404/mall-assistant/tree/ch10-start) / [`ch10-done`](https://github.com/Clarence404/mall-assistant/tree/ch10-done) |
 
 ## 本地运行
 
@@ -64,7 +65,9 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 
 第 8 章起本应用同时是一个 MCP Server：启动后 MCP 客户端连 `http://localhost:8088/mcp`（Streamable HTTP）就能列出 8 个工具。查知识库、查商品不用登录；查订单要在 MCP 客户端的请求头里带 `Authorization: Bearer <商城令牌>`（令牌不做成工具参数，对面的模型看不到它）；取消订单、改地址、售后申请只能「提议」，返回确认 ID 和确认链接 `http://localhost:8088/?confirm=<ID>`，用户在页面上登录同一个账号点「确认」才执行，`getConfirmation` 查结果。用 MCP Inspector 试：`npx @modelcontextprotocol/inspector --cli http://localhost:8088/mcp --transport http --method tools/list`（带令牌加 `--header "Authorization: Bearer <令牌>"`；订单号这种一串数字的参数要写成 `--tool-arg 'orderNo="…"'`，否则会被当成数字、过不了参数校验）。配置在 `application.yml` 的 `spring.ai.mcp.server.*`（端点、协议，**`protocol: STREAMABLE` 必须写**，不写会按 SSE 装配）与 `assistant.mcp.*`：确认页面地址 `confirm-url`、结果长度 `max-result-chars`（2000）、每分钟次数 `calls-per-minute`（30）、允许的浏览器来源 `allowed-origins`、会话空闲清理 `session-idle-timeout`（10 分钟）。客户端一侧默认关闭（`spring.ai.mcp.client.enabled=false`）；打开后连 `spring.ai.mcp.client.streamable-http.connections.*` 里的外部 MCP Server，只有 `assistant.mcp.client.allowed-tools` 白名单里的工具（加 `ext_` 前缀）会交给对话模型，`GET /api/mcp/client/tools` 可以看连上了哪些，见 [`docs/ch08.md`](docs/ch08.md)。
 
-第 9 章起对话接口有上线保护和监控：每个调用方（登录用户按商城用户，匿名按 IP）每分钟最多问 20 次、全局同时最多处理 8 轮、每天最多 10 万 Token（`assistant.guard.*`、`assistant.usage.*`，超了 429 / 503，错误码 `RATE_LIMITED` / `TOO_BUSY` / `TOKEN_BUDGET_EXCEEDED`）；模型连续失败 5 次熔断 30 秒（`MODEL_CIRCUIT_OPEN`），规则类问题调不了模型时直接给检索到的原文（`assistant.guard.degrade`）；知识库资料和外部 MCP 工具的输出先过提示注入过滤（`assistant.guard.injection`）。回答里带 `usage`（这一轮每次模型调用的 Token，流式在 `done` 事件里），调试面板有「Token 用量」一栏和 traceId；`GET /api/usage/me` 查自己今天的用量，`/actuator/tokens` 看全部，`/actuator/prometheus` 是 Prometheus 指标（生产上这两个 Actuator 端点不要对外，用 `management.server.port` 放到内网端口）；结构化日志设 `LOGGING_STRUCTURED_FORMAT_CONSOLE=logstash`。Grafana 面板与告警规则在 `monitoring/`。回归评测：`EVAL_OLLAMA_URL=http://localhost:11434 ./mvnw verify -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false -Dit.test=EvalIT`，见 [`docs/ch09.md`](docs/ch09.md)。
+第 9 章起对话接口有上线保护和监控：每个调用方（登录用户按商城用户，匿名按 IP）每分钟最多问 20 次、全局同时最多处理 8 轮、每天最多 10 万 Token（`assistant.guard.*`、`assistant.usage.*`，超了 429 / 503，错误码 `RATE_LIMITED` / `TOO_BUSY` / `TOKEN_BUDGET_EXCEEDED`）；模型连续失败 5 次熔断 30 秒（`MODEL_CIRCUIT_OPEN`），规则类问题调不了模型时直接给检索到的原文（`assistant.guard.degrade`）；知识库资料和外部 MCP 工具的输出先过提示注入过滤（`assistant.guard.injection`）。回答里带 `usage`（这一轮每次模型调用的 Token，流式在 `done` 事件里），调试面板有「Token 用量」一栏和 traceId；`GET /api/usage/me` 查自己今天的用量，`/actuator/tokens` 看全部，`/actuator/prometheus` 是 Prometheus 指标（生产上这两个 Actuator 端点不要对外，用 `management.server.port` 放到内网端口）；结构化日志设 `LOGGING_STRUCTURED_FORMAT_CONSOLE=logstash`。Grafana 面板与告警规则在 `monitoring/`（第 10 章起可以用 `monitoring/docker-compose.yml` 跑起来）。回归评测：`EVAL_OLLAMA_URL=http://localhost:11434 ./mvnw verify -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false -Dit.test=EvalIT`，见 [`docs/ch09.md`](docs/ch09.md)。
+
+第 10 章起限流、并发名额、Token 账、待确认操作、「会话正在回答」标记和归属缓存可以放进 Redis，多个实例共享：`assistant.state.store`（默认 `memory`，和第 9 章一样；`redis` 时在 `config/application-local.yml` 里写 `assistant.state.redis.url: redis://:<口令>@<主机>:6379/<库号>`，或环境变量 `ASSISTANT_STATE_STORE` / `REDIS_URL`）、键前缀 `key-prefix`（`mall-assistant:`）、Redis 出错时限流与预算的策略 `on-redis-error`（`allow` 放行，默认；`reject` 返回 503 `STATE_UNAVAILABLE`；待确认操作一律 503 `CONFIRMATION_UNAVAILABLE`）、命令超时与冷却、名额和会话标记的租期 `lease`（5 分钟）。监控：`monitoring/` 下 `cp .env.example .env` 填 Grafana 管理员口令，改 `prometheus/targets/default.json` 写上应用的管理端口，`docker compose up -d`；Prometheus 9090、Grafana 3000，见 [`docs/ch10.md`](docs/ch10.md)。
 
 提示词版本：`assistant.prompt.version`（默认 `v3`，可改回 `v2` / `v1` 对比）；商城名、服务范围等模板变量在 `application.yml` 的 `assistant.prompt.*`。工具调用的两个开关在 `assistant.tools.*`（原生工具调用、按意图直接查询，见 [`docs/ch03.md`](docs/ch03.md)）。
 
@@ -80,6 +83,8 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 | mall-evolution | 网关（对外入口，第 3 章起智能客服调用它，`MALL_API_BASE_URL` 可改） | 9000 |
 | 模型 | Ollama | 11434 |
 | 向量库（第 4 章，可选） | PostgreSQL + pgvector（`store=pgvector` 时，`PGVECTOR_URL` 可改） | 5432 |
+| 共享状态（第 10 章，可选） | Redis（`assistant.state.store=redis` 时，`REDIS_URL` 可改；可以和 mall-evolution 共用一台，换一个库号） | 6379 |
+| 监控（第 10 章，可选） | Prometheus / Grafana（`monitoring/docker-compose.yml`） | 9090 / 3000 |
 
 ### 在 IntelliJ IDEA 里运行
 
@@ -98,6 +103,8 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 注意：这些配置存放在入库的 `.run/*.run.xml` 里，在里面填的值会出现在 `git diff` 中。密钥和内部地址不要填进运行配置，改用下面的本地配置文件。
 
 第 4 章：知识库用 pgvector 时，把 `assistant.knowledge.store: pgvector` 和连接信息写进 `config/application-local.yml`（见 `config/application-local.example.yml` 最后一段），不要写进运行配置；两个命令行模型的运行配置也列了 `OLLAMA_EMBEDDING_MODEL`（命令行工具没有向量模型，知识库用 Ollama 的）。
+
+第 10 章：共享状态放进 Redis 写进 `config/application-local.yml`（见 `config/application-local.example.yml` 最后一段），不要写进运行配置；想在本机起第二个实例对比，用命令行 `java -jar` 换端口（`--server.port=8091 --management.server.port=9191`），8088 留给 IDEA 里的这个。
 
 第 9 章：上线保护、Token、监控都随应用一起启动，不用另外的运行配置；本机调试嫌限流碍事，在 `config/application-local.yml` 里放宽（见 `config/application-local.example.yml` 最后一段），想看熔断和降级就在 Program arguments 里加 `--spring.ai.ollama.chat.model=一个不存在的模型名`。
 
@@ -192,10 +199,11 @@ codex 的 `--json` 只在一条消息完整生成后才输出它，没有逐字�
 11. `agent/`（第 7 章）：`AgentService`（哪些话交给 Agent、聊天里说「确认」怎么办）→ `AgentLoop`（方案 B 的循环与三道刹车）→ `AgentPlanner`（每一步的提示词与结构化输出）→ `AgentDecision` / `AgentAction`（模型的提议与代码的校验）→ `AgentToolbox`（只读工具）→ `OrderRules`（什么状态能办什么）→ `WriteActionGuard`（写操作的提议关）→ `ConfirmationService` 与 `ConfirmationController`（人工确认：归属、过期、幂等、执行、写回记忆）→ `NativeAgentRunner`（方案 A，对比用）；`aftersales/`：售后申请单与 memory / jdbc 两种存储；对话里的入口是 `ChatService#agentAnswer` / `#agentStream`
 12. `mcp/`（第 8 章）：`MallMcpTools`（8 个 `@McpTool`：说明是写给对面模型的提示词、只读提示、每个方法先进门再调业务、异常不外泄）→ `McpServerConfig`（Streamable HTTP 传输装上身份提取与 `Origin` 校验、规则文档作为资源）→ `McpAuth`（令牌从 HTTP 头进传输上下文）→ `McpGate` 与 `McpRateLimiter`（身份、登录、次数）→ `McpMallService`（查订单、查知识库、提出写操作：复用第 7 章的提议关，只登记不执行）→ `McpResults` / `McpViews`（结果格式与截断）；`agent/ConfirmationService#createForMcp` / `#snapshot` 与 `ConfirmationController` 的 GET（确认链接）；`mcp/client/`：`ExternalMcpTools`（外部工具的白名单、改名、截短）与 `McpClientConfig`（不把 ToolContext 发出去）；对话里的入口是 `ChatService#answerRequest`
 13. 第 9 章，三个包：`guard/`（上线保护）：`InjectionFilter`（提示注入规则）→ `RagService#screen` 与 `ExternalMcpTools#screenResult`（挡在哪）→ `CallerResolver`（算谁的）→ `ChatGuard` 与 `SlidingWindowLimiter`（预算、次数、并发）→ `ModelCircuitBreaker` 与 `CircuitBreakerAdvisor`（熔断）→ `ChatService#degrade`（降级给原文）；`ops/`（运维）：`OpsConfig`（把两个 advisor 挂到 ChatClient 上）→ `UsageAdvisor` 与 `TokenEstimator`（Token 从哪来）→ `TurnRecord`（一轮的账本，ThreadLocal 与请求上下文两种带法）→ `UsageLedger`（总账与预算）→ `ChatMetrics`（指标）→ `TokenUsageEndpoint` / `UsageController` / `TraceIdFilter`；`eval/`（评测）：`EvalCase` / `EvalSet`（JSONL 与版本）→ `EvalRunner` → `EvalChecks`（判定）→ `EvalReport` / `EvalComparison`（汇总与基线）→ `EvalJudge` / `ChatClientJudge`（LLM 裁判）；入口是 `ChatController`（进门、记账、指标）
-14. `chat/ChatClientConfig`：`ChatClient` 怎么由 Spring AI 自动配置的 `ChatModel` 构建出来
-15. `error/`：模型调用失败分成「不可用」和「超时」两类（第 9 章加了「熔断中」），统一成 `ProblemDetail` 响应（第 4 章起还有知识库的三类错误，第 9 章起还有进门被挡下的 429 / 503）
-16. `cli/`（选读）：用本机 Claude Code / Codex 命令行当模型：安全参数、stdin 传参、输出解析、超时杀进程树
-17. `src/test/java`：从 `FakeChatModel` 和 `ChatServiceTest` 读起，再看 `ToolCallingFlowTest`（工具调用的两轮、令牌不进提示词）、`StubMallApi`（假商城网关）、`FakeModelWebTest` 系列接口测试、`IntentReplayTest` / `ToolDecisionReplayTest` 录制回放、`FakeCli` 与 `OllamaChatIT`；第 4 章看 `FakeEmbeddingModel`（字符 n-gram 哈希的假向量模型）、`KnowledgeIngestionServiceTest`（增量）、`PgVectorStoreIT`；第 5 章看 `RagChatFlowTest`（路由、短路、引用校验、流式顺序）、`RagServiceTest`（提示词结构、提示注入）、`RetrievalEval`（hit@k 评测）与 `RagReplayTest`（RAG 回答的录制回放）；第 6 章看 `MemoryFixtures`、`MultiTurnChatFlowTest`（历史在提示词里的位置、存什么、改写、沿用、流式写记忆）、`ConversationMemoryTest`（过期、并发、隔离、摘要）与 `ConversationReplayTest`（多轮对话的录制回放）；第 7 章看 `AgentFixtures`、`AgentLoopTest`（剧本驱动的多步循环与刹车）、`WriteActionGuardTest`、`ConfirmationServiceTest`（确认、过期、幂等、越权）、`AgentChatFlowTest`（路由、聊天里说确认、提示注入、流式顺序）与 `AgentReplayTest`（Agent 决策的录制回放）；第 8 章看 `McpFixtures`、`McpMallServiceTest`（只提议不执行、页面确认后才执行）、`McpGateTest`、`McpServerProtocolTest`（真的 MCP 客户端走 Streamable HTTP）与 `McpClientLoopbackTest`（客户端连自己的 `/mcp`）；第 9 章看 `InjectionFilterTest`（规则、回归、漏网与误杀）、`ChatGuardTest` / `ModelCircuitBreakerTest` / `DegradeTest`、`UsageAdvisorTest` / `UsageLedgerTest`、`GuardApiTest`（接口上的 429 / 503 / 降级 / usage / 指标），评测从 `EvalFixtures`（整套被测对象）、`EvalRecording`（录制与回放，含 float16 向量）读起，再看 `EvalGateTest`（CI 门禁）与 `EvalIT`（真实模型）
+14. 第 10 章，`state/`（共享状态）：先看七个接口和它们的内存实现（`guard/RateLimiter` 与 `SlidingWindowLimiter`、`guard/ConcurrencyLimiter` 与 `SemaphoreConcurrencyLimiter`、`ops/UsageStore` 与 `MemoryUsageStore`、`agent/ConfirmationStore` 与 `MemoryConfirmationStore`、`memory/ConversationLocks`、`memory/OwnerCache`），再看 `StateProperties` → `MemoryStateConfig` / `RedisStateConfig`（二选一）→ `RedisRateLimiter` 与 `resources/redis/sliding-window.lua` → `RedisConcurrencyLimiter` 与 `slot-acquire.lua` → `RedisUsageStore` 与 `usage-add.lua` → `RedisConfirmationStore`（`SET NX` 抢占）与 `ConfirmationService#decide`（抢占、等待别人的结果）→ `RedisConversationLocks` 与 `unlock.lua` → `StateFailures`（放行还是拒绝、冷却）；监控看 `monitoring/docker-compose.yml`、`prometheus/`（file_sd、告警与 `alerts.test.yml`）、`grafana/provisioning/`
+15. `chat/ChatClientConfig`：`ChatClient` 怎么由 Spring AI 自动配置的 `ChatModel` 构建出来
+16. `error/`：模型调用失败分成「不可用」和「超时」两类（第 9 章加了「熔断中」），统一成 `ProblemDetail` 响应（第 4 章起还有知识库的三类错误，第 9 章起还有进门被挡下的 429 / 503）
+17. `cli/`（选读）：用本机 Claude Code / Codex 命令行当模型：安全参数、stdin 传参、输出解析、超时杀进程树
+18. `src/test/java`：从 `FakeChatModel` 和 `ChatServiceTest` 读起，再看 `ToolCallingFlowTest`（工具调用的两轮、令牌不进提示词）、`StubMallApi`（假商城网关）、`FakeModelWebTest` 系列接口测试、`IntentReplayTest` / `ToolDecisionReplayTest` 录制回放、`FakeCli` 与 `OllamaChatIT`；第 4 章看 `FakeEmbeddingModel`（字符 n-gram 哈希的假向量模型）、`KnowledgeIngestionServiceTest`（增量）、`PgVectorStoreIT`；第 5 章看 `RagChatFlowTest`（路由、短路、引用校验、流式顺序）、`RagServiceTest`（提示词结构、提示注入）、`RetrievalEval`（hit@k 评测）与 `RagReplayTest`（RAG 回答的录制回放）；第 6 章看 `MemoryFixtures`、`MultiTurnChatFlowTest`（历史在提示词里的位置、存什么、改写、沿用、流式写记忆）、`ConversationMemoryTest`（过期、并发、隔离、摘要）与 `ConversationReplayTest`（多轮对话的录制回放）；第 7 章看 `AgentFixtures`、`AgentLoopTest`（剧本驱动的多步循环与刹车）、`WriteActionGuardTest`、`ConfirmationServiceTest`（确认、过期、幂等、越权）、`AgentChatFlowTest`（路由、聊天里说确认、提示注入、流式顺序）与 `AgentReplayTest`（Agent 决策的录制回放）；第 8 章看 `McpFixtures`、`McpMallServiceTest`（只提议不执行、页面确认后才执行）、`McpGateTest`、`McpServerProtocolTest`（真的 MCP 客户端走 Streamable HTTP）与 `McpClientLoopbackTest`（客户端连自己的 `/mcp`）；第 9 章看 `InjectionFilterTest`（规则、回归、漏网与误杀）、`ChatGuardTest` / `ModelCircuitBreakerTest` / `DegradeTest`、`UsageAdvisorTest` / `UsageLedgerTest`、`GuardApiTest`（接口上的 429 / 503 / 降级 / usage / 指标），评测从 `EvalFixtures`（整套被测对象）、`EvalRecording`（录制与回放，含 float16 向量）读起，再看 `EvalGateTest`（CI 门禁）与 `EvalIT`（真实模型）；第 10 章看 `SharedStateContract`（两种实现共用的契约）与它的两个子类 `MemoryStateContractTest` / `RedisStateContractIT`、`RedisMultiInstanceIT`（两个实例共享）、`RedisDownTest` / `RedisDownApiTest`（Redis 挂了）、`MonitoringFilesTest`（面板与告警的指标名）
 
 ## 构建与测试
 
@@ -215,15 +223,16 @@ codex 的 `--json` 只在一条消息完整生成后才输出它，没有逐字�
 | Agent | `AgentActionTest`、`AgentLoopTest`、`AgentToolboxTest`、`WriteActionGuardTest`、`ConfirmationServiceTest`、`AgentChatFlowTest`、`AgentApiTest` | 否 | 假模型按剧本输出每一步 + 假商城（有状态的待支付、已发货订单，取消 / 改地址 / 支付单接口）：步数与重复上限、只读直接执行、写操作只生成确认、确认 / 拒绝 / 过期 / 重复确认 / 别人的确认 404 / 请求里塞参数无效、确认后写回记忆、聊天里说「确认」不执行、恶意资料只能导致一张确认卡片、`step` / `confirm` 事件顺序、方案 A |
 | 上线保护 | `InjectionFilterTest`、`RagScreeningTest`、`BlockedStreamTest`、`AgentInjectionScreeningTest`、`ExternalMcpScreeningTest`、`ChatGuardTest`、`ModelCircuitBreakerTest`、`DegradeTest`、`UsageAdvisorTest`、`UsageLedgerTest`、`GuardApiTest` | 否 | 假模型 + 可以拨动的时钟：注入规则（第 5、7 章原文回归、变体、6 篇文档不误杀、漏网与误杀写成测试）、挡下与重新编号、Agent 查规则与外部 MCP 工具同样过滤、Token 估算与模型报告、记账与零点清零、预算 / 次数 / 并发三关、熔断三态与挂在 ChatClient 上的快速失败、降级给原文（阻塞、流式、意图识别就失败）；接口上的 429 与 `Retry-After`、流式 `error` 事件、`done` 里的 usage、traceId、`/actuator/prometheus` 与 `/actuator/tokens`。测试 classpath 的 `config/application.yml` 把限流、熔断、降级、预算对前八章的测试关掉 |
 | 评测 | `EvalSetTest`、`EvalChecksTest`、`EvalReportTest`、`EvalRunnerTest`、`EvalGateTest` | 否 | 评测集格式与版本、每一项期望的判定、汇总与基线对比、运行器（多轮、Token、出错、裁判）；**评测门禁** `EvalGateTest`：回放 `src/test/resources/eval/recording-qwen2.5-1.5b.json`（真实模型的每次输出 + float16 向量）跑整份评测集，和 `baseline-qwen2.5-1.5b.json` 逐条一致，CI 把报告贴进运行摘要。真实模型的评测 `EvalIT` 只在设置了 `EVAL_OLLAMA_URL` 时运行（可录制、更新基线、请 Claude CLI 当裁判） |
+| 共享状态 | `MemoryStateContractTest`、`RedisDownTest`、`RedisDownApiTest`、`MonitoringFilesTest` | 否 | 同一套契约（`SharedStateContract`）跑内存实现：限流、名额、Token 账、确认抢占、会话锁、归属缓存，含并发；Redis 连不上（指向没人监听的端口）时两种策略：放行（名额退回本地信号量）与拒绝（503 `STATE_UNAVAILABLE`），确认一律 503，冷却期不碰 Redis，健康检查仍是 UP；面板与告警里写的每个 `assistant_*` 指标应用真的会输出、面板能被 provisioning 加载 |
 | MCP | `McpAuthTest`、`McpGateTest`、`McpRateLimiterTest`、`McpMallServiceTest`、`MallMcpToolsTest`、`ConfirmationSnapshotTest`、`ExternalMcpToolsTest`、`McpServerProtocolTest`、`McpClientLoopbackTest` | 否 | 单元：令牌只从请求头取、打码、身份与登录、次数（滑动窗口、并发）、查订单打码、知识库带来源、写操作只登记不执行（假商城收不到写请求）、页面确认后才执行、状态（待确认 / 已执行 / 已取消 / 过期）、外部工具的白名单与改名与截短、不带 ToolContext；协议级：MCP Java SDK 的真客户端走 Streamable HTTP 连 `RANDOM_PORT` 起的整个应用（initialize、tools/list 的 Schema 与提示、tools/call、resources、`Origin` 校验、令牌不进结果和日志）；回环：打开 MCP Client 连自己的 `/mcp`，远程工具经假模型的工具调用走一遍，ToolContext 里的令牌没有作为 `_meta` 发出去。MCP Server 不调模型，没有录制回放 |
 | 录制回放 | `IntentReplayTest`、`ToolDecisionReplayTest`、`RagReplayTest`、`ConversationReplayTest`、`AgentReplayTest` | 否 | 回放 `src/test/resources/recordings/` 里真实模型（qwen2.5 0.5b / 1.5b）录下的原样输出：意图识别的 JSON、拿到工具清单后的调用决策、拿到编号资料后的 RAG 回答（连同 bge-m3 检索到的资料一起录）、整段多轮对话的每一次调用、Agent 办事的每一步（连同查规则检索到的资料），验证代码能处理真实输出；重新录制见 [`docs/ch02.md`](docs/ch02.md#录制回放)、[`docs/ch03.md`](docs/ch03.md#录制回放)、[`docs/ch05.md`](docs/ch05.md#录制回放)、[`docs/ch06.md`](docs/ch06.md#录制回放)、[`docs/ch07.md`](docs/ch07.md#录制回放) |
-| 集成测试 | `*IT` | 是 | Testcontainers 起真实 Ollama、拉取 `qwen2.5:0.5b`，走一遍阻塞与流式接口、意图识别和工具调用（商城用假网关）；第 4 章起 `PgVectorStoreIT` 起 `pgvector/pgvector:0.8.1-pg17` 跑真实的 PgVectorStore，`OllamaEmbeddingIT` 用真实的 `nomic-embed-text` 入库、检索并跑第 5 章的 hit@k 评测和第 6 章的相似度门槛扫描，第 6 章起 `JdbcChatMemoryIT` 用同一个 pgvector 镜像跑 JDBC 记忆、第 7 章起 `JdbcAfterSalesStoreIT` 跑售后申请单的 JDBC 存储（没有 Docker 时也可以用环境变量指向现成的服务，见 [`docs/ch04.md`](docs/ch04.md#验收标准)）；录制工具 `IntentRecordingIT`、`ToolDecisionRecordingIT`、`RagRecordingIT`、`ConversationRecordingIT`、`AgentRecordingIT` 只在设置了 `RECORD_OLLAMA_URL` 时运行 |
+| 集成测试 | `*IT` | 是 | Testcontainers 起真实 Ollama、拉取 `qwen2.5:0.5b`，走一遍阻塞与流式接口、意图识别和工具调用（商城用假网关）；第 4 章起 `PgVectorStoreIT` 起 `pgvector/pgvector:0.8.1-pg17` 跑真实的 PgVectorStore，`OllamaEmbeddingIT` 用真实的 `nomic-embed-text` 入库、检索并跑第 5 章的 hit@k 评测和第 6 章的相似度门槛扫描，第 6 章起 `JdbcChatMemoryIT` 用同一个 pgvector 镜像跑 JDBC 记忆、第 7 章起 `JdbcAfterSalesStoreIT` 跑售后申请单的 JDBC 存储（没有 Docker 时也可以用环境变量指向现成的服务，见 [`docs/ch04.md`](docs/ch04.md#验收标准)）；第 10 章起 `RedisStateContractIT`（同一套契约跑 Redis 实现，外加租期收回、锁过期、键都带前缀且会过期）与 `RedisMultiInstanceIT`（两个 Redis 客户端当两个实例：合计限流、共享预算与名额、A 生成的确认在 A、B 同时点只执行一次）用 `redis:8.10.3-alpine`（没有 Docker 时设 `REDIS_IT_URL`，见 [`docs/ch10.md`](docs/ch10.md#验收标准)）；录制工具 `IntentRecordingIT`、`ToolDecisionRecordingIT`、`RagRecordingIT`、`ConversationRecordingIT`、`AgentRecordingIT` 只在设置了 `RECORD_OLLAMA_URL` 时运行 |
 
 没有 Docker 的机器上集成测试自动跳过（`@Testcontainers(disabledWithoutDocker = true)`）。模型文件缓存在 `~/.cache/mall-assistant/ollama`（可用 `OLLAMA_MODELS_CACHE` 指定），只下载一次。
 
 ## 测试报告
 
-每次推送 `main` 或章节 tag，GitHub Actions（`.github/workflows/verify.yml`）在带 Docker 的 runner 上跑完整的 `./mvnw -B verify`，Ollama 集成测试不跳过，模型用 `actions/cache` 缓存。报告发布到 `https://clarence404.github.io/mall-assistant/reports/<ref>/`，如 [`reports/main/`](https://clarence404.github.io/mall-assistant/reports/main/)、[`reports/ch01-done/`](https://clarence404.github.io/mall-assistant/reports/ch01-done/)、[`reports/ch01-start/`](https://clarence404.github.io/mall-assistant/reports/ch01-start/)。
+每次推送 `main` 或章节 tag，GitHub Actions（`.github/workflows/verify.yml`）先用 `promtool` 校验监控配置并跑告警规则的单元测试（第 10 章），再在带 Docker 的 runner 上跑完整的 `./mvnw -B verify`，Ollama 集成测试不跳过，模型用 `actions/cache` 缓存。报告发布到 `https://clarence404.github.io/mall-assistant/reports/<ref>/`，如 [`reports/main/`](https://clarence404.github.io/mall-assistant/reports/main/)、[`reports/ch01-done/`](https://clarence404.github.io/mall-assistant/reports/ch01-done/)、[`reports/ch01-start/`](https://clarence404.github.io/mall-assistant/reports/ch01-start/)。
 
 `chNN-start` 标签的验收测试本来就不通过：报告照常发布，运行不标红，摘要里注明「start 标签：测试未通过是预期的」。其他 ref 测试失败时报告照样发布，运行记为失败。
 
@@ -246,6 +255,7 @@ mall-assistant/
 │   ├── guard/                上线保护（第 9 章）：提示注入过滤、调用方、预算 / 次数 / 并发三关、滑动窗口、熔断器与它的 advisor
 │   ├── ops/                  运维（第 9 章）：Token 记账的 advisor 与估算、一轮的账本、总账与预算、指标、/actuator/tokens、/api/usage/me、traceId 响应头
 │   ├── eval/                 评测（第 9 章）：用例与评测集、运行器、判定、报告与基线对比、LLM 裁判
+│   ├── state/                共享状态（第 10 章）：memory / redis 二选一的装配、Redis 版的限流 / 名额 / 账 / 确认 / 会话锁 / 归属缓存、出错时的策略与冷却
 │   ├── cli/                  命令行模型提供方：CliChatModel、claude / codex 的参数与输出解析、进程超时与清理
 │   └── error/                模型失败分类（MODEL_UNAVAILABLE / MODEL_TIMEOUT）与 ProblemDetail
 ├── src/main/resources/
@@ -253,6 +263,7 @@ mall-assistant/
 │   ├── application-ollama.yml / application-openai.yml   按 profile 切换模型厂商
 │   ├── application-claude-cli.yml / application-codex-cli.yml   用本机命令行工具当模型（可选）
 │   ├── knowledge/            示例商城的规则文档（第 4 章入库的知识）
+│   ├── redis/                第 10 章的 Lua 脚本：滑动窗口、分布式名额、一轮记账、比较再删除
 │   ├── prompts/              客服人设 system-v1.st / v2 / v3、意图识别 intent-v1.st / v2、拒答话术 refusal.st、RAG 的 rag-v1.st 与固定话术、追问改写 memory-condense.st 与摘要 memory-summary.st、Agent 的 agent-v1.st 与 agent-native-v1.st
 │   └── static/index.html     聊天页面（原生 HTML/CSS/JS，第 3 章起带登录框，第 4 章起带知识库调试区，第 5 章起回答里的引用编号可点，第 6 章起带会话 ID、刷新恢复历史，第 7 章起带 Agent 步骤与确认卡片，第 8 章起能打开 MCP 的确认链接，第 9 章起带 Token 用量、traceId 与被挡下的资料）
 ├── src/test/java/            FakeChatModel、StubMallApi、FakeEmbeddingModel、单元与接口测试、录制回放、RAG 评测、OllamaChatIT、PgVectorStoreIT
@@ -260,7 +271,7 @@ mall-assistant/
 ├── src/test/resources/rag/          检索评测集（口语化问题 → 应命中的一节）
 ├── src/test/resources/eval/         第 9 章回归评测集 cases-v1.jsonl、两篇带提示注入的文档、1.5b 的录制与基线
 ├── src/test/resources/config/       测试专用的覆盖配置（对前八章的测试关掉限流、熔断、降级、预算）
-├── monitoring/               第 9 章：Grafana 面板 JSON、Prometheus 抓取配置与告警规则（示例，不部署）
+├── monitoring/               第 9 章的 Grafana 面板 JSON、Prometheus 抓取配置与告警规则；第 10 章的 docker-compose.yml、Grafana provisioning、file_sd 目标、告警单元测试 alerts.test.yml
 ├── docs/chNN.md              每章的练习说明
 ├── .run/                     IntelliJ IDEA 共享运行配置
 ├── config/                   Checkstyle 规则（checkstyle/）、本地覆盖配置模板 application-local.example.yml（复制为同目录的 application-local.yml，不入库）
@@ -269,11 +280,11 @@ mall-assistant/
 
 ## 学完之后
 
-九章下来，这个智能客服从「能聊天」长到了「敢上线」：接模型与流式（1）→ 提示词与结构化输出（2）→ 工具调用（3）→ 知识入库（4）→ RAG（5）→ 多轮记忆（6）→ Agent 与人工确认（7）→ MCP（8）→ 评测、Token、限流熔断降级、监控、注入过滤（9）。
+十章下来，这个智能客服从「能聊天」长到了「敢上线」：接模型与流式（1）→ 提示词与结构化输出（2）→ 工具调用（3）→ 知识入库（4）→ RAG（5）→ 多轮记忆（6）→ Agent 与人工确认（7）→ MCP（8）→ 评测、Token、限流熔断降级、监控、注入过滤（9）→ 共享状态与监控落地，能多实例部署（10）。
 
 **学完能做什么**：给一个已有的 Java 业务系统加一个懂业务、查得到真数据、按规则回答、会办事但不乱办的 AI 助手，并且知道怎么证明它没有变差、花了多少、出了事怎么查、哪里会被攻击。几条贯穿始终的原则：模型负责理解和措辞，代码负责事实、规则和执行；外来的文字都是数据，不是指令；宁可说不知道，也不要说错；改数据的事，人来拍板；能观测的才能评测，能评测的才敢上线。
 
-**离生产还差什么**（教学项目有意省略的）：状态都在一个进程里（记忆、确认、限流、预算、熔断、账本，多实例要进 Redis / 数据库）；身份借的是商城登录令牌（生产要 OAuth 2.1 与权限范围）；CPU 上的 1.5b 模型（意图九成、RAG 七成、Agent 三成，要换更强的模型或分层路由并重跑评测）；评测集小而「干净」（要从线上日志采样、人工标注、跟着业务长）；知识库没有审核与多租户权限；护栏只有规则（没有越狱检测模型、输出合规审查）；没有灰度与 A/B；成本优化（语义缓存、提示词压缩）没做；链路追踪没接 exporter、告警没接值班。详见 [`docs/ch09.md`](docs/ch09.md#全系列收尾)。
+**离生产还差什么**（教学项目有意省略的）：状态都在一个进程里（第 10 章已做：限流、名额、预算、确认、会话标记进了 Redis，记忆和售后申请单可以进 PostgreSQL，熔断器有意每实例一份）；身份借的是商城登录令牌（生产要 OAuth 2.1 与权限范围）；CPU 上的 1.5b 模型（意图九成、RAG 七成、Agent 三成，要换更强的模型或分层路由并重跑评测）；评测集小而「干净」（要从线上日志采样、人工标注、跟着业务长）；知识库没有审核与多租户权限；护栏只有规则（没有越狱检测模型、输出合规审查）；没有灰度与 A/B；成本优化（语义缓存、提示词压缩）没做；链路追踪没接 exporter、告警没接值班（第 10 章 Prometheus 与 Grafana 跑起来了、告警有单元测试，Alertmanager 还没接）。详见 [`docs/ch09.md`](docs/ch09.md#全系列收尾)、[`docs/ch10.md`](docs/ch10.md#收尾)。
 
 ## 许可证
 

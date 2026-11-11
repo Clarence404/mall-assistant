@@ -30,6 +30,8 @@ public record AgentTrace(String mode, List<AgentStep> steps, StopReason stopReas
         /** 页面关了（流式被取消）。 */
         CANCELLED,
         /** 商城登录失效，没法确认是谁在办。 */
-        LOGIN_EXPIRED
+        LOGIN_EXPIRED,
+        /** 第 10 章：要生成确认卡片时，存确认的地方（Redis）用不了，这一轮没有生成确认。 */
+        CONFIRMATION_UNAVAILABLE
     }
 }

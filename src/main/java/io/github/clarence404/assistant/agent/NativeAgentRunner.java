@@ -169,8 +169,22 @@ public class NativeAgentRunner {
                 kind = AgentStep.Kind.REJECTED;
                 observation = "没有生成确认：" + proposal.rejection();
             } else {
-                PendingConfirmation pending = confirmations.create(
-                        proposal.action(), run.task().owner(), run.task().conversationId());
+                PendingConfirmation pending;
+                try {
+                    pending = confirmations.create(
+                            proposal.action(), run.task().owner(), run.task().conversationId());
+                } catch (ConfirmationException e) {
+                    // 第 10 章：确认存不进去，告诉模型没有生成，让它转告用户稍后再说
+                    run.record(AgentLoop.step(
+                            run,
+                            null,
+                            action.tool().toolName(),
+                            AgentStep.Kind.REJECTED,
+                            action.argumentsJson(),
+                            "没有生成确认：" + e.failure().message(),
+                            start));
+                    return "没有生成确认，也没有执行：确认服务暂时不可用，用一句话请用户稍后再说一次";
+                }
                 run.record(AgentLoop.step(
                         run,
                         null,

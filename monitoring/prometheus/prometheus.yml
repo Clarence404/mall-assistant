@@ -1,14 +1,19 @@
-# 第 9 章：最小的 Prometheus 抓取配置示例。本仓库不部署 Prometheus / Grafana，这份配置给已经有监控系统的人参考
-# 启动：prometheus --config.file=monitoring/prometheus/prometheus.yml
+# 第 9 章写的抓取配置，第 10 章真的跑起来了（monitoring/docker-compose.yml 把这个目录挂进 Prometheus 容器的 /etc/prometheus）。
+# 也可以不用容器：prometheus --config.file=monitoring/prometheus/prometheus.yml（相对路径都相对这个文件所在的目录）
 global:
   scrape_interval: 15s
-  evaluation_interval: 30s
+  evaluation_interval: 15s       # 告警规则多久算一次；for: 1m 的规则最快 1 分钟多一点后 firing
 
 rule_files:
-  - alerts.yml                 # 同目录下的告警规则
+  - alerts.yml                   # 同目录下的告警规则（CI 里用 promtool check rules / test rules 校验，见 alerts.test.yml）
 
 scrape_configs:
   - job_name: mall-assistant
     metrics_path: /actuator/prometheus
-    static_configs:
-      - targets: ['localhost:8088']   # 生产上 Actuator 放在单独的管理端口（management.server.port），这里写那个端口
+    # 抓哪些实例写在 targets/ 下的 JSON 里（file_sd：文件改了 Prometheus 自己重新读，不用重启）。
+    # 仓库里的 targets/default.json 指向和 Prometheus 同一台机器上的 8088；应用跑在别的机器、或者开了 management.server.port、
+    # 或者起了好几个实例时，在部署目录里改这个文件（内网地址不要提交进仓库），见 docs/ch10.md「监控跑起来」
+    file_sd_configs:
+      - files:
+          - targets/*.json
+        refresh_interval: 30s

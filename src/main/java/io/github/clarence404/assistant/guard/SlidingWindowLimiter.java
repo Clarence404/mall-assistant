@@ -10,16 +10,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.IntSupplier;
 
 /**
- * 滑动窗口计数：每个 key 在最近一个窗口里最多放行几次（第 9 章从第 8 章的 {@code McpRateLimiter} 抽出来）。
+ * 滑动窗口计数：每个 key 在最近一个窗口里最多放行几次（第 9 章从第 8 章的 {@code McpRateLimiter} 抽出来；第 10 章起是 {@link RateLimiter} 的内存实现）。
  *
  * <p>所在层：上线保护的工具类。第 8 章的 {@code McpRateLimiter}（MCP 工具调用，每分钟 30 次）和第 9 章的 {@link ChatGuard}（对话接口，每分钟 20 次）
  * 都用它；算法和第 8 章 ch08-3 写的完全一样，只是上限和窗口变成了参数。
  *
  * <p>为什么是滑动窗口而不是固定窗口（每个整分钟清零）：固定窗口在「59 秒问 20 次、61 秒再问 20 次」时两秒内放行了 40 次。滑动窗口记下每次的时间，
  * 永远只看「现在往前一个窗口」。代价是每个 key 要存最多「上限」个时间戳，对客服这点量不算什么。只在一个进程里有效：部署多个实例时，要么接受「每个实例各算各的」，
- * 要么放进 Redis（有序集合 ZADD / ZREMRANGEBYSCORE / ZCARD 三条命令就是同一个算法）。
+ * 要么放进 Redis——第 10 章的 {@code state.RedisRateLimiter} 用有序集合的 ZREMRANGEBYSCORE / ZCARD / ZADD 三条命令做同一个算法，包在一段 Lua 脚本里原子执行。
  */
-public final class SlidingWindowLimiter {
+public final class SlidingWindowLimiter implements RateLimiter {
 
     private final IntSupplier limit;
     private final Duration window;
@@ -48,6 +48,7 @@ public final class SlidingWindowLimiter {
      * @param key 调用方，如 {@code user:10001}、{@code ip:127.0.0.1}
      * @return 放行时为 true
      */
+    @Override
     public boolean tryAcquire(String key) {
         Instant now = clock.instant();
         Instant cutoff = now.minus(window);
@@ -70,6 +71,7 @@ public final class SlidingWindowLimiter {
      * @param key 调用方
      * @return 等多久；窗口里没有记录时为 0
      */
+    @Override
     public Duration retryAfter(String key) {
         Deque<Instant> deque = calls.get(key);
         if (deque == null) {
@@ -86,6 +88,7 @@ public final class SlidingWindowLimiter {
     }
 
     /** 清掉已经空了的 key（定期调用，免得只来过一次的 IP 一直占着内存）。 */
+    @Override
     public void evictIdle() {
         Instant cutoff = clock.instant().minus(window);
         calls.entrySet().removeIf(e -> {

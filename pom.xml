@@ -148,6 +148,17 @@
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-tracing-bridge-brave</artifactId>
         </dependency>
+        <!-- 第 10 章：共享状态放进 Redis。只引 Spring Data Redis（RedisTemplate、Lua 脚本）和 Lettuce 客户端，不引 Starter：
+             Starter 会自动配置连接工厂和 Redis 健康检查，默认的 memory 模式下 Redis 没启动，/actuator/health 就成了 DOWN；
+             只有 assistant.state.store=redis 时才由 state.RedisStateConfig 自己建连接（同第 6 章 JDBC 记忆的做法），版本由 Spring Boot 管理 -->
+        <dependency>
+            <groupId>org.springframework.data</groupId>
+            <artifactId>spring-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.lettuce</groupId>
+            <artifactId>lettuce-core</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

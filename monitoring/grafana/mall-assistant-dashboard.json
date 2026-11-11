@@ -1,23 +1,14 @@
 {
-  "__inputs": [
-    {
-      "name": "DS_PROMETHEUS",
-      "label": "Prometheus",
-      "type": "datasource",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus"
-    }
-  ],
   "title": "mall-assistant 智能客服",
   "uid": "mall-assistant",
-  "description": "第 9 章：mall-assistant 的业务指标（/actuator/prometheus）。导入：Grafana → Dashboards → Import，选 Prometheus 数据源。",
+  "description": "第 9 章写、第 10 章真正跑起来的 mall-assistant 业务指标面板（/actuator/prometheus）。monitoring/docker-compose.yml 的 Grafana 通过 provisioning 自动加载；也可以在别的 Grafana 里 Import，顶上选 Prometheus 数据源。",
   "tags": [
     "mall-assistant",
     "spring-ai"
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -26,12 +17,22 @@
   "templating": {
     "list": [
       {
+        "name": "datasource",
+        "label": "数据源",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": ""
+      },
+      {
         "name": "application",
         "label": "应用",
         "type": "query",
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
+          "uid": "${datasource}"
         },
         "query": {
           "query": "label_values(assistant_chat_requests_total, application)",
@@ -43,6 +44,28 @@
           "text": "mall-assistant",
           "value": "mall-assistant"
         }
+      },
+      {
+        "name": "instance",
+        "label": "实例",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(assistant_chat_requests_total{application=\"$application\"}, instance)",
+          "refId": "B"
+        },
+        "definition": "label_values(assistant_chat_requests_total{application=\"$application\"}, instance)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
       }
     ]
   },
@@ -53,7 +76,7 @@
       "title": "每秒请求数（按结果）",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -66,9 +89,9 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "sum by (outcome) (rate(assistant_chat_requests_total{application=\"$application\"}[$__rate_interval]))",
+          "expr": "sum by (outcome) (rate(assistant_chat_requests_total{application=\"$application\",instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "{{outcome}}"
         }
       ],
@@ -87,7 +110,7 @@
       "title": "模型错误率（5 分钟）",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -100,9 +123,9 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "sum(rate(assistant_chat_requests_total{application=\"$application\",outcome=~\"MODEL_.*\"}[5m])) / clamp_min(sum(rate(assistant_chat_requests_total{application=\"$application\"}[5m])), 1e-9)",
+          "expr": "(sum(rate(assistant_chat_requests_total{application=\"$application\",instance=~\"$instance\",outcome=~\"MODEL_.*\"}[5m])) or vector(0)) / clamp_min(sum(rate(assistant_chat_requests_total{application=\"$application\",instance=~\"$instance\"}[5m])), 1e-9)",
           "legendFormat": "错误率"
         }
       ],
@@ -129,7 +152,8 @@
         },
         "overrides": []
       },
-      "options": {}
+      "options": {},
+      "description": "第 10 章修正：没有任何 MODEL_* 错误时分子是空向量，整个式子也是空的，面板显示 No data 而不是 0%，所以分子补 or vector(0)"
     },
     {
       "id": 3,
@@ -137,7 +161,7 @@
       "title": "模型熔断器",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 18,
@@ -150,9 +174,9 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "max(assistant_model_circuit_state{application=\"$application\"})",
+          "expr": "max(assistant_model_circuit_state{application=\"$application\",instance=~\"$instance\"})",
           "legendFormat": "状态"
         }
       ],
@@ -181,7 +205,7 @@
         "overrides": []
       },
       "options": {},
-      "description": "0 正常、1 熔断（直接返回 MODEL_CIRCUIT_OPEN）、2 半开（放一个请求去试）"
+      "description": "0 正常、1 熔断（直接返回 MODEL_CIRCUIT_OPEN）、2 半开（放一个请求去试）；第 10 章：熔断器每个实例各一份，这里取最坏的"
     },
     {
       "id": 4,
@@ -189,7 +213,7 @@
       "title": "一轮对话耗时 p50 / p95 / p99（阻塞接口）",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -202,27 +226,27 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(assistant_chat_duration_seconds_bucket{application=\"$application\",endpoint=\"chat\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(assistant_chat_duration_seconds_bucket{application=\"$application\",instance=~\"$instance\",endpoint=\"chat\"}[$__rate_interval])))",
           "legendFormat": "p50"
         },
         {
           "refId": "B",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(assistant_chat_duration_seconds_bucket{application=\"$application\",endpoint=\"chat\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(assistant_chat_duration_seconds_bucket{application=\"$application\",instance=~\"$instance\",endpoint=\"chat\"}[$__rate_interval])))",
           "legendFormat": "p95"
         },
         {
           "refId": "C",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(assistant_chat_duration_seconds_bucket{application=\"$application\",endpoint=\"chat\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(assistant_chat_duration_seconds_bucket{application=\"$application\",instance=~\"$instance\",endpoint=\"chat\"}[$__rate_interval])))",
           "legendFormat": "p99"
         }
       ],
@@ -240,7 +264,7 @@
       "title": "各意图的 p95 耗时",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -253,9 +277,9 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, intent) (rate(assistant_chat_duration_seconds_bucket{application=\"$application\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, intent) (rate(assistant_chat_duration_seconds_bucket{application=\"$application\",instance=~\"$instance\"}[$__rate_interval])))",
           "legendFormat": "{{intent}}"
         }
       ],
@@ -274,7 +298,7 @@
       "title": "每分钟 Token（按步骤）",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -287,9 +311,9 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "sum by (stage, type) (rate(assistant_model_tokens_total{application=\"$application\"}[$__rate_interval])) * 60",
+          "expr": "sum by (stage, type) (rate(assistant_model_tokens_total{application=\"$application\",instance=~\"$instance\"}[$__rate_interval])) * 60",
           "legendFormat": "{{stage}} {{type}}"
         }
       ],
@@ -308,7 +332,7 @@
       "title": "Token 近 24 小时累计",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -321,9 +345,9 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "sum by (estimated) (increase(assistant_model_tokens_total{application=\"$application\"}[24h]))",
+          "expr": "sum by (estimated) (increase(assistant_model_tokens_total{application=\"$application\",instance=~\"$instance\"}[24h]))",
           "legendFormat": "估算={{estimated}}"
         }
       ],
@@ -341,7 +365,7 @@
       "title": "正在处理的对话",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 18,
@@ -354,10 +378,10 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "max(assistant_chat_inflight{application=\"$application\"})",
-          "legendFormat": "在处理"
+          "expr": "sum by (instance) (assistant_chat_inflight{application=\"$application\",instance=~\"$instance\"})",
+          "legendFormat": "{{instance}}"
         }
       ],
       "fieldConfig": {
@@ -365,7 +389,7 @@
         "overrides": []
       },
       "options": {},
-      "description": "接近 assistant.guard.max-concurrent 时，新来的请求要等，等不到返回 TOO_BUSY"
+      "description": "每个实例正在处理几轮。第 10 章名额放进 Redis 以后，所有实例加起来不超过 assistant.guard.max-concurrent；名额在内存里时是每个实例各自不超过它"
     },
     {
       "id": 9,
@@ -373,7 +397,7 @@
       "title": "被挡下的请求（每分钟，按原因）",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -386,9 +410,9 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "sum by (reason) (rate(assistant_guard_rejections_total{application=\"$application\"}[$__rate_interval])) * 60",
+          "expr": "sum by (reason) (rate(assistant_guard_rejections_total{application=\"$application\",instance=~\"$instance\"}[$__rate_interval])) * 60",
           "legendFormat": "{{reason}}"
         }
       ],
@@ -407,7 +431,7 @@
       "title": "RAG 检索结果（每分钟）",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -420,9 +444,9 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "sum by (result) (rate(assistant_rag_retrievals_total{application=\"$application\"}[$__rate_interval])) * 60",
+          "expr": "sum by (result) (rate(assistant_rag_retrievals_total{application=\"$application\",instance=~\"$instance\"}[$__rate_interval])) * 60",
           "legendFormat": "{{result}}"
         }
       ],
@@ -441,7 +465,7 @@
       "title": "提示注入拦截",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -454,9 +478,9 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "sum by (where, rule) (increase(assistant_injection_blocked_total{application=\"$application\"}[$__rate_interval]))",
+          "expr": "sum by (where, rule) (increase(assistant_injection_blocked_total{application=\"$application\",instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "{{where}} {{rule}}"
         }
       ],
@@ -475,7 +499,7 @@
       "title": "Agent 平均步数（按停止原因）",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -488,9 +512,9 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "sum by (stop) (rate(assistant_agent_steps_sum{application=\"$application\"}[$__rate_interval])) / clamp_min(sum by (stop) (rate(assistant_agent_steps_count{application=\"$application\"}[$__rate_interval])), 1e-9)",
+          "expr": "sum by (stop) (rate(assistant_agent_steps_sum{application=\"$application\",instance=~\"$instance\"}[$__rate_interval])) / clamp_min(sum by (stop) (rate(assistant_agent_steps_count{application=\"$application\",instance=~\"$instance\"}[$__rate_interval])), 1e-9)",
           "legendFormat": "{{stop}}"
         }
       ],
@@ -509,7 +533,7 @@
       "title": "模型调用次数（Spring AI 自带指标）",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -522,9 +546,9 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "sum by (gen_ai_request_model) (rate(gen_ai_client_operation_seconds_count{application=\"$application\"}[$__rate_interval]))",
+          "expr": "sum by (gen_ai_request_model) (rate(gen_ai_client_operation_seconds_count{application=\"$application\",instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "{{gen_ai_request_model}}"
         }
       ],
@@ -543,7 +567,7 @@
       "title": "JVM 堆内存",
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -556,9 +580,9 @@
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "${datasource}"
           },
-          "expr": "sum by (area) (jvm_memory_used_bytes{application=\"$application\"})",
+          "expr": "sum by (area) (jvm_memory_used_bytes{application=\"$application\",instance=~\"$instance\"})",
           "legendFormat": "{{area}}"
         }
       ],
@@ -569,6 +593,156 @@
         "overrides": []
       },
       "options": {}
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "各实例每秒请求数",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (instance) (rate(assistant_chat_requests_total{application=\"$application\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "第 10 章：多实例时看负载是否均匀；被挡下的请求也算（outcome 是错误码）"
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "共享状态出错（每分钟，按哪一样）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (instance, component) (rate(assistant_state_errors_total{application=\"$application\",instance=~\"$instance\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{instance}} {{component}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "description": "第 10 章：Redis 连不上 / 超时 / 冷却期里被跳过的次数。有数就说明限流、预算正按 on-redis-error 放行或拒绝"
+    },
+    {
+      "id": 17,
+      "type": "table",
+      "title": "各实例的共享状态存储",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 12,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (instance, store) (assistant_state_store_info{application=\"$application\",instance=~\"$instance\"})",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "description": "第 10 章：每个实例用的是 memory 还是 redis；混用时限流、预算、确认就不是全局的了（告警 MallAssistantMixedStateStores）"
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "抓取状态（up）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 56,
+        "w": 12,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "up{job=\"mall-assistant\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background"
+      },
+      "description": "Prometheus 抓不到的实例显示 DOWN（告警 MallAssistantDown）。up 是 Prometheus 自己生成的，不带 application 标签"
     }
   ]
 }

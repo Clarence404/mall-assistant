@@ -1,6 +1,7 @@
-# 第 9 章：mall-assistant 的告警规则示例（Prometheus 规则文件格式）。指标名见 ChatMetrics 的类注释和 docs/ch09.md「监控」一节。
+# 第 9 章：mall-assistant 的告警规则（Prometheus 规则文件格式）。指标名见 ChatMetrics 的类注释和 docs/ch09.md「监控」一节；
+# 第 10 章加了共享状态（Redis）的两条，并由 monitoring/docker-compose.yml 里的 Prometheus 真正加载。
 # 阈值是给本地小模型的示例值，上线前按自己的流量和 SLO 调；告警发到哪里（钉钉、企业微信、邮件）由 Alertmanager 决定，不在这里。
-# 校验：promtool check rules monitoring/prometheus/alerts.yml
+# 校验（CI 里也跑）：promtool check rules monitoring/prometheus/alerts.yml；单元测试：promtool test rules monitoring/prometheus/alerts.test.yml
 groups:
   - name: mall-assistant
     rules:
@@ -87,3 +88,22 @@ groups:
         annotations:
           summary: 一半以上的规则类问题检索不到资料
           description: 知识库缺内容，或者向量模型 / 相似度门槛变了；把没找到的问题收集起来补文档。
+
+      # —— 第 10 章：共享状态 ——
+      - alert: MallAssistantStateStoreErrors
+        expr: sum by (instance, component) (increase(assistant_state_errors_total[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: 共享状态（Redis）出错（{{ $labels.instance }} / {{ $labels.component }}）
+          description: Redis 连不上或超时。限流与预算按 assistant.state.on-redis-error 放行或拒绝，待确认操作一律 503；放行期间限流和预算形同虚设，先看 Redis 是否在线。
+
+      - alert: MallAssistantMixedStateStores
+        expr: count(count by (store) (assistant_state_store_info)) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 各实例的共享状态存储不一致
+          description: 有的实例用 redis、有的用 memory（多半是某个实例漏了 ASSISTANT_STATE_STORE），用 memory 的那个限流、预算、确认都是自己算的。

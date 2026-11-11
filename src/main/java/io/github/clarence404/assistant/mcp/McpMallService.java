@@ -261,7 +261,13 @@ public class McpMallService {
         if (!proposal.accepted()) {
             return McpViews.Proposal.rejected(forMcp(proposal.rejection()));
         }
-        PendingConfirmation pending = confirmations.createForMcp(proposal.action(), caller.owner());
+        PendingConfirmation pending;
+        try {
+            pending = confirmations.createForMcp(proposal.action(), caller.owner());
+        } catch (ConfirmationException e) {
+            // 第 10 章：确认存不进去（Redis 不可用），只登记不了，更不会执行
+            return McpViews.Proposal.rejected(forMcp(e.failure().message()));
+        }
         log.info(
                 "MCP 提出写操作 {}：{}（{}），等用户在页面确认",
                 pending.id(),

@@ -220,6 +220,18 @@ assistant:
       password: ${AFTER_SALES_JDBC_PASSWORD:${assistant.memory.jdbc.password}}
       initialize-schema: true   # 第一次用到时建表（CREATE TABLE IF NOT EXISTS）
       max-pool-size: 2       # 只有提交售后申请时才用，两个连接够了
+  state:                     # 第 10 章：共享状态（见 StateProperties 与 docs/ch10.md）：限流、并发名额、Token 账、待确认操作、「正在回答」标记、归属缓存
+    store: ${ASSISTANT_STATE_STORE:memory}   # memory（默认，进程内，多实例各算各的）或 redis（多个实例共享）
+    on-redis-error: allow    # Redis 连不上 / 超时时，限流与预算：allow 放行（并发名额退回本实例的信号量），reject 返回 503 STATE_UNAVAILABLE；待确认操作永远拒绝
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379/0}   # 最后一段是 database 编号；有密码写 redis://:密码@主机:6379/库号，写进 config/application-local.yml 或环境变量，不进仓库
+      key-prefix: "mall-assistant:"   # 每个键的前缀：和别的系统共用一个 Redis 时一眼分得开
+      timeout: 500ms         # 每条命令的超时：Redis 正常是亚毫秒级，慢成这样就当它挂了
+      connect-timeout: 1s
+      cooldown: 5s           # 出错一次之后多久不碰 Redis（直接按出错处理），不让每个请求都等一次超时
+    lease: 5m                # 并发名额、「正在回答」标记最长占多久（拿着的实例挂了也会自动放开），要比一轮对话的最长时间（Agent 120 秒）长
+    poll-interval: 50ms      # 并发名额满了时隔多久再试一次
+    confirmation-wait: 10s   # 同一个确认正被另一个请求（可能在另一个实例上）执行时，最多等多久它的结果，等不到 409 CONFIRMATION_IN_PROGRESS
 
 # 第 9 章：监控。Actuator 端点（/actuator/health、/actuator/prometheus、/actuator/tokens……）与链路 ID
 management:

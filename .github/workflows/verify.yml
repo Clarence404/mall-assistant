@@ -31,7 +31,13 @@ jobs:
         with:
           path: /home/runner/.cache/mall-assistant/ollama
           key: ollama-0.40.14-qwen2.5-0.5b-nomic-embed-text
-      # GitHub 托管的 runner 自带 Docker，Testcontainers 集成测试（Ollama、pgvector）会真正执行
+      # 第 10 章：告警规则的检查——promtool check config 连带检查规则文件的语法，test rules 跑 alerts.test.yml 里的告警单元测试
+      # （PromQL 写错了语法照样对、只是永远不响，只有单元测试查得出来）。用和 monitoring/docker-compose.yml 同一个版本的 Prometheus 镜像
+      - name: 校验告警规则（promtool）
+        run: |
+          docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus:ro" -w /etc/prometheus --entrypoint promtool prom/prometheus:v3.5.0 check config prometheus.yml
+          docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus:ro" -w /etc/prometheus --entrypoint promtool prom/prometheus:v3.5.0 test rules alerts.test.yml
+      # GitHub 托管的 runner 自带 Docker，Testcontainers 集成测试（Ollama、pgvector、Redis）会真正执行
       - name: 构建与测试
         run: |
           if [[ "$GITHUB_REF_NAME" == *-start ]]; then
