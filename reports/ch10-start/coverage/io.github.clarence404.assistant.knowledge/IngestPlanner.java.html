@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>IngestPlanner.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.knowledge</a> &gt; <span class="el_source">IngestPlanner.java</span></div><h1>IngestPlanner.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.knowledge;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+/**
+ * 增量入库的判断：比对磁盘上的文档和库里已有的文档，产出 {@link IngestPlan}（第 4 章引入）。
+ *
+ * &lt;p&gt;所在层：入库流水线。上游是 {@link KnowledgeIngestionService}（传入读到的文档和 {@link KnowledgeStore#documents()}）；
+ * 计划交回给它执行。
+ *
+ * &lt;p&gt;为什么要增量：调向量模型是整个入库里最慢、（用云端模型时）最花钱的一步。文档几十上百篇、一次只改一两篇时，没变的文档不该
+ * 重新向量化。判断「变没变」用内容哈希（{@link ChunkDocumentFactory#docHash}），比比较修改时间可靠：复制、checkout 都会改时间，
+ * 内容没变哈希就不变。
+ */
+public class IngestPlanner {
+
+    private final ChunkDocumentFactory factory;
+
+    /**
+     * 创建判断器。
+     *
+     * @param factory 用它算每篇文档当前的内容哈希
+     */
+<span class="fc" id="L30">    public IngestPlanner(ChunkDocumentFactory factory) {</span>
+<span class="fc" id="L31">        this.factory = factory;</span>
+<span class="fc" id="L32">    }</span>
+
+    /**
+     * 比对并产出计划，按 source（文件名）对应：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;磁盘上有、库里没有 → {@code added}
+     *   &lt;li&gt;两边都有、库里的 docHash 和 {@code factory.docHash(文档)} 不同 → {@code updated}（带上库里的旧汇总）
+     *   &lt;li&gt;两边都有、docHash 相同 → {@code unchanged}
+     *   &lt;li&gt;库里有、磁盘上没有 → {@code removed}
+     * &lt;/ul&gt;
+     *
+     * 各列表内保持输入的顺序（磁盘文档按 source 排序、库里的汇总也按 source 排序）。
+     *
+     * @param documents 磁盘上的全部文档
+     * @param stored 库里已有的文档汇总
+     * @return 入库计划
+     */
+    public IngestPlan plan(List&lt;KnowledgeDocument&gt; documents, List&lt;StoredDocument&gt; stored) {
+<span class="fc" id="L51">        Map&lt;String, StoredDocument&gt; storedBySource = stored.stream()</span>
+<span class="fc" id="L52">                .collect(</span>
+<span class="pc" id="L53">                        Collectors.toMap(StoredDocument::source, Function.identity(), (a, b) -&gt; a, LinkedHashMap::new));</span>
+<span class="fc" id="L54">        List&lt;KnowledgeDocument&gt; added = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L55">        List&lt;IngestPlan.Replacement&gt; updated = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L56">        List&lt;KnowledgeDocument&gt; unchanged = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L57" title="All 2 branches covered.">        for (KnowledgeDocument document : documents) {</span>
+<span class="fc" id="L58">            StoredDocument previous = storedBySource.get(document.source());</span>
+<span class="fc bfc" id="L59" title="All 2 branches covered.">            if (previous == null) {</span>
+<span class="fc" id="L60">                added.add(document);</span>
+<span class="fc bfc" id="L61" title="All 2 branches covered.">            } else if (previous.docHash().equals(factory.docHash(document))) {</span>
+<span class="fc" id="L62">                unchanged.add(document);</span>
+            } else {
+<span class="fc" id="L64">                updated.add(new IngestPlan.Replacement(document, previous));</span>
+            }
+<span class="fc" id="L66">        }</span>
+<span class="fc" id="L67">        Set&lt;String&gt; onDisk = documents.stream().map(KnowledgeDocument::source).collect(Collectors.toSet());</span>
+<span class="fc" id="L68">        List&lt;StoredDocument&gt; removed =</span>
+<span class="fc bfc" id="L69" title="All 2 branches covered.">                stored.stream().filter(s -&gt; !onDisk.contains(s.source())).toList();</span>
+<span class="fc" id="L70">        return new IngestPlan(added, updated, unchanged, removed);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

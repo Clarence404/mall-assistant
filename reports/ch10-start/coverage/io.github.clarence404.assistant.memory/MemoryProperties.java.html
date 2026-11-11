@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MemoryProperties.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.memory</a> &gt; <span class="el_source">MemoryProperties.java</span></div><h1>MemoryProperties.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.memory;
+
+import java.time.Duration;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
+
+/**
+ * 多轮对话与记忆的配置，前缀 {@code assistant.memory}（第 6 章引入）。每一项在 {@code application.yml} 里都有注释。
+ *
+ * &lt;p&gt;所在层：业务层的配置。由 {@code @ConfigurationPropertiesScan} 绑定，注入 {@link MemoryConfig}、{@link ConversationMemory}、
+ * {@link QuestionCondenser}、{@link ConversationSummarizer} 等。
+ *
+ * &lt;p&gt;先分清两个「窗口」，它们管的事不一样：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;&lt;b&gt;存储窗口&lt;/b&gt;（{@code maxMessages}）：一个会话在记忆库里最多留几条消息，超出时最早的被删掉。它防的是「一个会话无限变长、撑爆内存或表」
+ *   &lt;li&gt;&lt;b&gt;提示词窗口&lt;/b&gt;（{@code windowTurns} + {@code budgetChars}）：每次调模型时从存储里取最近几轮、且总字数不超过预算的历史带上。它防的是
+ *       「提示词太长」：上下文窗口有上限，越长越慢、越贵，小模型还越容易被前面的话带偏
+ * &lt;/ul&gt;
+ *
+ * 一般存储窗口比提示词窗口大：页面刷新后能恢复更多历史，但模型每次只看最近几轮。
+ *
+ * @param enabled 总开关；关掉后请求里带了会话 ID 也按单轮处理（和第 5 章一样），不读不写记忆
+ * @param store 记忆存在哪：{@code memory}（默认，JVM 内存，重启就没了，零依赖）或 {@code jdbc}（PostgreSQL，Spring AI 的
+ *     {@code JdbcChatMemoryRepository}）
+ * @param ttl 会话空闲多久算过期：最后一条消息之后超过这么久没再说话，下次再来时当作新会话（历史清空）；后台也会定期清理过期会话
+ * @param sweepInterval 后台清理过期会话的间隔
+ * @param maxMessages 存储窗口：每个会话最多留几条消息（一问一答算两条），超出时删最早的（Spring AI 的 {@code MessageWindowChatMemory}）
+ * @param windowTurns 提示词窗口：最多带最近几轮历史（一轮 = 用户一句 + 助手一句）
+ * @param budgetChars 提示词窗口：带进提示词的历史最多多少个字（粗略代替 token 预算），超出时从最早的一轮开始丢
+ * @param entityTurns 指代沿用：最近几轮里提到过的订单号 / SKU 可以被「它」「这单」沿用；更早的不算（话题多半已经换了）
+ * @param condense 追问改写（condense question）
+ * @param summary 摘要记忆（默认关）
+ * @param ownerCacheTtl 商城令牌 → 商城用户的缓存时长：同一个令牌在这段时间里不再重复问商城「你是谁」
+ * @param jdbc {@code store=jdbc} 时的数据库连接
+ */
+@ConfigurationProperties(&quot;assistant.memory&quot;)
+public record MemoryProperties(
+        @DefaultValue(&quot;true&quot;) boolean enabled,
+        @DefaultValue(&quot;memory&quot;) StoreType store,
+        @DefaultValue(&quot;30m&quot;) Duration ttl,
+        @DefaultValue(&quot;10m&quot;) Duration sweepInterval,
+        @DefaultValue(&quot;40&quot;) int maxMessages,
+        @DefaultValue(&quot;6&quot;) int windowTurns,
+        @DefaultValue(&quot;2000&quot;) int budgetChars,
+        @DefaultValue(&quot;3&quot;) int entityTurns,
+        @DefaultValue Condense condense,
+        @DefaultValue Summary summary,
+        @DefaultValue(&quot;5m&quot;) Duration ownerCacheTtl,
+        @DefaultValue Jdbc jdbc) {
+
+    /** 启动时就校验，配错了立刻报错，而不是第一个用户提问时才发现。 */
+<span class="fc" id="L53">    public MemoryProperties {</span>
+<span class="pc bpc" id="L54" title="1 of 2 branches missed.">        if (maxMessages &lt; 2) {</span>
+<span class="nc" id="L55">            throw new IllegalArgumentException(&quot;assistant.memory.max-messages 至少为 2（一问一答），当前 &quot; + maxMessages);</span>
+        }
+<span class="pc bpc" id="L57" title="3 of 6 branches missed.">        if (windowTurns &lt; 0 || budgetChars &lt; 0 || entityTurns &lt; 0) {</span>
+<span class="nc" id="L58">            throw new IllegalArgumentException(&quot;assistant.memory.window-turns / budget-chars / entity-turns 不能为负数&quot;);</span>
+        }
+<span class="pc bpc" id="L60" title="1 of 2 branches missed.">        if (windowTurns * 2 &gt; maxMessages) {</span>
+<span class="nc" id="L61">            throw new IllegalArgumentException(&quot;assistant.memory.window-turns 的两倍不能大于 max-messages（存储里都没留那么多），当前 &quot;</span>
+                    + windowTurns + &quot; / &quot; + maxMessages);
+        }
+<span class="fc" id="L64">    }</span>
+
+    /** 记忆库类型。 */
+<span class="fc" id="L67">    public enum StoreType {</span>
+        /** Spring AI 的 {@code InMemoryChatMemoryRepository}：一个 ConcurrentHashMap，重启就没了，适合学习和单机。 */
+<span class="fc" id="L69">        MEMORY,</span>
+        /** Spring AI 的 {@code JdbcChatMemoryRepository}：存进 PostgreSQL 的 {@code SPRING_AI_CHAT_MEMORY} 表，重启不丢、多实例共享。 */
+<span class="fc" id="L71">        JDBC</span>
+    }
+
+    /**
+     * 追问改写：带着历史的问题（「那运费谁出」）先让模型改写成一句不依赖上文的独立问题（「七天无理由退货的运费谁出」），再拿去检索。
+     *
+     * @param enabled 开关；关掉后检索直接用用户原话（追问多半检索不到）
+     * @param historyTurns 改写时给模型看最近几轮（只是为了弄清指代，不用太多）
+     * @param maxChars 改写结果最多多少字；超过就当改写失败（小模型有时会直接开始回答问题，写一大段）
+     */
+<span class="fc" id="L81">    public record Condense(</span>
+            @DefaultValue(&quot;true&quot;) boolean enabled,
+            @DefaultValue(&quot;3&quot;) int historyTurns,
+            @DefaultValue(&quot;120&quot;) int maxChars) {}
+
+    /**
+     * 摘要记忆：被提示词窗口挤出去的早期对话，让模型压成一段摘要留在会话里，代替那些原话。
+     *
+     * @param enabled 开关，默认关：每次压缩都多一次模型调用（回答之后同步做，用户要多等），摘要还可能漏掉或说错细节
+     * @param maxChars 摘要最多多少字
+     */
+<span class="fc" id="L92">    public record Summary(</span>
+            @DefaultValue(&quot;false&quot;) boolean enabled,
+            @DefaultValue(&quot;300&quot;) int maxChars) {}
+
+    /**
+     * 记忆存进 PostgreSQL 时的连接（{@code store=jdbc}）。默认在 application.yml 里引用第 4 章 pgvector 的地址和账号，同一个库、不同的表。
+     *
+     * @param url JDBC 地址
+     * @param username 数据库用户
+     * @param password 密码；真实密码写进不入库的 config/application-local.yml 或环境变量
+     * @param initializeSchema 第一次用到时是否执行 Spring AI 自带的建表脚本（{@code CREATE TABLE IF NOT EXISTS}，已存在不动）
+     * @param maxPoolSize 连接池最多几个连接
+     */
+<span class="fc" id="L105">    public record Jdbc(</span>
+            @DefaultValue(&quot;jdbc:postgresql://localhost:5432/mall_assistant&quot;)
+            String url,
+
+            @DefaultValue(&quot;mall&quot;) String username,
+            @DefaultValue(&quot;&quot;) String password,
+            @DefaultValue(&quot;true&quot;) boolean initializeSchema,
+            @DefaultValue(&quot;4&quot;) int maxPoolSize) {}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

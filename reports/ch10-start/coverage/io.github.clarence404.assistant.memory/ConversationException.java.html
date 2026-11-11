@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ConversationException.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.memory</a> &gt; <span class="el_source">ConversationException.java</span></div><h1>ConversationException.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.memory;
+
+import org.springframework.http.HttpStatus;
+
+/**
+ * 会话相关的失败（第 6 章引入）：会话不存在、正在回答上一条、登录失效、无法确认归属、记忆库不可用。
+ *
+ * &lt;p&gt;所在层：业务层的异常。{@link ConversationMemory} 抛出；接口层的 {@code ApiExceptionHandler} 转成对应状态码的 ProblemDetail，
+ * 流式接口转成 error 事件。对话接口遇到「无法确认归属」「记忆库不可用」时不抛它，而是降级成单轮回答（见 {@link ConversationMemory#open}）。
+ */
+public class ConversationException extends RuntimeException {
+
+    private final Failure failure;
+
+    /**
+     * 创建。
+     *
+     * @param failure 失败类型
+     * @param cause 原始异常，可以为 null；只写日志，不给前端
+     */
+    public ConversationException(Failure failure, Throwable cause) {
+<span class="fc" id="L22">        super(failure.message(), cause);</span>
+<span class="fc" id="L23">        this.failure = failure;</span>
+<span class="fc" id="L24">    }</span>
+
+    /**
+     * 失败类型。
+     *
+     * @return 失败类型
+     */
+    public Failure failure() {
+<span class="fc" id="L32">        return failure;</span>
+    }
+
+    /** 失败类型：错误码就是 name()，和 HTTP 状态码、给用户看的提示一一对应。 */
+<span class="fc" id="L36">    public enum Failure {</span>
+        /**
+         * 404：会话不存在、已过期，或者&lt;b&gt;不是你的&lt;/b&gt;。三种情况故意返回一样的结果：不让人借「403 和 404 的差别」探测某个会话 ID 有没有人在用
+         * （和商城对别人的订单也返回 404 是一个道理）。
+         */
+<span class="fc" id="L41">        CONVERSATION_NOT_FOUND(HttpStatus.NOT_FOUND, &quot;会话不存在&quot;, &quot;会话不存在或已过期。&quot;),</span>
+        /** 409：同一个会话的上一条消息还没回答完。见 {@link ConversationMemory} 的并发说明。 */
+<span class="fc" id="L43">        CONVERSATION_BUSY(HttpStatus.CONFLICT, &quot;会话正忙&quot;, &quot;上一条消息还在回答中，请等它说完再发。&quot;),</span>
+        /** 401：带了商城令牌，但商城说它无效或已过期。 */
+<span class="fc" id="L45">        LOGIN_EXPIRED(HttpStatus.UNAUTHORIZED, &quot;登录已失效&quot;, &quot;商城登录已失效，请重新登录。&quot;),</span>
+        /** 503：带了商城令牌，但商城暂时不可用，确认不了它属于谁。 */
+<span class="fc" id="L47">        OWNER_UNVERIFIED(HttpStatus.SERVICE_UNAVAILABLE, &quot;无法确认会话归属&quot;, &quot;商城服务暂时不可用，确认不了登录身份，请稍后再试。&quot;),</span>
+        /** 503：记忆库（jdbc 模式的数据库）连不上。 */
+<span class="fc" id="L49">        MEMORY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, &quot;记忆库不可用&quot;, &quot;对话记录暂时读写不了，请稍后再试。&quot;);</span>
+
+        private final HttpStatus status;
+        private final String title;
+        private final String message;
+
+<span class="fc" id="L55">        Failure(HttpStatus status, String title, String message) {</span>
+<span class="fc" id="L56">            this.status = status;</span>
+<span class="fc" id="L57">            this.title = title;</span>
+<span class="fc" id="L58">            this.message = message;</span>
+<span class="fc" id="L59">        }</span>
+
+        /** HTTP 状态码。 */
+        public HttpStatus status() {
+<span class="fc" id="L63">            return status;</span>
+        }
+
+        /** ProblemDetail 的标题。 */
+        public String title() {
+<span class="fc" id="L68">            return title;</span>
+        }
+
+        /** 给用户看的提示。 */
+        public String message() {
+<span class="fc" id="L73">            return message;</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

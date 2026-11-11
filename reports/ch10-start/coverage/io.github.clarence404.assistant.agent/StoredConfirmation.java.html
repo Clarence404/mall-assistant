@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StoredConfirmation.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">StoredConfirmation.java</span></div><h1>StoredConfirmation.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+import java.time.Instant;
+
+/**
+ * 一个待确认操作在服务端的全部信息：做什么、归谁、哪个会话、什么时候过期、给页面看的卡片、从哪来、结果（第 10 章从
+ * {@link ConfirmationService} 的内部类挪出来，因为它要存进 Redis）。
+ *
+ * &lt;p&gt;所在层：Agent 的领域模型。{@link ConfirmationService} 生成，{@link ConfirmationStore} 保存。归属与会话只记在这里，不靠页面传回来。
+ * 要能变成 JSON 再变回来（Redis 里存的是 JSON 字符串），所以全是 record 和枚举，没有锁、没有 volatile 这种「只在一个进程里有意义」的东西——
+ * 第 7 章每个确认一把 {@code ReentrantLock}，第 10 章换成了存储层的「抢占」（{@link ConfirmationStore#claim}）。
+ *
+ * @param id 确认 ID（随机 UUID）
+ * @param action 写操作（参数在生成时定死）
+ * @param ownerKey 归属（{@code user:10001}）
+ * @param conversationId 会话 ID；MCP 来的、单轮的为 null
+ * @param expiresAt 过期时间
+ * @param view 推给页面的卡片
+ * @param origin 从哪来（聊天里的 Agent / MCP 客户端）
+ * @param outcome 结果；还没处理时为 null
+ */
+<span class="fc" id="L22">public record StoredConfirmation(</span>
+        String id,
+        PendingAction action,
+        String ownerKey,
+        String conversationId,
+        Instant expiresAt,
+        PendingConfirmation view,
+        Origin origin,
+        ConfirmationOutcome outcome) {
+
+    /**
+     * 带上结果的副本。
+     *
+     * @param result 结果
+     * @return 副本
+     */
+    public StoredConfirmation withOutcome(ConfirmationOutcome result) {
+<span class="fc" id="L39">        return new StoredConfirmation(id, action, ownerKey, conversationId, expiresAt, view, origin, result);</span>
+    }
+
+    /** 待确认操作从哪来（第 8 章）。 */
+<span class="fc" id="L43">    public enum Origin {</span>
+        /** 聊天里的 Agent（第 7 章），绑定会话。 */
+<span class="fc" id="L45">        CHAT,</span>
+        /** MCP 客户端调了 propose* 工具（第 8 章），没有会话。 */
+<span class="fc" id="L47">        MCP</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

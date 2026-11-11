@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RedisConversationLocks.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.state</a> &gt; <span class="el_source">RedisConversationLocks.java</span></div><h1>RedisConversationLocks.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.state;
+
+import io.github.clarence404.assistant.memory.ConversationLocks;
+import java.time.Duration;
+import java.util.UUID;
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
+
+/**
+ * 「这个会话正在回答」标记的 Redis 实现：经典的分布式锁（第 10 章引入）。
+ *
+ * &lt;p&gt;所在层：共享状态。{@code assistant.state.store=redis} 时注入 {@code memory.ConversationMemory}。键是 {@code conv-busy:记忆键}。
+ *
+ * &lt;p&gt;分布式锁的三个要点，正好对应三行代码：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;&lt;b&gt;占&lt;/b&gt;：{@code SET 键 令牌 NX PX 租期}——不存在才写（只有一个人能占到），并且&lt;b&gt;同一条命令&lt;/b&gt;里带上过期时间。
+ *       分成 {@code SETNX} + {@code PEXPIRE} 两条，中间实例挂了，就留下一个永不过期的锁
+ *   &lt;li&gt;&lt;b&gt;租期&lt;/b&gt;：占着的实例挂了，过了租期自动放开，这个会话不会永远「正在回答」
+ *   &lt;li&gt;&lt;b&gt;还&lt;/b&gt;：只删自己的——值是随机令牌，删之前比一下（{@code redis/unlock.lua}）。不比就可能删掉别人的锁（见脚本里的注释）
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;它不是「绝对安全」的锁：持有者卡得比租期还久（长时间 GC 停顿），租期到了别人照样能进来，两个请求同时在答。对「同一会话同时只答一个」
+ * 这种「尽量避免」的场景够用；真要严格互斥（比如扣库存），要在写入那一侧再加版本号检查（fencing token）。讲义「分布式锁的边界」一节。
+ */
+public final class RedisConversationLocks implements ConversationLocks {
+
+<span class="fc" id="L29">    private static final RedisScript&lt;Long&gt; UNLOCK = RedisKeys.script(&quot;unlock.lua&quot;, Long.class);</span>
+    private static final String COMPONENT = &quot;conversation-lock&quot;;
+
+    private final StringRedisTemplate redis;
+    private final RedisKeys keys;
+    private final Duration lease;
+    private final StateFailures failures;
+
+    /**
+     * 创建。
+     *
+     * @param redis Redis 客户端
+     * @param keys 键前缀
+     * @param lease 租期（{@code assistant.state.lease}）
+     * @param failures 出错时怎么办
+     */
+<span class="fc" id="L45">    public RedisConversationLocks(StringRedisTemplate redis, RedisKeys keys, Duration lease, StateFailures failures) {</span>
+<span class="fc" id="L46">        this.redis = redis;</span>
+<span class="fc" id="L47">        this.keys = keys;</span>
+<span class="fc" id="L48">        this.lease = lease;</span>
+<span class="fc" id="L49">        this.failures = failures;</span>
+<span class="fc" id="L50">    }</span>
+
+    /**
+     * 占住这个会话（ch10-5 之一）。
+     *
+     * &lt;p&gt;要求（测试按这个写）：令牌是随机 UUID；{@code opsForValue().setIfAbsent(键, 令牌, lease)}（就是 {@code SET NX PX}），写进去了返回令牌，
+     * 没写进去返回 null。Redis 出错（含冷却期）：{@code failures.allowOrThrow}——放行策略返回 {@link #SKIPPED}（这一轮不加锁照常答），拒绝策略抛异常。
+     */
+    @Override
+    public String tryLock(String key) {
+        // TODO ch10-5：令牌 = UUID.randomUUID().toString()；failures.ensureAvailable()；
+        // opsForValue().setIfAbsent(lockKey(key), 令牌, lease) 为 TRUE 返回令牌，否则 null。
+        // catch (DataAccessException e)：failures.allowOrThrow(COMPONENT, e)（拒绝策略会抛），返回 SKIPPED
+<span class="fc" id="L63">        return UUID.randomUUID().toString();</span>
+    }
+
+    /**
+     * 放开（ch10-5 之二）。
+     *
+     * &lt;p&gt;要求（测试按这个写）：令牌是 null 或 {@link #SKIPPED} 就什么都不做；否则执行 {@link #UNLOCK} 脚本（KEYS 是键，ARGV 是令牌），
+     * 只删自己的。Redis 出错只 {@code failures.record}：租期到了自己会放开。
+     */
+    @Override
+    public void unlock(String key, String token) {
+        // TODO ch10-5：token 是 null 或 SKIPPED 就返回；否则 redis.execute(UNLOCK, List.of(lockKey(key)), token)（比较再删除）。
+        // catch (DataAccessException e)：failures.record(COMPONENT, e)
+<span class="fc" id="L76">    }</span>
+
+    /** 是否被占着；Redis 出错时当作「被占着」（后台清理宁可这次不删）。 */
+    @Override
+    public boolean isLocked(String key) {
+        try {
+<span class="fc" id="L82">            failures.ensureAvailable();</span>
+<span class="fc" id="L83">            return Boolean.TRUE.equals(redis.hasKey(lockKey(key)));</span>
+<span class="nc" id="L84">        } catch (DataAccessException e) {</span>
+<span class="nc" id="L85">            failures.record(COMPONENT, e);</span>
+<span class="nc" id="L86">            return true;</span>
+        }
+    }
+
+    private String lockKey(String key) {
+<span class="fc" id="L91">        return keys.of(&quot;conv-busy&quot;, key);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

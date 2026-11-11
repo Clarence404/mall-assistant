@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AgentTrace.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">AgentTrace.java</span></div><h1>AgentTrace.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+import java.util.List;
+
+/**
+ * 一次办事的调试信息：用的哪种循环、走了哪些步、为什么停、总耗时（第 7 章引入）。
+ *
+ * &lt;p&gt;所在层：接口层的数据。{@link AgentResult#trace()} 生成，阻塞接口放在响应的 {@code agent} 字段（不走 Agent 时为 null），页面调试面板
+ * 「Agent 步骤」一栏显示。流式接口不发它：步骤已经一条条作为 {@code step} 事件推过了。
+ *
+ * @param mode 循环方式：{@code loop} 或 {@code native}
+ * @param steps 每一步，按顺序
+ * @param stopReason 为什么停
+ * @param elapsedMs 总耗时，毫秒
+ */
+<span class="fc" id="L16">public record AgentTrace(String mode, List&lt;AgentStep&gt; steps, StopReason stopReason, long elapsedMs) {</span>
+
+    /** 循环为什么停。 */
+<span class="fc" id="L19">    public enum StopReason {</span>
+        /** 模型说办完了（finish），回答是它给的。 */
+<span class="fc" id="L21">        FINISHED,</span>
+        /** 提出了写操作，等用户点确认：这一轮到此为止，回答是代码写好的固定话术。 */
+<span class="fc" id="L23">        AWAITING_CONFIRMATION,</span>
+        /** 到了步数上限还没办完。 */
+<span class="fc" id="L25">        STEP_LIMIT,</span>
+        /** 反复做同一个调用（被拦下后还在重复）。 */
+<span class="fc" id="L27">        REPEATED,</span>
+        /** 超过总时长。 */
+<span class="fc" id="L29">        TIMEOUT,</span>
+        /** 页面关了（流式被取消）。 */
+<span class="fc" id="L31">        CANCELLED,</span>
+        /** 商城登录失效，没法确认是谁在办。 */
+<span class="fc" id="L33">        LOGIN_EXPIRED,</span>
+        /** 第 10 章：要生成确认卡片时，存确认的地方（Redis）用不了，这一轮没有生成确认。 */
+<span class="fc" id="L35">        CONFIRMATION_UNAVAILABLE</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RedisRateLimiter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.state</a> &gt; <span class="el_source">RedisRateLimiter.java</span></div><h1>RedisRateLimiter.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.state;
+
+import io.github.clarence404.assistant.guard.RateLimiter;
+import java.time.Clock;
+import java.time.Duration;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.function.IntSupplier;
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.RedisScript;
+
+/**
+ * 滑动窗口限流的 Redis 实现：几个实例合计（第 10 章引入）。
+ *
+ * &lt;p&gt;所在层：共享状态。{@code assistant.state.store=redis} 时由 {@link RedisStateConfig} 的限流器工厂造出来，给 {@code guard.ChatGuard}
+ * （键 {@code rate:chat:…}）和 {@code mcp.McpRateLimiter}（键 {@code rate:mcp:…}）用。
+ *
+ * &lt;p&gt;算法和内存版 {@code guard.SlidingWindowLimiter} 一样：每个调用方一个有序集合（成员是每一次调用，分数是时间），先删掉窗口外的、再数、
+ * 不到上限就记下这一次。三步写在一段 Lua 脚本里（{@code redis/sliding-window.lua}），在 Redis 里原子执行。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么不用更简单的 {@code INCR} + {@code EXPIRE}&lt;/b&gt;（固定窗口：每个整分钟一个计数器）：一条 INCR 本身是原子的，也够用，但它是「固定窗口」，
+ * 59 秒问 20 次、61 秒再问 20 次，两秒内放行 40 次——第 8 章选滑动窗口就是为了避免这个。代价是每个调用方要存最多「上限」个成员，客服这点量不算什么。
+ *
+ * &lt;p&gt;&lt;b&gt;时间用谁的&lt;/b&gt;：脚本里的「现在」由应用传进去（注入的 {@link Clock}），测试可以拨时钟。代价是实例之间的时钟要同步（NTP），
+ * 偏差多少，窗口就歪多少；不想依赖实例的时钟，可以在脚本里用 Redis 的 {@code TIME} 命令取时间。
+ */
+public final class RedisRateLimiter implements RateLimiter {
+
+<span class="fc" id="L32">    private static final RedisScript&lt;Long&gt; SCRIPT = RedisKeys.script(&quot;sliding-window.lua&quot;, Long.class);</span>
+
+    private final StringRedisTemplate redis;
+    private final String keyPrefix;
+    private final String component;
+    private final IntSupplier limit;
+    private final Duration window;
+    private final Clock clock;
+    private final StateFailures failures;
+
+    /**
+     * 创建。
+     *
+     * @param redis Redis 客户端
+     * @param keyPrefix 这个限流器的键前缀，如 {@code mall-assistant:rate:chat}，后面接调用方
+     * @param component 出错时记在指标里的名字，如 {@code rate:chat}
+     * @param limit 窗口内最多几次
+     * @param window 窗口长度
+     * @param clock 时钟
+     * @param failures 出错时怎么办
+     */
+    public RedisRateLimiter(
+            StringRedisTemplate redis,
+            String keyPrefix,
+            String component,
+            IntSupplier limit,
+            Duration window,
+            Clock clock,
+<span class="fc" id="L60">            StateFailures failures) {</span>
+<span class="fc" id="L61">        this.redis = redis;</span>
+<span class="fc" id="L62">        this.keyPrefix = keyPrefix;</span>
+<span class="fc" id="L63">        this.component = component;</span>
+<span class="fc" id="L64">        this.limit = limit;</span>
+<span class="fc" id="L65">        this.window = window;</span>
+<span class="fc" id="L66">        this.clock = clock;</span>
+<span class="fc" id="L67">        this.failures = failures;</span>
+<span class="fc" id="L68">    }</span>
+
+    /**
+     * 这个调用方现在能不能再来一次（ch10-1 的 Java 一侧；算法在 {@code redis/sliding-window.lua}）。
+     *
+     * &lt;p&gt;执行脚本：KEYS 是这个调用方的键，ARGV 依次是现在（毫秒）、窗口（毫秒）、上限、这一次的成员名（现在 + 随机串）；返回 1 放行。
+     * Redis 出错（含冷却期）按 {@link StateFailures#allowOrThrow} 处理：放行策略返回 true，拒绝策略抛异常。
+     */
+    @Override
+    public boolean tryAcquire(String key) {
+<span class="fc" id="L78">        long now = clock.millis();</span>
+        try {
+<span class="fc" id="L80">            failures.ensureAvailable();</span>
+<span class="fc" id="L81">            Long allowed = redis.execute(</span>
+                    SCRIPT,
+<span class="fc" id="L83">                    List.of(keyPrefix + &quot;:&quot; + key),</span>
+<span class="fc" id="L84">                    String.valueOf(now),</span>
+<span class="fc" id="L85">                    String.valueOf(window.toMillis()),</span>
+<span class="fc" id="L86">                    String.valueOf(limit.getAsInt()),</span>
+<span class="fc" id="L87">                    now + &quot;-&quot; + UUID.randomUUID());</span>
+<span class="pc bpc" id="L88" title="2 of 4 branches missed.">            return allowed != null &amp;&amp; allowed == 1L;</span>
+<span class="fc" id="L89">        } catch (DataAccessException e) {</span>
+<span class="fc" id="L90">            return failures.allowOrThrow(component, e);</span>
+        }
+    }
+
+    /**
+     * 被拒之后多久能再来：窗口里最早那一次滑出窗口的时间（至少 1 秒），和内存版的算法一样。只是建议值，不需要原子；出错时给 1 秒。
+     */
+    @Override
+    public Duration retryAfter(String key) {
+        try {
+<span class="nc" id="L100">            failures.ensureAvailable();</span>
+<span class="nc" id="L101">            Set&lt;ZSetOperations.TypedTuple&lt;String&gt;&gt; oldest =</span>
+<span class="nc" id="L102">                    redis.opsForZSet().rangeWithScores(keyPrefix + &quot;:&quot; + key, 0, 0);</span>
+<span class="nc bnc" id="L103" title="All 4 branches missed.">            if (oldest == null || oldest.isEmpty()) {</span>
+<span class="nc" id="L104">                return Duration.ZERO;</span>
+            }
+<span class="nc" id="L106">            Double score = oldest.iterator().next().getScore();</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">            long waitMs = (score == null ? 0 : score.longValue()) + window.toMillis() - clock.millis();</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">            return waitMs &lt; 0</span>
+<span class="nc" id="L109">                    ? Duration.ZERO</span>
+<span class="nc" id="L110">                    : Duration.ofMillis(waitMs).plusSeconds(1).withNanos(0);</span>
+<span class="nc" id="L111">        } catch (DataAccessException e) {</span>
+<span class="nc" id="L112">            failures.record(component, e);</span>
+<span class="nc" id="L113">            return Duration.ofSeconds(1);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

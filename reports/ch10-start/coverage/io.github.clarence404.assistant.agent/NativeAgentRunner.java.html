@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>NativeAgentRunner.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">NativeAgentRunner.java</span></div><h1>NativeAgentRunner.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.ops.UsageAdvisor;
+import io.github.clarence404.assistant.prompt.AssistantPrompts;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.support.ToolCallbacks;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.Resource;
+import org.springframework.stereotype.Component;
+
+/**
+ * 方案 A：把循环交给 Spring AI 原生的工具调用（{@code assistant.agent.mode=native}，第 7 章引入，用来和方案 B 对比）。
+ *
+ * &lt;p&gt;所在层：Agent 的另一种实现。上游是 {@link AgentService}；工具的执行、写操作的核对与登记和方案 B 完全共用（{@link AgentToolbox}、
+ * {@link WriteActionGuard}、{@link ConfirmationService}），不同的只是「谁来转圈」。
+ *
+ * &lt;p&gt;&lt;b&gt;怎么转圈&lt;/b&gt;：和第 3 章一样，把工具（这里是 8 个 {@code @Tool} 方法）注册给这次请求，{@code call()} 一次。Spring AI 的
+ * {@code ToolCallingAdvisor} 在内部循环：模型要调工具 → 执行 → 把结果作为工具消息追加进去 → 再问模型……直到模型直接回答。我们的代码只在每个工具方法里
+ * 执行一步、记一步。
+ *
+ * &lt;p&gt;&lt;b&gt;和方案 B 比&lt;/b&gt;（实测见 docs/ch07.md）：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;代码短：没有自己的循环、不用拼办事记录；模型一次可以并行调好几个工具
+ *   &lt;li&gt;看不见「想法」：模型调工具时不输出文字，调试面板里每一步的 thought 是空的
+ *   &lt;li&gt;刹车不在我们手里：一次请求里最多调几次工具由 Spring AI 的全局配置 {@code spring.ai.tools.limits.*} 决定（2.0.2 没有按请求设置的入口），
+ *       本项目是共 4 次、每个工具 2 次，比方案 B 的 6 步少；这里的工具方法只能在超过 {@code max-steps} 后返回「别再调了」
+ *   &lt;li&gt;要模型支持原生工具调用：命令行模型（{@code native-calling=false}）不行，{@link AgentService} 会退回方案 B
+ * &lt;/ul&gt;
+ */
+@Component
+public class NativeAgentRunner {
+
+<span class="fc" id="L47">    private static final Logger log = LoggerFactory.getLogger(NativeAgentRunner.class);</span>
+
+    /** ToolContext 里放这次办事的键：工具方法从这里拿到 {@link AgentRun}（令牌也在里面，只给代码用，不发给模型）。 */
+    static final String RUN = &quot;agentRun&quot;;
+
+    private final ChatClient chatClient;
+    private final AssistantPrompts prompts;
+    private final AgentToolbox toolbox;
+    private final WriteActionGuard guard;
+    private final ConfirmationService confirmations;
+    private final AgentProperties properties;
+    private final Resource systemTemplate;
+    private final List&lt;ToolCallback&gt; callbacks;
+
+    /**
+     * 创建。
+     *
+     * @param chatClient 共享的 ChatClient
+     * @param prompts 模板变量
+     * @param toolbox 只读工具
+     * @param guard 写操作核对
+     * @param confirmations 待确认操作登记
+     * @param properties {@code assistant.agent.*}
+     */
+    public NativeAgentRunner(
+            ChatClient chatClient,
+            AssistantPrompts prompts,
+            AgentToolbox toolbox,
+            WriteActionGuard guard,
+            ConfirmationService confirmations,
+<span class="fc" id="L77">            AgentProperties properties) {</span>
+<span class="fc" id="L78">        this.chatClient = chatClient;</span>
+<span class="fc" id="L79">        this.prompts = prompts;</span>
+<span class="fc" id="L80">        this.toolbox = toolbox;</span>
+<span class="fc" id="L81">        this.guard = guard;</span>
+<span class="fc" id="L82">        this.confirmations = confirmations;</span>
+<span class="fc" id="L83">        this.properties = properties;</span>
+<span class="fc" id="L84">        this.systemTemplate = new ClassPathResource(&quot;prompts/&quot; + properties.nativePrompt() + &quot;.st&quot;);</span>
+        // 按名字排序：工具清单的顺序就是提示词的一部分，顺序固定，录制回放才稳定（同第 3 章 MallTools）
+<span class="fc" id="L86">        this.callbacks = Arrays.stream(ToolCallbacks.from(new Tools()))</span>
+<span class="fc" id="L87">                .sorted(Comparator.comparing(c -&gt; c.getToolDefinition().name()))</span>
+<span class="fc" id="L88">                .toList();</span>
+<span class="fc" id="L89">    }</span>
+
+    /**
+     * 跑一次办事：一次 {@code call()}，Spring AI 在里面循环调工具。
+     *
+     * @param run 这次办事
+     * @return 结果
+     * @throws ModelCallException 模型调用失败
+     */
+    public AgentResult run(AgentRun run) {
+<span class="fc" id="L99">        long start = System.nanoTime();</span>
+        String content;
+        try {
+<span class="fc" id="L102">            content = chatClient</span>
+<span class="fc" id="L103">                    .prompt()</span>
+<span class="fc" id="L104">                    .system(s -&gt; s.text(systemTemplate).params(prompts.variables()))</span>
+<span class="fc" id="L105">                    .messages(run.task().history())</span>
+<span class="fc" id="L106">                    .user(run.task().message())</span>
+<span class="fc" id="L107">                    .tools(callbacks.toArray())</span>
+<span class="fc" id="L108">                    .toolContext(Map.of(RUN, run))</span>
+<span class="fc" id="L109">                    .options(ChatOptions.builder().temperature(0.0))</span>
+<span class="fc" id="L110">                    .advisors(UsageAdvisor.stage(&quot;agent&quot;)) // 第 9 章：Token 记账时标明这是 Agent（方案 A）</span>
+<span class="fc" id="L111">                    .call()</span>
+<span class="fc" id="L112">                    .content();</span>
+<span class="nc" id="L113">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L114">            throw ModelCallException.from(e);</span>
+<span class="fc" id="L115">        }</span>
+<span class="fc" id="L116">        String answer = Objects.requireNonNullElse(content, &quot;&quot;).strip();</span>
+        AgentTrace.StopReason reason;
+        String reply;
+<span class="pc bpc" id="L119" title="1 of 2 branches missed.">        if (run.confirmation() != null) {</span>
+<span class="fc" id="L120">            reason = AgentTrace.StopReason.AWAITING_CONFIRMATION;</span>
+<span class="fc" id="L121">            reply = AgentReplies.awaitingConfirmation(run.confirmation());</span>
+        } else {
+<span class="nc" id="L123">            reason = AgentTrace.StopReason.FINISHED;</span>
+<span class="nc" id="L124">            reply = AgentReplies.checkFinish(answer);</span>
+<span class="nc" id="L125">            run.record(</span>
+<span class="nc" id="L126">                    AgentLoop.step(run, null, AgentTool.FINISH.toolName(), AgentStep.Kind.FINISH, &quot;{}&quot;, answer, start));</span>
+        }
+<span class="fc" id="L128">        log.info(&quot;Agent（native）停止：{}，共 {} 步，{} ms&quot;, reason, run.steps().size(), run.elapsedMs());</span>
+<span class="fc" id="L129">        return new AgentResult(</span>
+<span class="fc" id="L130">                reply, new AgentTrace(&quot;native&quot;, run.steps(), reason, run.elapsedMs()), run.confirmation());</span>
+    }
+
+    /**
+     * 执行模型选的一个工具：和方案 B 同样的校验（看懂参数、重复次数、只读直接执行、写操作只登记待确认），记一步。
+     *
+     * @param context 这次请求的 ToolContext（里面是 {@link AgentRun}）
+     * @param decision 模型的调用（工具名 + 参数，拼成和方案 B 一样的 {@link AgentDecision}）
+     * @return 交还给模型的工具结果
+     */
+    String perform(ToolContext context, AgentDecision decision) {
+<span class="fc" id="L141">        AgentRun run = (AgentRun) context.getContext().get(RUN);</span>
+<span class="fc" id="L142">        long start = System.nanoTime();</span>
+<span class="pc bpc" id="L143" title="1 of 2 branches missed.">        if (run.confirmation() != null) {</span>
+<span class="nc" id="L144">            return &quot;这一轮已经提出了待确认操作，不要再调用工具，直接告诉用户去点确认卡片&quot;;</span>
+        }
+<span class="pc bpc" id="L146" title="1 of 2 branches missed.">        if (run.steps().size() &gt;= properties.maxSteps()) {</span>
+<span class="nc" id="L147">            return &quot;已经到了步数上限，不要再调用工具，直接告诉用户没办完&quot;;</span>
+        }
+<span class="fc" id="L149">        AgentAction.Parsed parsed = AgentAction.parse(decision);</span>
+<span class="pc bpc" id="L150" title="1 of 2 branches missed.">        if (!parsed.valid()) {</span>
+<span class="nc" id="L151">            run.record(</span>
+<span class="nc" id="L152">                    AgentLoop.step(run, null, decision.action(), AgentStep.Kind.REJECTED, &quot;{}&quot;, parsed.error(), start));</span>
+<span class="nc" id="L153">            return parsed.error();</span>
+        }
+<span class="fc" id="L155">        AgentAction action = parsed.action();</span>
+        String observation;
+        AgentStep.Kind kind;
+<span class="pc bpc" id="L158" title="1 of 2 branches missed.">        if (run.calls(action.key()) &gt;= properties.maxSameCalls()) {</span>
+<span class="nc" id="L159">            kind = AgentStep.Kind.REJECTED;</span>
+<span class="nc" id="L160">            observation = &quot;这个调用已经做过了，结果不会变，不要再重复&quot;;</span>
+<span class="fc bfc" id="L161" title="All 2 branches covered.">        } else if (action.tool().kind() == AgentTool.Kind.READ) {</span>
+<span class="fc" id="L162">            run.called(action.key());</span>
+<span class="fc" id="L163">            kind = AgentStep.Kind.READ;</span>
+<span class="fc" id="L164">            observation = toolbox.read(run, action);</span>
+        } else {
+<span class="fc" id="L166">            run.called(action.key());</span>
+<span class="fc" id="L167">            WriteActionGuard.Proposal proposal = guard.check(run, action);</span>
+<span class="pc bpc" id="L168" title="1 of 2 branches missed.">            if (!proposal.accepted()) {</span>
+<span class="nc" id="L169">                kind = AgentStep.Kind.REJECTED;</span>
+<span class="nc" id="L170">                observation = &quot;没有生成确认：&quot; + proposal.rejection();</span>
+            } else {
+                PendingConfirmation pending;
+                try {
+<span class="fc" id="L174">                    pending = confirmations.create(</span>
+<span class="fc" id="L175">                            proposal.action(), run.task().owner(), run.task().conversationId());</span>
+<span class="nc" id="L176">                } catch (ConfirmationException e) {</span>
+                    // 第 10 章：确认存不进去，告诉模型没有生成，让它转告用户稍后再说
+<span class="nc" id="L178">                    run.record(AgentLoop.step(</span>
+                            run,
+                            null,
+<span class="nc" id="L181">                            action.tool().toolName(),</span>
+                            AgentStep.Kind.REJECTED,
+<span class="nc" id="L183">                            action.argumentsJson(),</span>
+<span class="nc" id="L184">                            &quot;没有生成确认：&quot; + e.failure().message(),</span>
+                            start));
+<span class="nc" id="L186">                    return &quot;没有生成确认，也没有执行：确认服务暂时不可用，用一句话请用户稍后再说一次&quot;;</span>
+<span class="fc" id="L187">                }</span>
+<span class="fc" id="L188">                run.record(AgentLoop.step(</span>
+                        run,
+                        null,
+<span class="fc" id="L191">                        action.tool().toolName(),</span>
+                        AgentStep.Kind.PROPOSE,
+<span class="fc" id="L193">                        action.argumentsJson(),</span>
+<span class="fc" id="L194">                        &quot;已生成待确认操作（&quot; + pending.summary() + &quot;），等用户在页面上点确认&quot;,</span>
+                        start));
+<span class="fc" id="L196">                run.propose(pending);</span>
+<span class="fc" id="L197">                return &quot;已生成待确认操作，还没有执行：用一句话请用户在页面的确认卡片上点「确认」&quot;;</span>
+            }
+        }
+<span class="fc" id="L200">        run.record(</span>
+<span class="fc" id="L201">                AgentLoop.step(run, null, action.tool().toolName(), kind, action.argumentsJson(), observation, start));</span>
+<span class="fc" id="L202">        return observation;</span>
+    }
+
+    /** 注册给模型的 8 个工具：只是把模型的调用转成 {@link AgentDecision}，交给 {@link #perform}。说明写给模型看。 */
+<span class="fc" id="L206">    public final class Tools {</span>
+
+        @Tool(name = &quot;listMyOrders&quot;, description = &quot;列出当前用户最近的订单。用户没给订单号时先用它。&quot;)
+        public String listMyOrders(ToolContext context) {
+<span class="nc" id="L210">            return perform(context, AgentDecision.of(null, &quot;listMyOrders&quot;, null));</span>
+        }
+
+        @Tool(name = &quot;queryOrder&quot;, description = &quot;查一笔订单的状态、商品、收货信息和 allowedActions（这笔订单现在能办的操作）。&quot;)
+        public String queryOrder(
+                @ToolParam(description = &quot;订单号，19 位或 23 位数字，照抄用户的话或查询结果&quot;) String orderNo, ToolContext context) {
+<span class="fc" id="L216">            return perform(context, AgentDecision.of(null, &quot;queryOrder&quot;, orderNo));</span>
+        }
+
+        @Tool(name = &quot;queryPayment&quot;, description = &quot;查一笔订单的支付状态。&quot;)
+        public String queryPayment(@ToolParam(description = &quot;订单号&quot;) String orderNo, ToolContext context) {
+<span class="nc" id="L221">            return perform(context, AgentDecision.of(null, &quot;queryPayment&quot;, orderNo));</span>
+        }
+
+        @Tool(name = &quot;queryProduct&quot;, description = &quot;按商品编号查商品的名称、价格、是否在售、是否有货。&quot;)
+        public String queryProduct(@ToolParam(description = &quot;商品编号，一串数字&quot;) String skuId, ToolContext context) {
+<span class="nc" id="L226">            return perform(context, new AgentDecision(null, &quot;queryProduct&quot;, null, skuId));</span>
+        }
+
+        @Tool(name = &quot;searchPolicy&quot;, description = &quot;查商城的售后规则（退换货、退款、运费等），返回编了号的规则资料。&quot;)
+        public String searchPolicy(@ToolParam(description = &quot;要查的规则，一句话&quot;) String query, ToolContext context) {
+<span class="nc" id="L231">            return perform(context, new AgentDecision(null, &quot;searchPolicy&quot;, null, query));</span>
+        }
+
+        @Tool(name = &quot;cancelOrder&quot;, description = &quot;取消一笔待支付的订单。不会马上执行，只生成待确认操作，要用户点按钮确认。&quot;)
+        public String cancelOrder(@ToolParam(description = &quot;订单号&quot;) String orderNo, ToolContext context) {
+<span class="fc" id="L236">            return perform(context, AgentDecision.of(null, &quot;cancelOrder&quot;, orderNo));</span>
+        }
+
+        @Tool(name = &quot;changeAddress&quot;, description = &quot;修改一笔订单的收货地址（发货前）。不会马上执行，只生成待确认操作，要用户点按钮确认。&quot;)
+        public String changeAddress(
+                @ToolParam(description = &quot;订单号&quot;) String orderNo,
+                @ToolParam(description = &quot;新的详细地址，照抄用户的原话&quot;) String address,
+                ToolContext context) {
+<span class="nc" id="L244">            return perform(context, new AgentDecision(null, &quot;changeAddress&quot;, orderNo, address));</span>
+        }
+
+        @Tool(name = &quot;applyAfterSales&quot;, description = &quot;为一笔订单提交退款、退货等售后申请，由人工审核。不会马上执行，只生成待确认操作，要用户点按钮确认。&quot;)
+        public String applyAfterSales(
+                @ToolParam(description = &quot;订单号&quot;) String orderNo,
+                @ToolParam(description = &quot;售后原因，用户说的&quot;) String reason,
+                ToolContext context) {
+<span class="nc" id="L252">            return perform(context, new AgentDecision(null, &quot;applyAfterSales&quot;, orderNo, reason));</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

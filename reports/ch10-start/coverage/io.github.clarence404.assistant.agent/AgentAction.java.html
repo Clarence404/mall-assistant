@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AgentAction.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">AgentAction.java</span></div><h1>AgentAction.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.regex.Pattern;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * 校验、整理过的一步动作：哪个工具、哪些参数（第 7 章引入）。
+ *
+ * &lt;p&gt;所在层：Agent 的领域模型。由 {@link #parse} 从模型的 {@link AgentDecision} 得到；{@link AgentLoop} 和 {@link NativeAgentRunner} 拿它去执行
+ * 只读工具或生成待确认操作，{@link #key()} 用来判断「是不是又在做同一件事」。
+ *
+ * &lt;p&gt;参数只保留这个工具用得到的那几个（模型在别的字段里填的东西一律丢掉），按固定顺序放进 {@link LinkedHashMap}：同样的调用得到同样的
+ * {@link #argumentsJson()}，重复检测和录制回放才稳定。
+ *
+ * @param tool 工具
+ * @param arguments 参数（只含这个工具用得到的、非空的），不可修改
+ * @param thought 模型这一步的想法，可以为 null
+ */
+public record AgentAction(AgentTool tool, Map&lt;String, String&gt; arguments, String thought) {
+
+    /** 订单号：19 位雪花 ID，或 19 位 + 4 位用户基因共 23 位（和第 2 章 IntentResult 同一个规则）。 */
+<span class="fc" id="L25">    static final Pattern ORDER_NO = Pattern.compile(&quot;\\d{19}|\\d{23}&quot;);</span>
+
+    /** 商品编号：long 型 ID。 */
+<span class="fc" id="L28">    static final Pattern SKU_ID = Pattern.compile(&quot;\\d{1,19}&quot;);</span>
+
+    /** 规则查询、售后原因、回答、想法的长度上限：模型写一大段时截短，不让它把上下文撑满。 */
+    static final int MAX_QUERY_CHARS = 100;
+
+    static final int MAX_REASON_CHARS = 200;
+    static final int MAX_ANSWER_CHARS = 500;
+    static final int MAX_THOUGHT_CHARS = 200;
+
+<span class="fc" id="L37">    private static final JsonMapper JSON = JsonMapper.builder().build();</span>
+
+    /** 规范化：参数不可修改。 */
+<span class="fc" id="L40">    public AgentAction {</span>
+<span class="fc" id="L41">        arguments = Collections.unmodifiableMap(new LinkedHashMap&lt;&gt;(arguments));</span>
+<span class="fc" id="L42">    }</span>
+
+    /**
+     * 取一个参数。
+     *
+     * @param name 参数名，如 orderNo
+     * @return 值；没有时为 null
+     */
+    public String argument(String name) {
+<span class="fc" id="L51">        return arguments.get(name);</span>
+    }
+
+    /** 参数的 JSON（按固定顺序），如 {@code {&quot;orderNo&quot;:&quot;2118...&quot;}}；没有参数时是 {@code {}}。 */
+    public String argumentsJson() {
+<span class="fc" id="L56">        return JSON.writeValueAsString(arguments);</span>
+    }
+
+    /** 「同一个调用」的键：工具名 + 参数。同一个键执行超过 {@code max-same-calls} 次就不再执行。 */
+    public String key() {
+<span class="fc" id="L61">        return tool.toolName() + &quot; &quot; + argumentsJson();</span>
+    }
+
+    /**
+     * 把模型给的下一步动作校验、整理成可以执行的动作（ch07-1）。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;decision 为 null（模型输出解析不了）：无效，原因「输出看不懂」之类
+     *   &lt;li&gt;{@link AgentTool#from} 认不出 action：无效，原因里列出全部工具名（{@link AgentTool#names()}），让模型下一步改正
+     *   &lt;li&gt;每个值先 {@link #clean}：去掉首尾空白；空串、{@code &quot;null&quot;}、{@code &quot;无&quot;} 都当作没填（小模型常常把 null 写成字符串）
+     *   &lt;li&gt;按工具检查必填参数，缺了或格式不对就无效，原因要说清楚缺什么、应该是什么样：
+     *       &lt;ul&gt;
+     *         &lt;li&gt;listMyOrders：无参数
+     *         &lt;li&gt;queryOrder、queryPayment、cancelOrder：orderNo，去掉中间的空格后要符合 {@link #ORDER_NO}
+     *         &lt;li&gt;queryProduct：input 作为 skuId，符合 {@link #SKU_ID}
+     *         &lt;li&gt;searchPolicy：input 作为 query，超过 {@link #MAX_QUERY_CHARS} 字截短
+     *         &lt;li&gt;changeAddress：orderNo，input 作为 address（新的详细地址；长度和来源由 {@link WriteActionGuard} 再查）
+     *         &lt;li&gt;applyAfterSales：orderNo，input 作为 reason（超过 {@link #MAX_REASON_CHARS} 字截短）
+     *         &lt;li&gt;finish：input 作为 answer（超过 {@link #MAX_ANSWER_CHARS} 字截短）
+     *       &lt;/ul&gt;
+     *       模型只填一个通用的 input（见 {@link AgentDecision} 为什么只有四个字段），代码按工具给它起名字放进参数：之后的校验、确认卡片、执行都用这个名字
+     *   &lt;li&gt;参数按上面列的顺序放；thought 清理后超过 {@link #MAX_THOUGHT_CHARS} 字截短，可以为 null
+     * &lt;/ul&gt;
+     *
+     * &lt;p&gt;为什么无效的动作不直接报错结束：模型这一步犯的错，告诉它错在哪，它下一步多半能改对（和第 2 章「解析失败重试一次」一个道理）。
+     * 由 {@link AgentLoop} 把原因作为这一步的结果写进办事记录，算一步，步数上限兜底。
+     *
+     * @param decision 模型的输出，可以为 null
+     * @return 解析结果：要么是动作，要么是给模型看的错误原因
+     */
+    public static Parsed parse(AgentDecision decision) {
+<span class="fc bfc" id="L94" title="All 2 branches covered.">        if (decision == null) {</span>
+<span class="fc" id="L95">            return Parsed.invalid(null, &quot;这一步的输出看不懂（不是约定的 JSON），请按格式重新输出下一步&quot;);</span>
+        }
+<span class="fc" id="L97">        String thought = truncate(clean(decision.thought()), MAX_THOUGHT_CHARS);</span>
+<span class="fc" id="L98">        AgentTool tool = AgentTool.from(clean(decision.action()));</span>
+<span class="fc bfc" id="L99" title="All 2 branches covered.">        if (tool == null) {</span>
+<span class="fc" id="L100">            return Parsed.invalid(thought, &quot;没有叫「&quot; + decision.action() + &quot;」的工具，action 只能是：&quot; + AgentTool.names());</span>
+        }
+<span class="fc" id="L102">        Map&lt;String, String&gt; args = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L103" title="All 7 branches covered.">        String error = switch (tool) {</span>
+<span class="fc" id="L104">            case LIST_MY_ORDERS -&gt; null;</span>
+<span class="fc" id="L105">            case QUERY_ORDER, QUERY_PAYMENT, CANCEL_ORDER -&gt; orderNo(decision, args);</span>
+            case QUERY_PRODUCT -&gt; {
+<span class="fc" id="L107">                String sku = clean(decision.input());</span>
+<span class="pc bpc" id="L108" title="1 of 4 branches missed.">                if (sku == null || !SKU_ID.matcher(sku).matches()) {</span>
+<span class="fc" id="L109">                    yield &quot;queryProduct 需要 input：商品编号，一串数字，照抄用户的话；办售后不用查商品，要查售后规则用 searchPolicy&quot;;</span>
+                }
+<span class="fc" id="L111">                args.put(&quot;skuId&quot;, sku);</span>
+<span class="fc" id="L112">                yield null;</span>
+            }
+            case SEARCH_POLICY -&gt; {
+<span class="fc" id="L115">                String query = clean(decision.input());</span>
+<span class="fc bfc" id="L116" title="All 2 branches covered.">                if (query == null) {</span>
+<span class="fc" id="L117">                    yield &quot;searchPolicy 需要 input：要查的规则，一句话&quot;;</span>
+                }
+<span class="fc" id="L119">                args.put(&quot;query&quot;, truncate(query, MAX_QUERY_CHARS));</span>
+<span class="fc" id="L120">                yield null;</span>
+            }
+            case CHANGE_ADDRESS -&gt; {
+<span class="fc" id="L123">                String orderError = orderNo(decision, args);</span>
+<span class="pc bpc" id="L124" title="1 of 2 branches missed.">                if (orderError != null) {</span>
+<span class="nc" id="L125">                    yield orderError;</span>
+                }
+<span class="fc" id="L127">                String address = clean(decision.input());</span>
+<span class="fc bfc" id="L128" title="All 2 branches covered.">                if (address == null) {</span>
+<span class="fc" id="L129">                    yield &quot;changeAddress 需要 input：新的详细地址，照抄用户的原话&quot;;</span>
+                }
+<span class="fc" id="L131">                args.put(&quot;address&quot;, address);</span>
+<span class="fc" id="L132">                yield null;</span>
+            }
+            case APPLY_AFTER_SALES -&gt; {
+<span class="fc" id="L135">                String orderError = orderNo(decision, args);</span>
+<span class="pc bpc" id="L136" title="1 of 2 branches missed.">                if (orderError != null) {</span>
+<span class="nc" id="L137">                    yield orderError;</span>
+                }
+<span class="fc" id="L139">                String reason = clean(decision.input());</span>
+<span class="fc bfc" id="L140" title="All 2 branches covered.">                if (reason == null) {</span>
+<span class="fc" id="L141">                    yield &quot;applyAfterSales 需要 input：用户说的售后原因&quot;;</span>
+                }
+<span class="fc" id="L143">                args.put(&quot;reason&quot;, truncate(reason, MAX_REASON_CHARS));</span>
+<span class="fc" id="L144">                yield null;</span>
+            }
+            case FINISH -&gt; {
+<span class="fc" id="L147">                String answer = clean(decision.input());</span>
+<span class="fc bfc" id="L148" title="All 2 branches covered.">                if (answer == null) {</span>
+<span class="fc" id="L149">                    yield &quot;finish 需要 input：给用户的回答&quot;;</span>
+                }
+<span class="fc" id="L151">                args.put(&quot;answer&quot;, truncate(answer, MAX_ANSWER_CHARS));</span>
+<span class="fc" id="L152">                yield null;</span>
+            }
+        };
+<span class="fc bfc" id="L155" title="All 2 branches covered.">        return error != null ? Parsed.invalid(thought, error) : Parsed.ok(new AgentAction(tool, args, thought));</span>
+    }
+
+    /** 订单号：去掉中间的空格后校验格式，放进参数；不对时返回原因。 */
+    private static String orderNo(AgentDecision decision, Map&lt;String, String&gt; args) {
+<span class="fc" id="L160">        String no = clean(decision.orderNo());</span>
+<span class="fc bfc" id="L161" title="All 2 branches covered.">        no = no == null ? null : no.replaceAll(&quot;\\s&quot;, &quot;&quot;);</span>
+<span class="fc bfc" id="L162" title="All 4 branches covered.">        if (no == null || !ORDER_NO.matcher(no).matches()) {</span>
+<span class="fc" id="L163">            return &quot;需要 orderNo：19 位或 23 位数字，只能照抄用户的话或查询结果里的订单号，不要编&quot;;</span>
+        }
+<span class="fc" id="L165">        args.put(&quot;orderNo&quot;, no);</span>
+<span class="fc" id="L166">        return null;</span>
+    }
+
+    /**
+     * 清理模型填的一个值：去掉首尾空白；空串、{@code &quot;null&quot;}、{@code &quot;none&quot;}、{@code &quot;无&quot;} 当作没填。
+     *
+     * @param value 原值，可以为 null
+     * @return 清理后的值；没填时为 null
+     */
+    static String clean(String value) {
+<span class="fc bfc" id="L176" title="All 2 branches covered.">        if (value == null) {</span>
+<span class="fc" id="L177">            return null;</span>
+        }
+<span class="fc" id="L179">        String stripped = value.strip();</span>
+<span class="fc bfc" id="L180" title="All 2 branches covered.">        return stripped.isEmpty()</span>
+<span class="fc bfc" id="L181" title="All 2 branches covered.">                        || &quot;null&quot;.equalsIgnoreCase(stripped)</span>
+<span class="pc bpc" id="L182" title="1 of 2 branches missed.">                        || &quot;none&quot;.equalsIgnoreCase(stripped)</span>
+<span class="fc bfc" id="L183" title="All 2 branches covered.">                        || &quot;无&quot;.equals(stripped)</span>
+<span class="fc" id="L184">                ? null</span>
+<span class="fc" id="L185">                : stripped;</span>
+    }
+
+    private static String truncate(String value, int max) {
+<span class="fc bfc" id="L189" title="All 4 branches covered.">        return value == null || value.length() &lt;= max ? value : value.substring(0, max);</span>
+    }
+
+    /**
+     * 解析结果：动作和错误原因二选一。
+     *
+     * @param action 动作；无效时为 null
+     * @param thought 模型的想法（无效时也留着，调试面板显示）
+     * @param error 无效的原因（给模型看，写进下一步的办事记录）；有效时为 null
+     */
+<span class="fc" id="L199">    public record Parsed(AgentAction action, String thought, String error) {</span>
+
+        /** 有效。 */
+        static Parsed ok(AgentAction action) {
+<span class="fc" id="L203">            return new Parsed(action, action.thought(), null);</span>
+        }
+
+        /** 无效。 */
+        static Parsed invalid(String thought, String error) {
+<span class="fc" id="L208">            return new Parsed(null, thought, error);</span>
+        }
+
+        /** 是否有效。 */
+        public boolean valid() {
+<span class="fc bfc" id="L213" title="All 2 branches covered.">            return action != null;</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,235 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RedisStateConfig.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.state</a> &gt; <span class="el_source">RedisStateConfig.java</span></div><h1>RedisStateConfig.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.state;
+
+import io.github.clarence404.assistant.agent.ConfirmationStore;
+import io.github.clarence404.assistant.guard.ConcurrencyLimiter;
+import io.github.clarence404.assistant.guard.GuardProperties;
+import io.github.clarence404.assistant.guard.RateLimiterFactory;
+import io.github.clarence404.assistant.guard.SemaphoreConcurrencyLimiter;
+import io.github.clarence404.assistant.memory.ConversationLocks;
+import io.github.clarence404.assistant.memory.OwnerCache;
+import io.github.clarence404.assistant.ops.UsageStore;
+import io.lettuce.core.ClientOptions;
+import io.lettuce.core.SocketOptions;
+import java.net.URI;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.connection.RedisPassword;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * 共享状态的 Redis 实现（{@code assistant.state.store=redis}）：多个实例共用限流、预算、并发名额、待确认操作、会话标记与归属缓存（第 10 章引入）。
+ *
+ * &lt;p&gt;所在层：共享状态的装配。和 {@link MemoryStateConfig} 二选一。连接自己建（不用 Spring Boot 的 Redis Starter，原因见 pom.xml）：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;{@link LettuceConnectionFactory}：Lettuce 是 Spring Data Redis 默认的客户端，基于 Netty，一条连接可以被所有线程共用（命令排队发出去、
+ *       按顺序收回来），所以不用连接池。&lt;b&gt;启动时不连&lt;/b&gt;（Lettuce 第一次用到时才建连接）：Redis 没启动，应用照样起得来，只是用到时按策略处理
+ *   &lt;li&gt;命令超时 {@code assistant.state.redis.timeout}（500 毫秒）、连接超时 {@code connect-timeout}（1 秒）：Redis 慢了就当它挂了，不让请求卡住
+ *   &lt;li&gt;断线时立刻拒绝命令（{@code REJECT_COMMANDS}）：Lettuce 默认会把命令攒着等重连，等到超时才失败；这里宁可马上失败、马上按策略处理
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;没有用 Redisson、Spring Integration 的 RedisLockRegistry 这类现成的分布式锁 / 限流库：它们功能更全（看门狗自动续期、可重入、公平锁），
+ * 但这一章要讲清楚的正是「几条命令 + 一段 Lua 怎么做到原子」，生产上可以换成它们。
+ */
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnProperty(name = &quot;assistant.state.store&quot;, havingValue = &quot;redis&quot;)
+<span class="fc" id="L46">public class RedisStateConfig {</span>
+
+<span class="fc" id="L48">    private static final Logger log = LoggerFactory.getLogger(RedisStateConfig.class);</span>
+
+    /**
+     * 连接工厂：地址、库号、用户名与密码都从 {@code assistant.state.redis.url} 解析（{@code redis://[用户名]:[密码]@主机:端口/库号}）。
+     *
+     * @param properties {@code assistant.state.*}
+     * @return 连接工厂；Spring 启动时调它的 {@code afterPropertiesSet} / {@code start}，关闭时 {@code destroy}
+     */
+    @Bean
+    public LettuceConnectionFactory stateRedisConnectionFactory(StateProperties properties) {
+<span class="fc" id="L58">        StateProperties.Redis redis = properties.redis();</span>
+<span class="fc" id="L59">        RedisStandaloneConfiguration server = server(redis.url());</span>
+<span class="fc" id="L60">        LettuceClientConfiguration client = LettuceClientConfiguration.builder()</span>
+<span class="fc" id="L61">                .commandTimeout(redis.timeout())</span>
+<span class="fc" id="L62">                .clientOptions(ClientOptions.builder()</span>
+<span class="fc" id="L63">                        .socketOptions(SocketOptions.builder()</span>
+<span class="fc" id="L64">                                .connectTimeout(redis.connectTimeout())</span>
+<span class="fc" id="L65">                                .build())</span>
+<span class="fc" id="L66">                        .disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS)</span>
+<span class="fc" id="L67">                        .build())</span>
+<span class="fc" id="L68">                .build();</span>
+        // 日志里只打主机、端口和库号，不打密码
+<span class="fc" id="L70">        log.info(</span>
+                &quot;共享状态存进 Redis：{}:{}，库 {}，键前缀 {}（Redis 出错时限流与预算的策略：{}）&quot;,
+<span class="fc" id="L72">                server.getHostName(),</span>
+<span class="fc" id="L73">                server.getPort(),</span>
+<span class="fc" id="L74">                server.getDatabase(),</span>
+<span class="fc" id="L75">                redis.keyPrefix(),</span>
+<span class="fc" id="L76">                properties.onRedisError());</span>
+<span class="fc" id="L77">        return new LettuceConnectionFactory(server, client);</span>
+    }
+
+    /**
+     * 解析连接地址。用 JDK 的 {@link URI}：{@code redis://:密码@主机:6379/5} 里，密码在 userInfo（冒号前是用户名，Redis 6 起的 ACL 用户，没有就空着），
+     * 库号是路径。
+     *
+     * @param url 连接地址
+     * @return 单机 Redis 的配置
+     */
+    static RedisStandaloneConfiguration server(String url) {
+<span class="fc" id="L88">        URI uri = URI.create(url);</span>
+<span class="pc bpc" id="L89" title="2 of 4 branches missed.">        if (!&quot;redis&quot;.equals(uri.getScheme()) || uri.getHost() == null) {</span>
+<span class="nc" id="L90">            throw new IllegalArgumentException(&quot;assistant.state.redis.url 要写成 redis://主机:端口/库号&quot;);</span>
+        }
+<span class="fc" id="L92">        RedisStandaloneConfiguration server =</span>
+<span class="pc bpc" id="L93" title="1 of 2 branches missed.">                new RedisStandaloneConfiguration(uri.getHost(), uri.getPort() &lt; 0 ? 6379 : uri.getPort());</span>
+<span class="fc" id="L94">        String path = uri.getPath();</span>
+<span class="pc bpc" id="L95" title="2 of 4 branches missed.">        if (path != null &amp;&amp; path.length() &gt; 1) {</span>
+<span class="fc" id="L96">            server.setDatabase(Integer.parseInt(path.substring(1)));</span>
+        }
+<span class="fc" id="L98">        String userInfo = uri.getRawUserInfo();</span>
+<span class="pc bpc" id="L99" title="1 of 2 branches missed.">        if (userInfo != null) {</span>
+<span class="nc" id="L100">            int colon = userInfo.indexOf(':');</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">            String user = colon &lt; 0 ? userInfo : userInfo.substring(0, colon);</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">            String password = colon &lt; 0 ? &quot;&quot; : userInfo.substring(colon + 1);</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">            if (!user.isEmpty()) {</span>
+<span class="nc" id="L104">                server.setUsername(URLDecoder.decode(user, StandardCharsets.UTF_8));</span>
+            }
+<span class="nc bnc" id="L106" title="All 2 branches missed.">            if (!password.isEmpty()) {</span>
+<span class="nc" id="L107">                server.setPassword(RedisPassword.of(URLDecoder.decode(password, StandardCharsets.UTF_8)));</span>
+            }
+        }
+<span class="fc" id="L110">        return server;</span>
+    }
+
+    /**
+     * 读写字符串的模板：键、值、Lua 脚本的参数都按字符串处理，在 redis-cli 里看得懂。
+     *
+     * @param factory 连接工厂
+     * @return 模板
+     */
+    @Bean
+    public StringRedisTemplate stateRedisTemplate(LettuceConnectionFactory factory) {
+<span class="fc" id="L121">        return new StringRedisTemplate(factory);</span>
+    }
+
+    /**
+     * 键前缀。
+     *
+     * @param properties {@code assistant.state.*}
+     * @return 键
+     */
+    @Bean
+    public RedisKeys stateRedisKeys(StateProperties properties) {
+<span class="fc" id="L132">        return new RedisKeys(properties.redis().keyPrefix());</span>
+    }
+
+    /**
+     * 限流器：Redis 有序集合 + Lua 脚本，几个实例合计。
+     *
+     * @param redis 模板
+     * @param keys 键
+     * @param clock 时钟
+     * @param failures 出错时怎么办
+     * @return 工厂
+     */
+    @Bean
+    public RateLimiterFactory redisRateLimiterFactory(
+            StringRedisTemplate redis, RedisKeys keys, Clock clock, StateFailures failures) {
+<span class="fc" id="L147">        return (name, limit, window) -&gt;</span>
+<span class="fc" id="L148">                new RedisRateLimiter(redis, keys.of(&quot;rate&quot;, name), &quot;rate:&quot; + name, limit, window, clock, failures);</span>
+    }
+
+    /**
+     * 并发名额：分布式信号量；Redis 出错且策略是放行时，退回本实例的信号量。
+     *
+     * @param redis 模板
+     * @param keys 键
+     * @param guard {@code assistant.guard.*}（上限、等多久）
+     * @param properties {@code assistant.state.*}（租期、轮询间隔）
+     * @param clock 时钟
+     * @param failures 出错时怎么办
+     * @return 并发名额
+     */
+    @Bean
+    public ConcurrencyLimiter redisConcurrencyLimiter(
+            StringRedisTemplate redis,
+            RedisKeys keys,
+            GuardProperties guard,
+            StateProperties properties,
+            Clock clock,
+            StateFailures failures) {
+<span class="fc" id="L170">        return new RedisConcurrencyLimiter(</span>
+                redis,
+<span class="fc" id="L172">                keys.of(&quot;slots&quot;, &quot;chat&quot;),</span>
+<span class="fc" id="L173">                guard::maxConcurrent,</span>
+<span class="fc" id="L174">                properties.lease(),</span>
+<span class="fc" id="L175">                properties.pollInterval(),</span>
+                clock,
+                failures,
+<span class="fc" id="L178">                new SemaphoreConcurrencyLimiter(guard.maxConcurrent()));</span>
+    }
+
+    /**
+     * Token 总账：按天分键的哈希与有序集合。
+     *
+     * @param redis 模板
+     * @param keys 键
+     * @param failures 出错时怎么办
+     * @return 账
+     */
+    @Bean
+    public UsageStore redisUsageStore(StringRedisTemplate redis, RedisKeys keys, StateFailures failures) {
+<span class="fc" id="L191">        return new RedisUsageStore(redis, keys, failures);</span>
+    }
+
+    /**
+     * 待确认操作：JSON + {@code SET NX} 抢占。
+     *
+     * @param redis 模板
+     * @param keys 键
+     * @param failures 出错时怎么办（一律拒绝）
+     * @return 存储
+     */
+    @Bean
+    public ConfirmationStore redisConfirmationStore(StringRedisTemplate redis, RedisKeys keys, StateFailures failures) {
+<span class="fc" id="L204">        return new RedisConfirmationStore(redis, keys, JsonMapper.builder().build(), failures);</span>
+    }
+
+    /**
+     * 「正在回答」标记：{@code SET NX PX} 的分布式锁。
+     *
+     * @param redis 模板
+     * @param keys 键
+     * @param properties {@code assistant.state.*}（租期）
+     * @param failures 出错时怎么办
+     * @return 标记
+     */
+    @Bean
+    public ConversationLocks redisConversationLocks(
+            StringRedisTemplate redis, RedisKeys keys, StateProperties properties, StateFailures failures) {
+<span class="fc" id="L219">        return new RedisConversationLocks(redis, keys, properties.lease(), failures);</span>
+    }
+
+    /**
+     * 「令牌是谁」的缓存。
+     *
+     * @param redis 模板
+     * @param keys 键
+     * @param failures 出错时记一下
+     * @return 缓存
+     */
+    @Bean
+    public OwnerCache redisOwnerCache(StringRedisTemplate redis, RedisKeys keys, StateFailures failures) {
+<span class="fc" id="L232">        return new RedisOwnerCache(redis, keys, failures);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
