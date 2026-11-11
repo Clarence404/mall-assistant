@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StateConfig.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.state</a> &gt; <span class="el_source">StateConfig.java</span></div><h1>StateConfig.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.state;
+
+import io.github.clarence404.assistant.ops.ChatMetrics;
+import io.micrometer.core.instrument.Gauge;
+import java.util.Locale;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/**
+ * 共享状态两种存储都要的东西：出错时的策略（{@link StateFailures}），和一个说明「现在用的是哪种存储」的指标（第 10 章引入）。
+ *
+ * &lt;p&gt;所在层：共享状态的装配。具体实现在 {@link MemoryStateConfig} 与 {@link RedisStateConfig} 里，按 {@code assistant.state.store} 二选一。
+ */
+@Configuration(proxyBeanMethods = false)
+<span class="fc" id="L15">public class StateConfig {</span>
+
+    /**
+     * 出错时的策略。注册一个仪表 {@code assistant_state_store_info{store=&quot;redis&quot;} 1}：Grafana 上一眼看出每个实例用的是哪种存储
+     * （一个实例忘了配 Redis，它的限流就是自己算的，指标上看得出来）。
+     *
+     * @param properties {@code assistant.state.*}
+     * @param metrics 指标
+     * @return 策略
+     */
+    @Bean
+    public StateFailures stateFailures(StateProperties properties, ChatMetrics metrics) {
+<span class="pc" id="L27">        Gauge.builder(&quot;assistant.state.store.info&quot;, () -&gt; 1)</span>
+<span class="fc" id="L28">                .description(&quot;共享状态存在哪（标签 store）&quot;)</span>
+<span class="fc" id="L29">                .tag(&quot;store&quot;, properties.store().name().toLowerCase(Locale.ROOT))</span>
+<span class="fc" id="L30">                .register(metrics.registry());</span>
+<span class="fc" id="L31">        return new StateFailures(properties.onRedisError(), properties.redis().cooldown(), metrics.registry());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

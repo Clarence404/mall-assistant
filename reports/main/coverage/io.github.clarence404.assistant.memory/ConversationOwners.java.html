@@ -9,13 +9,12 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
-import java.time.Instant;
 import java.util.HexFormat;
-import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -29,7 +28,8 @@ import org.springframework.stereotype.Component;
  *
  * &lt;p&gt;&lt;b&gt;谁是谁&lt;/b&gt;：没带商城令牌的是匿名访客；带了令牌的，问商城 {@code GET /api/users/me} 拿到用户 ID。不自己解析令牌：商城令牌是 JWT，
  * 解开中间一段就能看到用户 ID，但我们没有商城的密钥、验不了签名，伪造一个写着别人 ID 的令牌轻而易举；让商城验，拿到的 ID 才可信。结果按令牌的
- * 指纹（SHA-256）缓存 {@code owner-cache-ttl}，不用每句话都问一次商城；缓存里不存令牌原文。
+ * 指纹（SHA-256）缓存 {@code owner-cache-ttl}，不用每句话都问一次商城；缓存里不存令牌原文。第 10 章起缓存是 {@link OwnerCache}
+ * （默认进程内，{@code assistant.state.store=redis} 时放进 Redis，几个实例共用）。
  *
  * &lt;p&gt;另一种做法是「令牌指纹」本身当归属（不问商城）：简单、不依赖商城，但商城令牌 30 分钟就过期，重新登录换了令牌，之前的会话就再也打不开了。
  * 商城有现成的「我是谁」接口，所以用它。
@@ -44,21 +44,32 @@ public class ConversationOwners {
 
     private final MallApiClient mallApi;
     private final MemoryProperties properties;
-    private final Clock clock;
-<span class="fc" id="L48">    private final Map&lt;String, Cached&gt; cache = new ConcurrentHashMap&lt;&gt;();</span>
+    private final OwnerCache cache;
 
     /**
-     * 创建。
+     * 创建：缓存在进程内存里（第 6 章的样子；测试里手工组装时用）。
      *
      * @param mallApi 商城客户端（查当前用户）
      * @param properties {@code assistant.memory.*}（缓存时长）
      * @param clock 时钟（测试里换成可以拨动的）
      */
-<span class="fc" id="L57">    public ConversationOwners(MallApiClient mallApi, MemoryProperties properties, Clock clock) {</span>
-<span class="fc" id="L58">        this.mallApi = mallApi;</span>
-<span class="fc" id="L59">        this.properties = properties;</span>
-<span class="fc" id="L60">        this.clock = clock;</span>
-<span class="fc" id="L61">    }</span>
+    public ConversationOwners(MallApiClient mallApi, MemoryProperties properties, Clock clock) {
+<span class="fc" id="L57">        this(mallApi, properties, new MemoryOwnerCache(clock));</span>
+<span class="fc" id="L58">    }</span>
+
+    /**
+     * 创建（Spring 注入，第 10 章）。
+     *
+     * @param mallApi 商城客户端（查当前用户）
+     * @param properties {@code assistant.memory.*}（缓存时长）
+     * @param cache 归属缓存（内存或 Redis，按 {@code assistant.state.store}）
+     */
+    @Autowired
+<span class="fc" id="L68">    public ConversationOwners(MallApiClient mallApi, MemoryProperties properties, OwnerCache cache) {</span>
+<span class="fc" id="L69">        this.mallApi = mallApi;</span>
+<span class="fc" id="L70">        this.properties = properties;</span>
+<span class="fc" id="L71">        this.cache = cache;</span>
+<span class="fc" id="L72">    }</span>
 
     /**
      * 这个请求的会话归谁。
@@ -78,26 +89,25 @@ public class ConversationOwners {
      * @throws ConversationException 令牌无效（LOGIN_EXPIRED）或商城不可用（OWNER_UNVERIFIED）
      */
     public ConversationOwner resolve(String mallToken) {
-<span class="fc bfc" id="L81" title="All 2 branches covered.">        if (mallToken == null) {</span>
-<span class="fc" id="L82">            return ConversationOwner.ANONYMOUS;</span>
+<span class="fc bfc" id="L92" title="All 2 branches covered.">        if (mallToken == null) {</span>
+<span class="fc" id="L93">            return ConversationOwner.ANONYMOUS;</span>
         }
-<span class="fc" id="L84">        String fingerprint = fingerprint(mallToken);</span>
-<span class="fc" id="L85">        Instant now = clock.instant();</span>
-<span class="fc" id="L86">        Cached cached = cache.get(fingerprint);</span>
-<span class="fc bfc" id="L87" title="All 4 branches covered.">        if (cached != null &amp;&amp; cached.expiresAt().isAfter(now)) {</span>
-<span class="fc" id="L88">            return cached.owner();</span>
+<span class="fc" id="L95">        String fingerprint = fingerprint(mallToken);</span>
+<span class="fc" id="L96">        Optional&lt;ConversationOwner&gt; cached = cache.get(fingerprint);</span>
+<span class="fc bfc" id="L97" title="All 2 branches covered.">        if (cached.isPresent()) {</span>
+<span class="fc" id="L98">            return cached.get();</span>
         }
-<span class="fc" id="L90">        MallResult&lt;MallModels.UserProfile&gt; me = mallApi.me(mallToken);</span>
-<span class="pc bpc" id="L91" title="1 of 4 branches missed.">        if (me.isOk() &amp;&amp; me.body().userId() != null) {</span>
-<span class="fc" id="L92">            ConversationOwner owner = ConversationOwner.user(me.body().userId());</span>
-<span class="fc" id="L93">            cache.put(fingerprint, new Cached(owner, now.plus(properties.ownerCacheTtl())));</span>
-<span class="fc" id="L94">            return owner;</span>
+<span class="fc" id="L100">        MallResult&lt;MallModels.UserProfile&gt; me = mallApi.me(mallToken);</span>
+<span class="pc bpc" id="L101" title="1 of 4 branches missed.">        if (me.isOk() &amp;&amp; me.body().userId() != null) {</span>
+<span class="fc" id="L102">            ConversationOwner owner = ConversationOwner.user(me.body().userId());</span>
+<span class="fc" id="L103">            cache.put(fingerprint, owner, properties.ownerCacheTtl());</span>
+<span class="fc" id="L104">            return owner;</span>
         }
-<span class="fc" id="L96">        log.info(&quot;确认会话归属失败（令牌 {}）：{}&quot;, MallToken.mask(mallToken), me.failure());</span>
-<span class="fc bfc" id="L97" title="All 2 branches covered.">        if (me.failure() == MallFailure.UNAUTHORIZED) {</span>
-<span class="fc" id="L98">            throw new ConversationException(ConversationException.Failure.LOGIN_EXPIRED, null);</span>
+<span class="fc" id="L106">        log.info(&quot;确认会话归属失败（令牌 {}）：{}&quot;, MallToken.mask(mallToken), me.failure());</span>
+<span class="fc bfc" id="L107" title="All 2 branches covered.">        if (me.failure() == MallFailure.UNAUTHORIZED) {</span>
+<span class="fc" id="L108">            throw new ConversationException(ConversationException.Failure.LOGIN_EXPIRED, null);</span>
         }
-<span class="fc" id="L100">        throw new ConversationException(ConversationException.Failure.OWNER_UNVERIFIED, null);</span>
+<span class="fc" id="L110">        throw new ConversationException(ConversationException.Failure.OWNER_UNVERIFIED, null);</span>
     }
 
     /**
@@ -114,15 +124,14 @@ public class ConversationOwners {
      * @return 记忆库里的键，36 个字符
      */
     public String memoryKey(ConversationOwner owner, String conversationId) {
-<span class="fc" id="L117">        return UUID.nameUUIDFromBytes((owner.key() + &quot;/&quot; + conversationId).getBytes(StandardCharsets.UTF_8))</span>
-<span class="fc" id="L118">                .toString();</span>
+<span class="fc" id="L127">        return UUID.nameUUIDFromBytes((owner.key() + &quot;/&quot; + conversationId).getBytes(StandardCharsets.UTF_8))</span>
+<span class="fc" id="L128">                .toString();</span>
     }
 
     /** 清掉过期的缓存项（由 {@link ConversationMemory#sweep} 定期调用）。 */
     void evictExpired() {
-<span class="fc" id="L123">        Instant now = clock.instant();</span>
-<span class="pc bnc" id="L124" title="All 2 branches missed.">        cache.values().removeIf(c -&gt; !c.expiresAt().isAfter(now));</span>
-<span class="fc" id="L125">    }</span>
+<span class="fc" id="L133">        cache.evictExpired();</span>
+<span class="fc" id="L134">    }</span>
 
     /**
      * 令牌的指纹：SHA-256 的十六进制。缓存用它当键，内存里不留令牌原文。
@@ -132,14 +141,11 @@ public class ConversationOwners {
      */
     static String fingerprint(String token) {
         try {
-<span class="fc" id="L135">            byte[] digest = MessageDigest.getInstance(&quot;SHA-256&quot;).digest(token.getBytes(StandardCharsets.UTF_8));</span>
-<span class="fc" id="L136">            return HexFormat.of().formatHex(digest);</span>
-<span class="nc" id="L137">        } catch (NoSuchAlgorithmException e) {</span>
-<span class="nc" id="L138">            throw new IllegalStateException(e);</span>
+<span class="fc" id="L144">            byte[] digest = MessageDigest.getInstance(&quot;SHA-256&quot;).digest(token.getBytes(StandardCharsets.UTF_8));</span>
+<span class="fc" id="L145">            return HexFormat.of().formatHex(digest);</span>
+<span class="nc" id="L146">        } catch (NoSuchAlgorithmException e) {</span>
+<span class="nc" id="L147">            throw new IllegalStateException(e);</span>
         }
     }
-
-    /** 缓存项：归属与过期时间。 */
-<span class="fc" id="L143">    private record Cached(ConversationOwner owner, Instant expiresAt) {}</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

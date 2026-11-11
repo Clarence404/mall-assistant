@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>UsageStore.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.ops</a> &gt; <span class="el_source">UsageStore.java</span></div><h1>UsageStore.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.ops;
+
+import java.time.LocalDate;
+import java.util.List;
+
+/**
+ * Token 总账存在哪（第 10 章从 {@link UsageLedger} 里抽出来）。
+ *
+ * &lt;p&gt;所在层：上线运维。{@link UsageLedger} 负责「规则」（一轮只记一次、不记 unattributed、哪天、超预算打日志），这里只负责「按天累加、按天查」。
+ * 两个实现：{@link MemoryUsageStore}（进程内的三张表，第 9 章的做法，默认）和 {@code state.RedisUsageStore}（Redis 的哈希与有序集合，
+ * 多个实例共用一份账：同一个用户在 A、B 两个实例上问，预算合起来算）。
+ *
+ * &lt;p&gt;每个方法都带着 {@code day}：「今天」由 {@link UsageLedger} 按 {@code assistant.usage.zone} 算好传进来，存储不自己看时钟——
+ * Redis 版按天分键（键里带日期，两天后自动过期），内存版发现日期变了就清空。
+ */
+public interface UsageStore {
+
+    /**
+     * 记一轮。
+     *
+     * @param day 哪一天
+     * @param entry 这一轮记在哪几个维度上、记多少
+     * @return 记完之后，这个调用方当天的用量（输入 + 输出）；用来判断是否刚好超预算，只打日志用
+     */
+    long add(LocalDate day, Entry entry);
+
+    /**
+     * 这个调用方当天用了多少 Token（输入 + 输出）。
+     *
+     * @param day 哪一天
+     * @param caller 调用方
+     * @return Token；没有记录是 0
+     * @throws io.github.clarence404.assistant.state.StateUnavailableException Redis 出错、而策略是 reject 时
+     */
+    long tokens(LocalDate day, String caller);
+
+    /**
+     * 当天的汇总。
+     *
+     * @param day 哪一天
+     * @param top 调用方、会话各列前几个（按用量从多到少）
+     * @return 汇总
+     */
+    Totals summary(LocalDate day, int top);
+
+    /**
+     * 一轮要记的东西。
+     *
+     * @param caller 调用方（{@code user:…} / {@code ip:…}）
+     * @param intent 意图（没有意图时 {@link UsageLedger} 已经换成 {@code NONE}）
+     * @param conversationKey 会话维度的键 {@code 调用方/会话 ID}；没有会话时为 null
+     * @param tally 这一轮的用量（1 轮）
+     */
+<span class="fc" id="L54">    record Entry(String caller, String intent, String conversationKey, UsageLedger.Tally tally) {}</span>
+
+    /**
+     * 当天的汇总（不含日期和预算，由 {@link UsageLedger#summary} 补上）。
+     *
+     * @param total 合计
+     * @param byIntent 按意图（全部，用量从多到少）
+     * @param topCallers 用得最多的调用方
+     * @param topConversations 用得最多的会话
+     */
+<span class="fc" id="L64">    record Totals(</span>
+            UsageLedger.Tally total,
+            List&lt;UsageLedger.Row&gt; byIntent,
+            List&lt;UsageLedger.Row&gt; topCallers,
+            List&lt;UsageLedger.Row&gt; topConversations) {
+
+        /** 什么都没有。 */
+<span class="fc" id="L71">        public static final Totals EMPTY = new Totals(UsageLedger.Tally.ZERO, List.of(), List.of(), List.of());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

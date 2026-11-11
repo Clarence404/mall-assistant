@@ -4,6 +4,7 @@ import io.github.clarence404.assistant.mall.MallToken;
 import io.github.clarence404.assistant.memory.ConversationException;
 import io.github.clarence404.assistant.memory.ConversationOwner;
 import io.github.clarence404.assistant.memory.ConversationOwners;
+import io.github.clarence404.assistant.state.StateUnavailableException;
 import io.modelcontextprotocol.common.McpTransportContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,13 +30,14 @@ import org.springframework.stereotype.Component;
 @Component
 public class McpGate {
 
-<span class="fc" id="L32">    private static final Logger log = LoggerFactory.getLogger(McpGate.class);</span>
+<span class="fc" id="L33">    private static final Logger log = LoggerFactory.getLogger(McpGate.class);</span>
 
     static final String LOGIN_REQUIRED =
             &quot;这个工具要登录商城才能用：请在 MCP 客户端的请求头里带上 Authorization: Bearer &lt;商城令牌&gt;（用演示账号登录智能客服页面或商城后获得）&quot;;
     static final String LOGIN_EXPIRED = &quot;商城令牌无效或已过期：请重新登录商城，换一个新的令牌配置到 MCP 客户端的请求头里&quot;;
     static final String OWNER_UNVERIFIED = &quot;商城暂时不可用，确认不了你是谁，请稍后再试&quot;;
     static final String TOO_MANY_CALLS = &quot;调用太频繁了（每分钟最多 %d 次），请稍后再试；不要在循环里反复调用同一个工具&quot;;
+    static final String STATE_UNAVAILABLE = &quot;服务端暂时不可用（限流状态读不到），请稍后再试&quot;;
 
     private final ConversationOwners owners;
     private final McpRateLimiter limiter;
@@ -48,11 +50,11 @@ public class McpGate {
      * @param limiter 次数上限
      * @param properties {@code assistant.mcp.*}
      */
-<span class="fc" id="L51">    public McpGate(ConversationOwners owners, McpRateLimiter limiter, McpProperties properties) {</span>
-<span class="fc" id="L52">        this.owners = owners;</span>
-<span class="fc" id="L53">        this.limiter = limiter;</span>
-<span class="fc" id="L54">        this.properties = properties;</span>
-<span class="fc" id="L55">    }</span>
+<span class="fc" id="L53">    public McpGate(ConversationOwners owners, McpRateLimiter limiter, McpProperties properties) {</span>
+<span class="fc" id="L54">        this.owners = owners;</span>
+<span class="fc" id="L55">        this.limiter = limiter;</span>
+<span class="fc" id="L56">        this.properties = properties;</span>
+<span class="fc" id="L57">    }</span>
 
     /**
      * 进门：确认调用方、检查登录与次数（ch08-2）。
@@ -75,27 +77,36 @@ public class McpGate {
      * @throws McpRejection 被拦下（原因给对面的模型看）
      */
     public McpCaller enter(McpTransportContext context, String tool, boolean loginRequired) {
-<span class="fc" id="L78">        String token = McpAuth.token(context);</span>
-<span class="fc bfc" id="L79" title="All 2 branches covered.">        McpCaller caller = token == null ? McpCaller.ANONYMOUS : new McpCaller(resolve(token), token);</span>
-<span class="fc bfc" id="L80" title="All 4 branches covered.">        if (loginRequired &amp;&amp; !caller.loggedIn()) {</span>
-<span class="fc" id="L81">            throw new McpRejection(LOGIN_REQUIRED);</span>
+<span class="fc" id="L80">        String token = McpAuth.token(context);</span>
+<span class="fc bfc" id="L81" title="All 2 branches covered.">        McpCaller caller = token == null ? McpCaller.ANONYMOUS : new McpCaller(resolve(token), token);</span>
+<span class="fc bfc" id="L82" title="All 4 branches covered.">        if (loginRequired &amp;&amp; !caller.loggedIn()) {</span>
+<span class="fc" id="L83">            throw new McpRejection(LOGIN_REQUIRED);</span>
         }
-<span class="fc bfc" id="L83" title="All 2 branches covered.">        if (!limiter.tryAcquire(caller.owner().key())) {</span>
-<span class="fc" id="L84">            log.warn(&quot;MCP 调用太频繁：{} 调 {}&quot;, caller.owner().key(), tool);</span>
-<span class="fc" id="L85">            throw new McpRejection(TOO_MANY_CALLS.formatted(properties.callsPerMinute()));</span>
+<span class="fc bfc" id="L85" title="All 2 branches covered.">        if (!tryAcquire(caller.owner().key())) {</span>
+<span class="fc" id="L86">            log.warn(&quot;MCP 调用太频繁：{} 调 {}&quot;, caller.owner().key(), tool);</span>
+<span class="fc" id="L87">            throw new McpRejection(TOO_MANY_CALLS.formatted(properties.callsPerMinute()));</span>
         }
-<span class="fc" id="L87">        log.info(&quot;MCP 工具调用：{}（{}）&quot;, tool, caller.owner().key());</span>
-<span class="fc" id="L88">        return caller;</span>
+<span class="fc" id="L89">        log.info(&quot;MCP 工具调用：{}（{}）&quot;, tool, caller.owner().key());</span>
+<span class="fc" id="L90">        return caller;</span>
+    }
+
+    /** 次数上限；第 10 章：Redis 出错且策略是拒绝时，翻成给对面看的原因（不把 Redis 的异常信息漏出去）。 */
+    private boolean tryAcquire(String key) {
+        try {
+<span class="fc" id="L96">            return limiter.tryAcquire(key);</span>
+<span class="nc" id="L97">        } catch (StateUnavailableException e) {</span>
+<span class="nc" id="L98">            throw new McpRejection(STATE_UNAVAILABLE);</span>
+        }
     }
 
     /** 令牌 → 归属；失败翻成给对面看的原因。 */
     private ConversationOwner resolve(String token) {
         try {
-<span class="fc" id="L94">            return owners.resolve(token);</span>
-<span class="fc" id="L95">        } catch (ConversationException e) {</span>
-<span class="fc" id="L96">            log.info(&quot;MCP 调用方的令牌没有通过商城校验（{}）：{}&quot;, MallToken.mask(token), e.failure());</span>
-<span class="fc" id="L97">            throw new McpRejection(</span>
-<span class="fc bfc" id="L98" title="All 2 branches covered.">                    e.failure() == ConversationException.Failure.LOGIN_EXPIRED ? LOGIN_EXPIRED : OWNER_UNVERIFIED);</span>
+<span class="fc" id="L105">            return owners.resolve(token);</span>
+<span class="fc" id="L106">        } catch (ConversationException e) {</span>
+<span class="fc" id="L107">            log.info(&quot;MCP 调用方的令牌没有通过商城校验（{}）：{}&quot;, MallToken.mask(token), e.failure());</span>
+<span class="fc" id="L108">            throw new McpRejection(</span>
+<span class="fc bfc" id="L109" title="All 2 branches covered.">                    e.failure() == ConversationException.Failure.LOGIN_EXPIRED ? LOGIN_EXPIRED : OWNER_UNVERIFIED);</span>
         }
     }
 }

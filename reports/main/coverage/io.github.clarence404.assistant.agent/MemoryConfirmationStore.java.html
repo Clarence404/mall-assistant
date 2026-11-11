@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MemoryConfirmationStore.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">MemoryConfirmationStore.java</span></div><h1>MemoryConfirmationStore.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * 待确认操作的内存实现：两个 {@link ConcurrentHashMap}，一个存确认（含结果），一个存「谁抢到了」（第 7 章的做法，第 10 章挪到这里）。
+ *
+ * &lt;p&gt;所在层：Agent 的存储。{@code assistant.state.store=memory}（默认）时用；只在一个进程里有效，重启就没了。
+ * {@link #claim} 用 {@link ConcurrentHashMap#putIfAbsent}：和 Redis 的 {@code SET NX} 是同一个语义（不存在才放，原子），所以两种实现的行为一样，
+ * 同一套契约测试都能过。
+ */
+<span class="fc" id="L17">public final class MemoryConfirmationStore implements ConfirmationStore {</span>
+
+<span class="fc" id="L19">    private final Map&lt;String, StoredConfirmation&gt; entries = new ConcurrentHashMap&lt;&gt;();</span>
+<span class="fc" id="L20">    private final Map&lt;String, ConfirmationOutcome.Decision&gt; claims = new ConcurrentHashMap&lt;&gt;();</span>
+
+    @Override
+    public void save(StoredConfirmation confirmation, Duration ttl) {
+<span class="fc" id="L24">        entries.put(confirmation.id(), confirmation);</span>
+<span class="fc" id="L25">    }</span>
+
+    @Override
+    public Optional&lt;StoredConfirmation&gt; find(String id) {
+<span class="fc" id="L29">        return Optional.ofNullable(entries.get(id));</span>
+    }
+
+    @Override
+    public Optional&lt;ConfirmationOutcome.Decision&gt; claim(
+            String id, ConfirmationOutcome.Decision decision, Duration ttl) {
+<span class="fc" id="L35">        return Optional.ofNullable(claims.putIfAbsent(id, decision));</span>
+    }
+
+    @Override
+    public void complete(String id, ConfirmationOutcome outcome, Duration ttl) {
+        // 存的是同一个结果对象：重复点确认拿到的就是它（第 7 章的测试按「同一个对象」写）
+<span class="fc" id="L41">        entries.computeIfPresent(id, (k, c) -&gt; c.withOutcome(outcome));</span>
+<span class="fc" id="L42">    }</span>
+
+    @Override
+    public List&lt;StoredConfirmation&gt; findByOwner(String ownerKey) {
+<span class="fc" id="L46">        return entries.values().stream()</span>
+<span class="fc" id="L47">                .filter(c -&gt; c.ownerKey().equals(ownerKey))</span>
+<span class="fc" id="L48">                .toList();</span>
+    }
+
+    @Override
+    public void sweep(Instant cutoff) {
+<span class="pc" id="L53">        entries.values().removeIf(c -&gt; c.expiresAt().isBefore(cutoff));</span>
+<span class="fc" id="L54">        claims.keySet().retainAll(entries.keySet());</span>
+<span class="fc" id="L55">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

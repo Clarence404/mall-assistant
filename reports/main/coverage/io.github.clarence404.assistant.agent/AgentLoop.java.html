@@ -142,34 +142,47 @@ public class AgentLoop {
 <span class="fc" id="L142">                run.record(step(run, action, AgentStep.Kind.REJECTED, &quot;没有生成确认：&quot; + proposal.rejection(), start));</span>
 <span class="fc" id="L143">                continue;</span>
             }
-<span class="fc" id="L145">            PendingConfirmation pending = confirmations.create(</span>
-<span class="fc" id="L146">                    proposal.action(), run.task().owner(), run.task().conversationId());</span>
-<span class="fc" id="L147">            run.record(step(</span>
+            PendingConfirmation pending;
+            try {
+<span class="fc" id="L147">                pending = confirmations.create(</span>
+<span class="fc" id="L148">                        proposal.action(), run.task().owner(), run.task().conversationId());</span>
+<span class="nc" id="L149">            } catch (ConfirmationException e) {</span>
+                // 第 10 章：确认存在 Redis 里而 Redis 用不了。不能「先执行再说」，这一轮到此为止
+<span class="nc" id="L151">                run.record(step(</span>
+                        run,
+                        action,
+                        AgentStep.Kind.REJECTED,
+<span class="nc" id="L155">                        &quot;没有生成确认：&quot; + e.failure().message(),</span>
+                        start));
+<span class="nc" id="L157">                return stop(</span>
+<span class="nc" id="L158">                        run, AgentReplies.confirmationUnavailable(), AgentTrace.StopReason.CONFIRMATION_UNAVAILABLE);</span>
+<span class="fc" id="L159">            }</span>
+<span class="fc" id="L160">            run.record(step(</span>
                     run,
                     action,
                     AgentStep.Kind.PROPOSE,
-<span class="fc" id="L151">                    &quot;已生成待确认操作（&quot; + pending.summary() + &quot;），等用户在页面上点确认，这一轮到此结束&quot;,</span>
+<span class="fc" id="L164">                    &quot;已生成待确认操作（&quot; + pending.summary() + &quot;），等用户在页面上点确认，这一轮到此结束&quot;,</span>
                     start));
-<span class="fc" id="L153">            run.propose(pending);</span>
-<span class="fc" id="L154">            return stop(run, AgentReplies.awaitingConfirmation(pending), AgentTrace.StopReason.AWAITING_CONFIRMATION);</span>
+<span class="fc" id="L166">            run.propose(pending);</span>
+<span class="fc" id="L167">            return stop(run, AgentReplies.awaitingConfirmation(pending), AgentTrace.StopReason.AWAITING_CONFIRMATION);</span>
         }
     }
 
     /** 停下：生成结果（调试信息里带上全部步骤）。 */
     private static AgentResult stop(AgentRun run, String reply, AgentTrace.StopReason reason) {
-<span class="fc" id="L160">        log.info(&quot;Agent 停止：{}，共 {} 步，{} ms&quot;, reason, run.steps().size(), run.elapsedMs());</span>
-<span class="fc" id="L161">        return new AgentResult(reply, new AgentTrace(&quot;loop&quot;, run.steps(), reason, run.elapsedMs()), run.confirmation());</span>
+<span class="fc" id="L173">        log.info(&quot;Agent 停止：{}，共 {} 步，{} ms&quot;, reason, run.steps().size(), run.elapsedMs());</span>
+<span class="fc" id="L174">        return new AgentResult(reply, new AgentTrace(&quot;loop&quot;, run.steps(), reason, run.elapsedMs()), run.confirmation());</span>
     }
 
     /** 一个有效动作的一步。 */
     private static AgentStep step(
             AgentRun run, AgentAction action, AgentStep.Kind kind, String observation, long start) {
-<span class="fc" id="L167">        return step(</span>
+<span class="fc" id="L180">        return step(</span>
                 run,
-<span class="fc" id="L169">                action.thought(),</span>
-<span class="fc" id="L170">                action.tool().toolName(),</span>
+<span class="fc" id="L182">                action.thought(),</span>
+<span class="fc" id="L183">                action.tool().toolName(),</span>
                 kind,
-<span class="fc bfc" id="L172" title="All 2 branches covered.">                action.tool() == AgentTool.FINISH ? &quot;{}&quot; : action.argumentsJson(),</span>
+<span class="fc bfc" id="L185" title="All 2 branches covered.">                action.tool() == AgentTool.FINISH ? &quot;{}&quot; : action.argumentsJson(),</span>
                 observation,
                 start);
     }
@@ -194,14 +207,14 @@ public class AgentLoop {
             String arguments,
             String observation,
             long start) {
-<span class="fc" id="L197">        return new AgentStep(</span>
-<span class="fc" id="L198">                run.nextIndex(),</span>
+<span class="fc" id="L210">        return new AgentStep(</span>
+<span class="fc" id="L211">                run.nextIndex(),</span>
                 thought,
                 action,
                 kind,
                 arguments,
                 observation,
-<span class="fc" id="L204">                (System.nanoTime() - start) / 1_000_000);</span>
+<span class="fc" id="L217">                (System.nanoTime() - start) / 1_000_000);</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

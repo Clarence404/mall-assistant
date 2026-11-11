@@ -19,31 +19,36 @@ public class ChatRejection extends RuntimeException {
         /** 整个实例同时在处理的对话太多，等了一会儿也没有空位。 */
 <span class="fc" id="L20">        TOO_BUSY(HttpStatus.SERVICE_UNAVAILABLE, &quot;智能客服正忙&quot;, &quot;现在咨询的人比较多，请稍等几秒再试。&quot;),</span>
         /** 这个调用方今天的 Token 用量到了上限。 */
-<span class="fc" id="L22">        TOKEN_BUDGET_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, &quot;今日额度已用完&quot;, &quot;今天的智能客服额度已经用完了，明天再来，或联系人工客服。&quot;);</span>
+<span class="fc" id="L22">        TOKEN_BUDGET_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, &quot;今日额度已用完&quot;, &quot;今天的智能客服额度已经用完了，明天再来，或联系人工客服。&quot;),</span>
+        /**
+         * 第 10 章：限流、预算、并发名额放在 Redis 里，而 Redis 暂时用不了、策略是「拒绝」（{@code assistant.state.on-redis-error=reject}）。
+         * 503：是我们的问题。策略是「放行」时不会出现这个错误码。
+         */
+<span class="fc" id="L27">        STATE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, &quot;智能客服暂时不可用&quot;, &quot;智能客服暂时不可用，请稍后再试。&quot;);</span>
 
         private final HttpStatus status;
         private final String title;
         private final String message;
 
-<span class="fc" id="L28">        Reason(HttpStatus status, String title, String message) {</span>
-<span class="fc" id="L29">            this.status = status;</span>
-<span class="fc" id="L30">            this.title = title;</span>
-<span class="fc" id="L31">            this.message = message;</span>
-<span class="fc" id="L32">        }</span>
+<span class="fc" id="L33">        Reason(HttpStatus status, String title, String message) {</span>
+<span class="fc" id="L34">            this.status = status;</span>
+<span class="fc" id="L35">            this.title = title;</span>
+<span class="fc" id="L36">            this.message = message;</span>
+<span class="fc" id="L37">        }</span>
 
         /** HTTP 状态码：429 是「你」的问题（太频繁、额度用完），503 是「我们」的问题（忙）。 */
         public HttpStatus status() {
-<span class="fc" id="L36">            return status;</span>
+<span class="fc" id="L41">            return status;</span>
         }
 
         /** ProblemDetail 的 title。 */
         public String title() {
-<span class="fc" id="L41">            return title;</span>
+<span class="fc" id="L46">            return title;</span>
         }
 
         /** 给用户看的提示。 */
         public String message() {
-<span class="fc" id="L46">            return message;</span>
+<span class="fc" id="L51">            return message;</span>
         }
     }
 
@@ -57,19 +62,19 @@ public class ChatRejection extends RuntimeException {
      * @param retryAfter 建议多久之后再试（填进 {@code Retry-After}），不知道时为 null
      */
     public ChatRejection(Reason reason, Duration retryAfter) {
-<span class="fc" id="L60">        super(reason.title());</span>
-<span class="fc" id="L61">        this.reason = reason;</span>
-<span class="fc" id="L62">        this.retryAfter = retryAfter;</span>
-<span class="fc" id="L63">    }</span>
+<span class="fc" id="L65">        super(reason.title());</span>
+<span class="fc" id="L66">        this.reason = reason;</span>
+<span class="fc" id="L67">        this.retryAfter = retryAfter;</span>
+<span class="fc" id="L68">    }</span>
 
     /** 原因。 */
     public Reason reason() {
-<span class="fc" id="L67">        return reason;</span>
+<span class="fc" id="L72">        return reason;</span>
     }
 
     /** 建议多久之后再试；不知道时为 null。 */
     public Duration retryAfter() {
-<span class="fc" id="L72">        return retryAfter;</span>
+<span class="fc" id="L77">        return retryAfter;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

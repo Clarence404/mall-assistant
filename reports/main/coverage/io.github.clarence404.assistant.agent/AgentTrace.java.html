@@ -30,7 +30,9 @@ import java.util.List;
         /** 页面关了（流式被取消）。 */
 <span class="fc" id="L31">        CANCELLED,</span>
         /** 商城登录失效，没法确认是谁在办。 */
-<span class="fc" id="L33">        LOGIN_EXPIRED</span>
+<span class="fc" id="L33">        LOGIN_EXPIRED,</span>
+        /** 第 10 章：要生成确认卡片时，存确认的地方（Redis）用不了，这一轮没有生成确认。 */
+<span class="fc" id="L35">        CONFIRMATION_UNAVAILABLE</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

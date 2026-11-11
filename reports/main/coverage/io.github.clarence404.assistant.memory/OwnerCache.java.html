@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>OwnerCache.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.memory</a> &gt; <span class="el_source">OwnerCache.java</span></div><h1>OwnerCache.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.memory;
+
+import java.time.Duration;
+import java.util.Optional;
+
+/**
+ * 「这个商城令牌是谁」的缓存：按令牌的指纹（SHA-256）存商城用户，几分钟内不用每句话都问商城（第 6 章 {@link ConversationOwners} 里的缓存，
+ * 第 10 章抽成接口）。
+ *
+ * &lt;p&gt;所在层：记忆。两个实现：{@link MemoryOwnerCache}（进程内，默认）和 {@code state.RedisOwnerCache}（Redis 的 {@code SET PX}）。
+ *
+ * &lt;p&gt;&lt;b&gt;它和别的共享状态不一样：放不放进 Redis 都对&lt;/b&gt;。缓存只是「省一次调用」，每个实例各缓存一份，结果完全一样，只是每个实例第一次各问一次商城；
+ * 共享的好处是少问几次商城，代价是每次查缓存多一次网络往返（本地缓存是纳秒级，Redis 是亚毫秒到毫秒级）。生产上常见的是两级：本地小缓存 + Redis。
+ * 这里放进 Redis 是为了说明「哪些状态必须共享、哪些可以不共享」，讲义里有对比。不管哪个实现，出错都当作「没缓存」——多问一次商城，不会出错。
+ */
+public interface OwnerCache {
+
+    /**
+     * 查缓存。
+     *
+     * @param fingerprint 令牌指纹
+     * @return 归属；没有或已过期为空
+     */
+    Optional&lt;ConversationOwner&gt; get(String fingerprint);
+
+    /**
+     * 放进缓存。
+     *
+     * @param fingerprint 令牌指纹
+     * @param owner 商城确认过的用户（不缓存匿名，也不缓存失败）
+     * @param ttl 多久后过期
+     */
+    void put(String fingerprint, ConversationOwner owner, Duration ttl);
+
+    /** 清掉过期的（内存实现要定期清；Redis 的键自己会过期）。 */
+<span class="nc" id="L36">    default void evictExpired() {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -40,31 +40,38 @@ public class ConfirmationException extends RuntimeException {
         /** 410：过了有效期。不自动执行，也不能再确认，要重新说一次（订单状态可能已经变了）。 */
 <span class="fc" id="L41">        CONFIRMATION_EXPIRED(HttpStatus.GONE, &quot;确认已过期&quot;, &quot;这个确认已经过期，没有执行。请重新说一下要办的事。&quot;),</span>
         /** 409：已经做过相反的决定（确认过又点取消、取消过又点确认）。同样的决定重复提交不报错，返回原来的结果。 */
-<span class="fc" id="L43">        CONFIRMATION_ALREADY_DECIDED(HttpStatus.CONFLICT, &quot;已经处理过&quot;, &quot;这个确认已经处理过了，不能改。&quot;);</span>
+<span class="fc" id="L43">        CONFIRMATION_ALREADY_DECIDED(HttpStatus.CONFLICT, &quot;已经处理过&quot;, &quot;这个确认已经处理过了，不能改。&quot;),</span>
+        /**
+         * 409（第 10 章）：同一个确认正在被另一个请求（可能在另一个实例上）执行，等了一会儿还没有结果。不再执行一次——
+         * 写操作「最多执行一次」：过一会儿刷新看结果，商城那边以「我的订单」为准。
+         */
+<span class="fc" id="L48">        CONFIRMATION_IN_PROGRESS(HttpStatus.CONFLICT, &quot;正在处理&quot;, &quot;这个确认正在处理中，请稍后到「我的订单」里看一下结果，不要重复点。&quot;),</span>
+        /** 503（第 10 章）：确认存在 Redis 里，而 Redis 暂时用不了。写操作不「出错就放行」：这次办不了，稍后再说一次。 */
+<span class="fc" id="L50">        CONFIRMATION_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, &quot;确认服务暂时不可用&quot;, &quot;确认服务暂时不可用，这次没有执行，请稍后再说一次。&quot;);</span>
 
         private final HttpStatus status;
         private final String title;
         private final String message;
 
-<span class="fc" id="L49">        Failure(HttpStatus status, String title, String message) {</span>
-<span class="fc" id="L50">            this.status = status;</span>
-<span class="fc" id="L51">            this.title = title;</span>
-<span class="fc" id="L52">            this.message = message;</span>
-<span class="fc" id="L53">        }</span>
+<span class="fc" id="L56">        Failure(HttpStatus status, String title, String message) {</span>
+<span class="fc" id="L57">            this.status = status;</span>
+<span class="fc" id="L58">            this.title = title;</span>
+<span class="fc" id="L59">            this.message = message;</span>
+<span class="fc" id="L60">        }</span>
 
         /** HTTP 状态码。 */
         public HttpStatus status() {
-<span class="fc" id="L57">            return status;</span>
+<span class="fc" id="L64">            return status;</span>
         }
 
         /** ProblemDetail 的标题。 */
         public String title() {
-<span class="fc" id="L62">            return title;</span>
+<span class="fc" id="L69">            return title;</span>
         }
 
         /** 给用户看的提示。 */
         public String message() {
-<span class="fc" id="L67">            return message;</span>
+<span class="fc" id="L74">            return message;</span>
         }
     }
 }

@@ -169,57 +169,71 @@ public class NativeAgentRunner {
 <span class="nc" id="L169">                kind = AgentStep.Kind.REJECTED;</span>
 <span class="nc" id="L170">                observation = &quot;没有生成确认：&quot; + proposal.rejection();</span>
             } else {
-<span class="fc" id="L172">                PendingConfirmation pending = confirmations.create(</span>
-<span class="fc" id="L173">                        proposal.action(), run.task().owner(), run.task().conversationId());</span>
-<span class="fc" id="L174">                run.record(AgentLoop.step(</span>
+                PendingConfirmation pending;
+                try {
+<span class="fc" id="L174">                    pending = confirmations.create(</span>
+<span class="fc" id="L175">                            proposal.action(), run.task().owner(), run.task().conversationId());</span>
+<span class="nc" id="L176">                } catch (ConfirmationException e) {</span>
+                    // 第 10 章：确认存不进去，告诉模型没有生成，让它转告用户稍后再说
+<span class="nc" id="L178">                    run.record(AgentLoop.step(</span>
+                            run,
+                            null,
+<span class="nc" id="L181">                            action.tool().toolName(),</span>
+                            AgentStep.Kind.REJECTED,
+<span class="nc" id="L183">                            action.argumentsJson(),</span>
+<span class="nc" id="L184">                            &quot;没有生成确认：&quot; + e.failure().message(),</span>
+                            start));
+<span class="nc" id="L186">                    return &quot;没有生成确认，也没有执行：确认服务暂时不可用，用一句话请用户稍后再说一次&quot;;</span>
+<span class="fc" id="L187">                }</span>
+<span class="fc" id="L188">                run.record(AgentLoop.step(</span>
                         run,
                         null,
-<span class="fc" id="L177">                        action.tool().toolName(),</span>
+<span class="fc" id="L191">                        action.tool().toolName(),</span>
                         AgentStep.Kind.PROPOSE,
-<span class="fc" id="L179">                        action.argumentsJson(),</span>
-<span class="fc" id="L180">                        &quot;已生成待确认操作（&quot; + pending.summary() + &quot;），等用户在页面上点确认&quot;,</span>
+<span class="fc" id="L193">                        action.argumentsJson(),</span>
+<span class="fc" id="L194">                        &quot;已生成待确认操作（&quot; + pending.summary() + &quot;），等用户在页面上点确认&quot;,</span>
                         start));
-<span class="fc" id="L182">                run.propose(pending);</span>
-<span class="fc" id="L183">                return &quot;已生成待确认操作，还没有执行：用一句话请用户在页面的确认卡片上点「确认」&quot;;</span>
+<span class="fc" id="L196">                run.propose(pending);</span>
+<span class="fc" id="L197">                return &quot;已生成待确认操作，还没有执行：用一句话请用户在页面的确认卡片上点「确认」&quot;;</span>
             }
         }
-<span class="fc" id="L186">        run.record(</span>
-<span class="fc" id="L187">                AgentLoop.step(run, null, action.tool().toolName(), kind, action.argumentsJson(), observation, start));</span>
-<span class="fc" id="L188">        return observation;</span>
+<span class="fc" id="L200">        run.record(</span>
+<span class="fc" id="L201">                AgentLoop.step(run, null, action.tool().toolName(), kind, action.argumentsJson(), observation, start));</span>
+<span class="fc" id="L202">        return observation;</span>
     }
 
     /** 注册给模型的 8 个工具：只是把模型的调用转成 {@link AgentDecision}，交给 {@link #perform}。说明写给模型看。 */
-<span class="fc" id="L192">    public final class Tools {</span>
+<span class="fc" id="L206">    public final class Tools {</span>
 
         @Tool(name = &quot;listMyOrders&quot;, description = &quot;列出当前用户最近的订单。用户没给订单号时先用它。&quot;)
         public String listMyOrders(ToolContext context) {
-<span class="nc" id="L196">            return perform(context, AgentDecision.of(null, &quot;listMyOrders&quot;, null));</span>
+<span class="nc" id="L210">            return perform(context, AgentDecision.of(null, &quot;listMyOrders&quot;, null));</span>
         }
 
         @Tool(name = &quot;queryOrder&quot;, description = &quot;查一笔订单的状态、商品、收货信息和 allowedActions（这笔订单现在能办的操作）。&quot;)
         public String queryOrder(
                 @ToolParam(description = &quot;订单号，19 位或 23 位数字，照抄用户的话或查询结果&quot;) String orderNo, ToolContext context) {
-<span class="fc" id="L202">            return perform(context, AgentDecision.of(null, &quot;queryOrder&quot;, orderNo));</span>
+<span class="fc" id="L216">            return perform(context, AgentDecision.of(null, &quot;queryOrder&quot;, orderNo));</span>
         }
 
         @Tool(name = &quot;queryPayment&quot;, description = &quot;查一笔订单的支付状态。&quot;)
         public String queryPayment(@ToolParam(description = &quot;订单号&quot;) String orderNo, ToolContext context) {
-<span class="nc" id="L207">            return perform(context, AgentDecision.of(null, &quot;queryPayment&quot;, orderNo));</span>
+<span class="nc" id="L221">            return perform(context, AgentDecision.of(null, &quot;queryPayment&quot;, orderNo));</span>
         }
 
         @Tool(name = &quot;queryProduct&quot;, description = &quot;按商品编号查商品的名称、价格、是否在售、是否有货。&quot;)
         public String queryProduct(@ToolParam(description = &quot;商品编号，一串数字&quot;) String skuId, ToolContext context) {
-<span class="nc" id="L212">            return perform(context, new AgentDecision(null, &quot;queryProduct&quot;, null, skuId));</span>
+<span class="nc" id="L226">            return perform(context, new AgentDecision(null, &quot;queryProduct&quot;, null, skuId));</span>
         }
 
         @Tool(name = &quot;searchPolicy&quot;, description = &quot;查商城的售后规则（退换货、退款、运费等），返回编了号的规则资料。&quot;)
         public String searchPolicy(@ToolParam(description = &quot;要查的规则，一句话&quot;) String query, ToolContext context) {
-<span class="nc" id="L217">            return perform(context, new AgentDecision(null, &quot;searchPolicy&quot;, null, query));</span>
+<span class="nc" id="L231">            return perform(context, new AgentDecision(null, &quot;searchPolicy&quot;, null, query));</span>
         }
 
         @Tool(name = &quot;cancelOrder&quot;, description = &quot;取消一笔待支付的订单。不会马上执行，只生成待确认操作，要用户点按钮确认。&quot;)
         public String cancelOrder(@ToolParam(description = &quot;订单号&quot;) String orderNo, ToolContext context) {
-<span class="fc" id="L222">            return perform(context, AgentDecision.of(null, &quot;cancelOrder&quot;, orderNo));</span>
+<span class="fc" id="L236">            return perform(context, AgentDecision.of(null, &quot;cancelOrder&quot;, orderNo));</span>
         }
 
         @Tool(name = &quot;changeAddress&quot;, description = &quot;修改一笔订单的收货地址（发货前）。不会马上执行，只生成待确认操作，要用户点按钮确认。&quot;)
@@ -227,7 +241,7 @@ public class NativeAgentRunner {
                 @ToolParam(description = &quot;订单号&quot;) String orderNo,
                 @ToolParam(description = &quot;新的详细地址，照抄用户的原话&quot;) String address,
                 ToolContext context) {
-<span class="nc" id="L230">            return perform(context, new AgentDecision(null, &quot;changeAddress&quot;, orderNo, address));</span>
+<span class="nc" id="L244">            return perform(context, new AgentDecision(null, &quot;changeAddress&quot;, orderNo, address));</span>
         }
 
         @Tool(name = &quot;applyAfterSales&quot;, description = &quot;为一笔订单提交退款、退货等售后申请，由人工审核。不会马上执行，只生成待确认操作，要用户点按钮确认。&quot;)
@@ -235,7 +249,7 @@ public class NativeAgentRunner {
                 @ToolParam(description = &quot;订单号&quot;) String orderNo,
                 @ToolParam(description = &quot;售后原因，用户说的&quot;) String reason,
                 ToolContext context) {
-<span class="nc" id="L238">            return perform(context, new AgentDecision(null, &quot;applyAfterSales&quot;, orderNo, reason));</span>
+<span class="nc" id="L252">            return perform(context, new AgentDecision(null, &quot;applyAfterSales&quot;, orderNo, reason));</span>
         }
     }
 }

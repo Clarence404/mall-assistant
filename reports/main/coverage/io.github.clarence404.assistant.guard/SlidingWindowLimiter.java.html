@@ -10,16 +10,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.IntSupplier;
 
 /**
- * 滑动窗口计数：每个 key 在最近一个窗口里最多放行几次（第 9 章从第 8 章的 {@code McpRateLimiter} 抽出来）。
+ * 滑动窗口计数：每个 key 在最近一个窗口里最多放行几次（第 9 章从第 8 章的 {@code McpRateLimiter} 抽出来；第 10 章起是 {@link RateLimiter} 的内存实现）。
  *
  * &lt;p&gt;所在层：上线保护的工具类。第 8 章的 {@code McpRateLimiter}（MCP 工具调用，每分钟 30 次）和第 9 章的 {@link ChatGuard}（对话接口，每分钟 20 次）
  * 都用它；算法和第 8 章 ch08-3 写的完全一样，只是上限和窗口变成了参数。
  *
  * &lt;p&gt;为什么是滑动窗口而不是固定窗口（每个整分钟清零）：固定窗口在「59 秒问 20 次、61 秒再问 20 次」时两秒内放行了 40 次。滑动窗口记下每次的时间，
  * 永远只看「现在往前一个窗口」。代价是每个 key 要存最多「上限」个时间戳，对客服这点量不算什么。只在一个进程里有效：部署多个实例时，要么接受「每个实例各算各的」，
- * 要么放进 Redis（有序集合 ZADD / ZREMRANGEBYSCORE / ZCARD 三条命令就是同一个算法）。
+ * 要么放进 Redis——第 10 章的 {@code state.RedisRateLimiter} 用有序集合的 ZREMRANGEBYSCORE / ZCARD / ZADD 三条命令做同一个算法，包在一段 Lua 脚本里原子执行。
  */
-public final class SlidingWindowLimiter {
+public final class SlidingWindowLimiter implements RateLimiter {
 
     private final IntSupplier limit;
     private final Duration window;
@@ -48,19 +48,20 @@ public final class SlidingWindowLimiter {
      * @param key 调用方，如 {@code user:10001}、{@code ip:127.0.0.1}
      * @return 放行时为 true
      */
+    @Override
     public boolean tryAcquire(String key) {
-<span class="fc" id="L52">        Instant now = clock.instant();</span>
-<span class="fc" id="L53">        Instant cutoff = now.minus(window);</span>
-<span class="fc" id="L54">        Deque&lt;Instant&gt; deque = calls.computeIfAbsent(key, k -&gt; new ArrayDeque&lt;&gt;());</span>
-<span class="fc" id="L55">        synchronized (deque) {</span>
-<span class="fc bfc" id="L56" title="All 4 branches covered.">            while (!deque.isEmpty() &amp;&amp; !deque.peekFirst().isAfter(cutoff)) {</span>
-<span class="fc" id="L57">                deque.pollFirst();</span>
+<span class="fc" id="L53">        Instant now = clock.instant();</span>
+<span class="fc" id="L54">        Instant cutoff = now.minus(window);</span>
+<span class="fc" id="L55">        Deque&lt;Instant&gt; deque = calls.computeIfAbsent(key, k -&gt; new ArrayDeque&lt;&gt;());</span>
+<span class="fc" id="L56">        synchronized (deque) {</span>
+<span class="fc bfc" id="L57" title="All 4 branches covered.">            while (!deque.isEmpty() &amp;&amp; !deque.peekFirst().isAfter(cutoff)) {</span>
+<span class="fc" id="L58">                deque.pollFirst();</span>
             }
-<span class="fc bfc" id="L59" title="All 2 branches covered.">            if (deque.size() &gt;= limit.getAsInt()) {</span>
-<span class="fc" id="L60">                return false;</span>
+<span class="fc bfc" id="L60" title="All 2 branches covered.">            if (deque.size() &gt;= limit.getAsInt()) {</span>
+<span class="fc" id="L61">                return false;</span>
             }
-<span class="fc" id="L62">            deque.addLast(now);</span>
-<span class="fc" id="L63">            return true;</span>
+<span class="fc" id="L63">            deque.addLast(now);</span>
+<span class="fc" id="L64">            return true;</span>
         }
     }
 
@@ -70,30 +71,32 @@ public final class SlidingWindowLimiter {
      * @param key 调用方
      * @return 等多久；窗口里没有记录时为 0
      */
+    @Override
     public Duration retryAfter(String key) {
-<span class="fc" id="L74">        Deque&lt;Instant&gt; deque = calls.get(key);</span>
-<span class="pc bpc" id="L75" title="1 of 2 branches missed.">        if (deque == null) {</span>
-<span class="nc" id="L76">            return Duration.ZERO;</span>
+<span class="fc" id="L76">        Deque&lt;Instant&gt; deque = calls.get(key);</span>
+<span class="fc bfc" id="L77" title="All 2 branches covered.">        if (deque == null) {</span>
+<span class="fc" id="L78">            return Duration.ZERO;</span>
         }
-<span class="fc" id="L78">        synchronized (deque) {</span>
-<span class="fc" id="L79">            Instant oldest = deque.peekFirst();</span>
-<span class="pc bpc" id="L80" title="1 of 2 branches missed.">            if (oldest == null) {</span>
-<span class="nc" id="L81">                return Duration.ZERO;</span>
+<span class="fc" id="L80">        synchronized (deque) {</span>
+<span class="fc" id="L81">            Instant oldest = deque.peekFirst();</span>
+<span class="pc bpc" id="L82" title="1 of 2 branches missed.">            if (oldest == null) {</span>
+<span class="nc" id="L83">                return Duration.ZERO;</span>
             }
-<span class="fc" id="L83">            Duration wait = Duration.between(clock.instant(), oldest.plus(window));</span>
-<span class="pc bpc" id="L84" title="1 of 2 branches missed.">            return wait.isNegative() ? Duration.ZERO : wait.plusSeconds(1).withNanos(0);</span>
+<span class="fc" id="L85">            Duration wait = Duration.between(clock.instant(), oldest.plus(window));</span>
+<span class="pc bpc" id="L86" title="1 of 2 branches missed.">            return wait.isNegative() ? Duration.ZERO : wait.plusSeconds(1).withNanos(0);</span>
         }
     }
 
     /** 清掉已经空了的 key（定期调用，免得只来过一次的 IP 一直占着内存）。 */
+    @Override
     public void evictIdle() {
-<span class="fc" id="L90">        Instant cutoff = clock.instant().minus(window);</span>
-<span class="fc" id="L91">        calls.entrySet().removeIf(e -&gt; {</span>
-<span class="nc" id="L92">            synchronized (e.getValue()) {</span>
-<span class="nc" id="L93">                Instant last = e.getValue().peekLast();</span>
-<span class="nc bnc" id="L94" title="All 4 branches missed.">                return last == null || !last.isAfter(cutoff);</span>
+<span class="fc" id="L93">        Instant cutoff = clock.instant().minus(window);</span>
+<span class="fc" id="L94">        calls.entrySet().removeIf(e -&gt; {</span>
+<span class="nc" id="L95">            synchronized (e.getValue()) {</span>
+<span class="nc" id="L96">                Instant last = e.getValue().peekLast();</span>
+<span class="nc bnc" id="L97" title="All 4 branches missed.">                return last == null || !last.isAfter(cutoff);</span>
             }
         });
-<span class="fc" id="L97">    }</span>
+<span class="fc" id="L100">    }</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

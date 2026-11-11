@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MemoryStateConfig.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.state</a> &gt; <span class="el_source">MemoryStateConfig.java</span></div><h1>MemoryStateConfig.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.state;
+
+import io.github.clarence404.assistant.agent.ConfirmationStore;
+import io.github.clarence404.assistant.agent.MemoryConfirmationStore;
+import io.github.clarence404.assistant.guard.ConcurrencyLimiter;
+import io.github.clarence404.assistant.guard.GuardProperties;
+import io.github.clarence404.assistant.guard.RateLimiterFactory;
+import io.github.clarence404.assistant.guard.SemaphoreConcurrencyLimiter;
+import io.github.clarence404.assistant.guard.SlidingWindowLimiter;
+import io.github.clarence404.assistant.memory.ConversationLocks;
+import io.github.clarence404.assistant.memory.MemoryConversationLocks;
+import io.github.clarence404.assistant.memory.MemoryOwnerCache;
+import io.github.clarence404.assistant.memory.OwnerCache;
+import io.github.clarence404.assistant.ops.MemoryUsageStore;
+import io.github.clarence404.assistant.ops.UsageProperties;
+import io.github.clarence404.assistant.ops.UsageStore;
+import java.time.Clock;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/**
+ * 共享状态的内存实现（默认，{@code assistant.state.store} 不写或写 memory）：前九章的做法，零依赖，只在一个进程里有效（第 10 章引入）。
+ *
+ * &lt;p&gt;所在层：共享状态的装配。这里每个 Bean 都是前几章写在业务类里的那份数据结构，原样挪出来、实现了接口；和 {@link RedisStateConfig} 二选一，
+ * 业务类（{@code ChatGuard}、{@code McpRateLimiter}、{@code UsageLedger}、{@code ConfirmationService}、{@code ConversationMemory}、
+ * {@code ConversationOwners}）只认接口，不知道自己用的是哪一种。
+ */
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnProperty(name = &quot;assistant.state.store&quot;, havingValue = &quot;memory&quot;, matchIfMissing = true)
+<span class="fc" id="L31">public class MemoryStateConfig {</span>
+
+    /**
+     * 限流器：进程内的滑动窗口（第 8、9 章）。
+     *
+     * @param clock 时钟
+     * @return 工厂
+     */
+    @Bean
+    public RateLimiterFactory memoryRateLimiterFactory(Clock clock) {
+<span class="fc" id="L41">        return (name, limit, window) -&gt; new SlidingWindowLimiter(limit, window, clock);</span>
+    }
+
+    /**
+     * 并发名额：一个公平的信号量（第 9 章）。
+     *
+     * @param guard {@code assistant.guard.*}（上限）
+     * @return 并发名额
+     */
+    @Bean
+    public ConcurrencyLimiter memoryConcurrencyLimiter(GuardProperties guard) {
+<span class="fc" id="L52">        return new SemaphoreConcurrencyLimiter(guard.maxConcurrent());</span>
+    }
+
+    /**
+     * Token 总账：三张表（第 9 章）。
+     *
+     * @param usage {@code assistant.usage.*}（会话条数上限）
+     * @return 账
+     */
+    @Bean
+    public UsageStore memoryUsageStore(UsageProperties usage) {
+<span class="fc" id="L63">        return new MemoryUsageStore(usage.maxConversations());</span>
+    }
+
+    /**
+     * 待确认操作：一个 Map（第 7 章）。
+     *
+     * @return 存储
+     */
+    @Bean
+    public ConfirmationStore memoryConfirmationStore() {
+<span class="fc" id="L73">        return new MemoryConfirmationStore();</span>
+    }
+
+    /**
+     * 「正在回答」标记：一个集合（第 6 章）。
+     *
+     * @return 标记
+     */
+    @Bean
+    public ConversationLocks memoryConversationLocks() {
+<span class="fc" id="L83">        return new MemoryConversationLocks();</span>
+    }
+
+    /**
+     * 「令牌是谁」的缓存（第 6 章）。
+     *
+     * @param clock 时钟
+     * @return 缓存
+     */
+    @Bean
+    public OwnerCache memoryOwnerCache(Clock clock) {
+<span class="fc" id="L94">        return new MemoryOwnerCache(clock);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

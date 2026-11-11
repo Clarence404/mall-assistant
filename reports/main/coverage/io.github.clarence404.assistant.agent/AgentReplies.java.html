@@ -70,6 +70,11 @@ public final class AgentReplies {
 <span class="fc" id="L70">        return &quot;商城登录已失效，办不了这件事，请重新登录后再说一次。&quot;;</span>
     }
 
+    /** 第 10 章：确认存不进去（Redis 不可用），这一轮没有生成确认卡片。 */
+    public static String confirmationUnavailable() {
+<span class="nc" id="L75">        return &quot;确认服务暂时不可用，这次没有生成确认，也没有执行任何操作，请稍后再说一次。&quot;;</span>
+    }
+
     /**
      * 模型 finish 时的回答，自称已经办好了就换成 {@link #NOTHING_EXECUTED}。
      *
@@ -77,7 +82,7 @@ public final class AgentReplies {
      * @return 检查过的回答
      */
     public static String checkFinish(String answer) {
-<span class="fc bfc" id="L80" title="All 2 branches covered.">        return FALSE_CLAIM.matcher(answer).find() ? NOTHING_EXECUTED : answer;</span>
+<span class="fc bfc" id="L85" title="All 2 branches covered.">        return FALSE_CLAIM.matcher(answer).find() ? NOTHING_EXECUTED : answer;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

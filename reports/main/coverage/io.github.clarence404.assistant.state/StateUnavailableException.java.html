@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StateUnavailableException.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.state</a> &gt; <span class="el_source">StateUnavailableException.java</span></div><h1>StateUnavailableException.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.state;
+
+/**
+ * 共享状态（Redis）暂时用不了，而这件事按策略不能「假装没事」（第 10 章引入）。
+ *
+ * &lt;p&gt;所在层：共享状态的异常。{@link StateFailures#allowOrThrow} 在 {@code on-redis-error=reject} 时抛出（限流、预算），
+ * 待确认操作的 Redis 存储出错时也抛它（写操作永远不能「出错就放行」）。上游各自翻译成自己的错误：对话接口是 503 {@code STATE_UNAVAILABLE}
+ * （{@code guard.ChatGuard}），确认接口是 503 {@code CONFIRMATION_UNAVAILABLE}（{@code agent.ConfirmationService}），MCP 是一句给对面模型看的原因。
+ */
+public class StateUnavailableException extends RuntimeException {
+
+    private final String component;
+
+    /**
+     * 创建。
+     *
+     * @param component 哪一样状态，如 {@code rate:chat}、{@code usage}、{@code confirmation}
+     * @param cause 底层的 Redis 异常
+     */
+    public StateUnavailableException(String component, Throwable cause) {
+<span class="fc" id="L21">        super(&quot;共享状态暂时不可用：&quot; + component, cause);</span>
+<span class="fc" id="L22">        this.component = component;</span>
+<span class="fc" id="L23">    }</span>
+
+    /** 哪一样状态。 */
+    public String component() {
+<span class="fc" id="L27">        return component;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RedisKeys.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.state</a> &gt; <span class="el_source">RedisKeys.java</span></div><h1>RedisKeys.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.state;
+
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.scripting.support.ResourceScriptSource;
+
+/**
+ * Redis 键的命名，以及加载 Lua 脚本（第 10 章引入）。
+ *
+ * &lt;p&gt;所在层：共享状态的工具。所有 Redis 实现都用它拼键：{@code 前缀 + 用途 + 内容}，如 {@code mall-assistant:rate:chat:user:10001}。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么要前缀&lt;/b&gt;：本项目和 mall-evolution 共用一台 Redis（开发机上的 mall-infra），还另选了一个 database 编号。前缀让
+ * {@code SCAN 0 MATCH mall-assistant:*} 只列出我们的键，排查、清理都不会碰到别人的。
+ *
+ * &lt;p&gt;&lt;b&gt;键里的花括号&lt;/b&gt;：同一轮要一起改的几个键（如一天的 Token 账 {@code usage:{2026-11-11}:caller} 和 {@code usage:{2026-11-11}:intent}），
+ * 把共同的部分用花括号括起来。单机 Redis 里花括号只是普通字符；到了 Redis Cluster，只有花括号里的部分参与分片（hash tag），
+ * 这几个键就一定落在同一个节点上——Lua 脚本和事务要求它操作的键都在同一个节点，否则报 CROSSSLOT。
+ *
+ * @param prefix 前缀，如 {@code mall-assistant:}
+ */
+<span class="fc" id="L21">public record RedisKeys(String prefix) {</span>
+
+    /**
+     * 拼一个键：前缀 + 各段用冒号连起来。
+     *
+     * @param parts 各段，如 {@code &quot;rate&quot;, &quot;chat&quot;, &quot;user:10001&quot;}
+     * @return 完整的键
+     */
+    public String of(String... parts) {
+<span class="fc" id="L30">        return prefix + String.join(&quot;:&quot;, parts);</span>
+    }
+
+    /**
+     * 从 classpath 的 {@code redis/} 目录加载一段 Lua 脚本。
+     *
+     * &lt;p&gt;Spring Data Redis 执行它时先用 {@code EVALSHA}（只发脚本的 SHA1，省带宽），Redis 说没见过（{@code NOSCRIPT}）再用 {@code EVAL} 把全文发过去。
+     *
+     * @param file 文件名，如 {@code sliding-window.lua}
+     * @param resultType 返回值类型（Lua 的整数对应 {@link Long}）
+     * @param &lt;T&gt; 返回值类型
+     * @return 脚本
+     */
+    public static &lt;T&gt; DefaultRedisScript&lt;T&gt; script(String file, Class&lt;T&gt; resultType) {
+<span class="fc" id="L44">        DefaultRedisScript&lt;T&gt; script = new DefaultRedisScript&lt;&gt;();</span>
+<span class="fc" id="L45">        script.setScriptSource(new ResourceScriptSource(new ClassPathResource(&quot;redis/&quot; + file)));</span>
+<span class="fc" id="L46">        script.setResultType(resultType);</span>
+<span class="fc" id="L47">        return script;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

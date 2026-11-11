@@ -261,21 +261,27 @@ public class McpMallService {
 <span class="fc bfc" id="L261" title="All 2 branches covered.">        if (!proposal.accepted()) {</span>
 <span class="fc" id="L262">            return McpViews.Proposal.rejected(forMcp(proposal.rejection()));</span>
         }
-<span class="fc" id="L264">        PendingConfirmation pending = confirmations.createForMcp(proposal.action(), caller.owner());</span>
-<span class="fc" id="L265">        log.info(</span>
+        PendingConfirmation pending;
+        try {
+<span class="fc" id="L266">            pending = confirmations.createForMcp(proposal.action(), caller.owner());</span>
+<span class="nc" id="L267">        } catch (ConfirmationException e) {</span>
+            // 第 10 章：确认存不进去（Redis 不可用），只登记不了，更不会执行
+<span class="nc" id="L269">            return McpViews.Proposal.rejected(forMcp(e.failure().message()));</span>
+<span class="fc" id="L270">        }</span>
+<span class="fc" id="L271">        log.info(</span>
                 &quot;MCP 提出写操作 {}：{}（{}），等用户在页面确认&quot;,
-<span class="fc" id="L267">                pending.id(),</span>
-<span class="fc" id="L268">                pending.summary(),</span>
-<span class="fc" id="L269">                caller.owner().key());</span>
-<span class="fc" id="L270">        return new McpViews.Proposal(</span>
+<span class="fc" id="L273">                pending.id(),</span>
+<span class="fc" id="L274">                pending.summary(),</span>
+<span class="fc" id="L275">                caller.owner().key());</span>
+<span class="fc" id="L276">        return new McpViews.Proposal(</span>
                 true,
                 false,
                 null,
-<span class="fc" id="L274">                pending.id(),</span>
-<span class="fc" id="L275">                confirmUrl(pending.id()),</span>
-<span class="fc" id="L276">                pending.summary(),</span>
-<span class="fc" id="L277">                pending.impact(),</span>
-<span class="fc" id="L278">                pending.expiresAt(),</span>
+<span class="fc" id="L280">                pending.id(),</span>
+<span class="fc" id="L281">                confirmUrl(pending.id()),</span>
+<span class="fc" id="L282">                pending.summary(),</span>
+<span class="fc" id="L283">                pending.impact(),</span>
+<span class="fc" id="L284">                pending.expiresAt(),</span>
                 PROPOSAL_NOTE);
     }
 
@@ -288,20 +294,20 @@ public class McpMallService {
      * @throws McpRejection 确认 ID 格式不对、不存在或不是你的
      */
     public McpViews.ConfirmationState confirmation(McpCaller caller, String confirmationId) {
-<span class="pc bpc" id="L291" title="1 of 2 branches missed.">        String id = confirmationId == null ? &quot;&quot; : confirmationId.strip();</span>
-<span class="fc bfc" id="L292" title="All 2 branches covered.">        if (!id.matches(ConversationIds.PATTERN)) {</span>
-<span class="fc" id="L293">            throw new McpRejection(&quot;confirmationId 格式不对：应该是 propose* 工具返回的那个 UUID&quot;);</span>
+<span class="pc bpc" id="L297" title="1 of 2 branches missed.">        String id = confirmationId == null ? &quot;&quot; : confirmationId.strip();</span>
+<span class="fc bfc" id="L298" title="All 2 branches covered.">        if (!id.matches(ConversationIds.PATTERN)) {</span>
+<span class="fc" id="L299">            throw new McpRejection(&quot;confirmationId 格式不对：应该是 propose* 工具返回的那个 UUID&quot;);</span>
         }
         try {
-<span class="fc" id="L296">            ConfirmationSnapshot snapshot = confirmations.snapshot(id, caller.owner());</span>
-<span class="fc" id="L297">            return new McpViews.ConfirmationState(</span>
+<span class="fc" id="L302">            ConfirmationSnapshot snapshot = confirmations.snapshot(id, caller.owner());</span>
+<span class="fc" id="L303">            return new McpViews.ConfirmationState(</span>
                     id,
-<span class="fc" id="L299">                    snapshot.state().name(),</span>
-<span class="fc" id="L300">                    snapshot.confirmation().summary(),</span>
-<span class="fc" id="L301">                    snapshot.message(),</span>
-<span class="fc" id="L302">                    snapshot.confirmation().expiresAt());</span>
-<span class="fc" id="L303">        } catch (ConfirmationException e) {</span>
-<span class="fc" id="L304">            throw new McpRejection(&quot;找不到这个确认：不存在、过期很久了，或者不是当前令牌这个账号提出的&quot;);</span>
+<span class="fc" id="L305">                    snapshot.state().name(),</span>
+<span class="fc" id="L306">                    snapshot.confirmation().summary(),</span>
+<span class="fc" id="L307">                    snapshot.message(),</span>
+<span class="fc" id="L308">                    snapshot.confirmation().expiresAt());</span>
+<span class="fc" id="L309">        } catch (ConfirmationException e) {</span>
+<span class="fc" id="L310">            throw new McpRejection(&quot;找不到这个确认：不存在、过期很久了，或者不是当前令牌这个账号提出的&quot;);</span>
         }
     }
 
@@ -312,24 +318,24 @@ public class McpMallService {
      * @return 链接
      */
     String confirmUrl(String id) {
-<span class="fc" id="L315">        return UriComponentsBuilder.fromUriString(properties.confirmUrl())</span>
-<span class="fc" id="L316">                .queryParam(&quot;confirm&quot;, id)</span>
-<span class="fc" id="L317">                .build()</span>
-<span class="fc" id="L318">                .toUriString();</span>
+<span class="fc" id="L321">        return UriComponentsBuilder.fromUriString(properties.confirmUrl())</span>
+<span class="fc" id="L322">                .queryParam(&quot;confirm&quot;, id)</span>
+<span class="fc" id="L323">                .build()</span>
+<span class="fc" id="L324">                .toUriString();</span>
     }
 
     /** 这个状态的订单能提出哪些写操作，写成 MCP 工具名（{@link MallMcpTools#proposalTool}）。 */
     static List&lt;String&gt; proposals(String status) {
-<span class="fc" id="L323">        return OrderRules.allowed(status).stream()</span>
-<span class="fc" id="L324">                .map(MallMcpTools::proposalTool)</span>
-<span class="fc" id="L325">                .toList();</span>
+<span class="fc" id="L329">        return OrderRules.allowed(status).stream()</span>
+<span class="fc" id="L330">                .map(MallMcpTools::proposalTool)</span>
+<span class="fc" id="L331">                .toList();</span>
     }
 
     /** 查到订单之后的下一步提示。 */
     static String orderNote(List&lt;String&gt; proposals) {
-<span class="pc bpc" id="L330" title="1 of 2 branches missed.">        return proposals.isEmpty()</span>
-<span class="nc" id="L331">                ? &quot;这笔订单现在不能取消、改地址或申请售后，如实告诉用户&quot;</span>
-<span class="fc" id="L332">                : &quot;用户要办的事如果在 allowedProposals 里，可以调对应的工具提出（只会生成待确认操作，要用户本人在页面上点确认才执行）；不在里面就告诉用户办不了&quot;;</span>
+<span class="pc bpc" id="L336" title="1 of 2 branches missed.">        return proposals.isEmpty()</span>
+<span class="nc" id="L337">                ? &quot;这笔订单现在不能取消、改地址或申请售后，如实告诉用户&quot;</span>
+<span class="fc" id="L338">                : &quot;用户要办的事如果在 allowedProposals 里，可以调对应的工具提出（只会生成待确认操作，要用户本人在页面上点确认才执行）；不在里面就告诉用户办不了&quot;;</span>
     }
 
     /**
@@ -340,43 +346,43 @@ public class McpMallService {
      * @return 改过的原因
      */
     static String forMcp(String reason) {
-<span class="fc bfc" id="L343" title="All 2 branches covered.">        if (reason == null) {</span>
-<span class="fc" id="L344">            return null;</span>
+<span class="fc bfc" id="L349" title="All 2 branches covered.">        if (reason == null) {</span>
+<span class="fc" id="L350">            return null;</span>
         }
-<span class="fc" id="L346">        String text = reason.replaceAll(&quot;[：；]\\s*(现在)?用 finish.*$&quot;, &quot;&quot;);</span>
-<span class="fc bfc" id="L347" title="All 2 branches covered.">        for (AgentTool tool : List.of(AgentTool.CANCEL_ORDER, AgentTool.CHANGE_ADDRESS, AgentTool.APPLY_AFTER_SALES)) {</span>
-<span class="fc" id="L348">            text = text.replace(&quot;（&quot; + tool.toolName() + &quot;）&quot;, &quot;（&quot; + MallMcpTools.proposalTool(tool) + &quot;）&quot;);</span>
-<span class="fc" id="L349">        }</span>
-<span class="fc" id="L350">        return text;</span>
+<span class="fc" id="L352">        String text = reason.replaceAll(&quot;[：；]\\s*(现在)?用 finish.*$&quot;, &quot;&quot;);</span>
+<span class="fc bfc" id="L353" title="All 2 branches covered.">        for (AgentTool tool : List.of(AgentTool.CANCEL_ORDER, AgentTool.CHANGE_ADDRESS, AgentTool.APPLY_AFTER_SALES)) {</span>
+<span class="fc" id="L354">            text = text.replace(&quot;（&quot; + tool.toolName() + &quot;）&quot;, &quot;（&quot; + MallMcpTools.proposalTool(tool) + &quot;）&quot;);</span>
+<span class="fc" id="L355">        }</span>
+<span class="fc" id="L356">        return text;</span>
     }
 
     private static boolean blank(String value) {
-<span class="fc bfc" id="L354" title="All 4 branches covered.">        return value == null || value.isBlank();</span>
+<span class="fc bfc" id="L360" title="All 4 branches covered.">        return value == null || value.isBlank();</span>
     }
 
     /** 商城失败 → 能说给用户听的原因（同第 3、7 章）。 */
     private static String failure(String orderNo, MallResult&lt;?&gt; result) {
-<span class="pc bpc" id="L359" title="2 of 4 branches missed.">        return switch (result.failure()) {</span>
-<span class="fc" id="L360">            case NOT_FOUND -&gt; &quot;没有找到订单 &quot; + orderNo + &quot;：订单号不存在，或者不是当前令牌这个账号的订单&quot;;</span>
-<span class="nc" id="L361">            case UNAUTHORIZED -&gt; &quot;商城令牌无效或已过期，请重新登录商城换一个令牌&quot;;</span>
-<span class="nc" id="L362">            case REJECTED -&gt; &quot;订单号不合法&quot;;</span>
+<span class="pc bpc" id="L365" title="2 of 4 branches missed.">        return switch (result.failure()) {</span>
+<span class="fc" id="L366">            case NOT_FOUND -&gt; &quot;没有找到订单 &quot; + orderNo + &quot;：订单号不存在，或者不是当前令牌这个账号的订单&quot;;</span>
+<span class="nc" id="L367">            case UNAUTHORIZED -&gt; &quot;商城令牌无效或已过期，请重新登录商城换一个令牌&quot;;</span>
+<span class="nc" id="L368">            case REJECTED -&gt; &quot;订单号不合法&quot;;</span>
             case UNAVAILABLE -&gt; {
-<span class="fc" id="L364">                log.warn(&quot;MCP 查商城失败：{}，code={}&quot;, result.failure(), result.code());</span>
-<span class="fc" id="L365">                yield &quot;商城服务暂时不可用，请稍后再试&quot;;</span>
+<span class="fc" id="L370">                log.warn(&quot;MCP 查商城失败：{}，code={}&quot;, result.failure(), result.code());</span>
+<span class="fc" id="L371">                yield &quot;商城服务暂时不可用，请稍后再试&quot;;</span>
             }
         };
     }
 
     /** 资料正文（去掉第一行的标题路径），截短。 */
     private static String body(RagSource source) {
-<span class="pc bpc" id="L372" title="1 of 2 branches missed.">        String content = source.content() == null ? &quot;&quot; : source.content();</span>
-<span class="fc" id="L373">        int newline = content.indexOf('\n');</span>
-<span class="pc bpc" id="L374" title="1 of 2 branches missed.">        String body = (newline &lt; 0 ? content : content.substring(newline + 1)).strip();</span>
-<span class="pc bpc" id="L375" title="1 of 2 branches missed.">        return body.length() &lt;= SNIPPET_CHARS ? body : body.substring(0, SNIPPET_CHARS) + &quot;…&quot;;</span>
+<span class="pc bpc" id="L378" title="1 of 2 branches missed.">        String content = source.content() == null ? &quot;&quot; : source.content();</span>
+<span class="fc" id="L379">        int newline = content.indexOf('\n');</span>
+<span class="pc bpc" id="L380" title="1 of 2 branches missed.">        String body = (newline &lt; 0 ? content : content.substring(newline + 1)).strip();</span>
+<span class="pc bpc" id="L381" title="1 of 2 branches missed.">        return body.length() &lt;= SNIPPET_CHARS ? body : body.substring(0, SNIPPET_CHARS) + &quot;…&quot;;</span>
     }
 
     private static String time(LocalDateTime time) {
-<span class="pc bpc" id="L379" title="1 of 2 branches missed.">        return time == null ? null : time.format(TIME);</span>
+<span class="pc bpc" id="L385" title="1 of 2 branches missed.">        return time == null ? null : time.format(TIME);</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
