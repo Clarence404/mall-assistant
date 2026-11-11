@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CallerResolver.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.guard</a> &gt; <span class="el_source">CallerResolver.java</span></div><h1>CallerResolver.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.guard;
+
+import io.github.clarence404.assistant.memory.ConversationException;
+import io.github.clarence404.assistant.memory.ConversationOwners;
+import io.github.clarence404.assistant.ops.UsageProperties;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import org.springframework.stereotype.Component;
+
+/**
+ * 一个对话请求「算谁的」：限流、每日预算、Token 记账都按它分（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：上线保护。上游是 {@code ChatController}；下游是第 6 章的 {@link ConversationOwners}（问商城「这个令牌是谁」，按令牌指纹缓存 5 分钟）。
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;登录了：{@code user:&lt;商城用户 ID&gt;}——换了令牌（重新登录）还是同一个人，额度不会因为重新登录就重置
+ *   &lt;li&gt;没登录：{@code ip:&lt;来源地址&gt;}——匿名的只能按 IP 分；同一个公司出口 IP 后面的很多人会共用一份额度，这是按 IP 限流的老问题
+ *   &lt;li&gt;带了令牌但商城确认不了（令牌过期、商城挂了）：{@code token:&lt;令牌指纹前 12 位&gt;}，这一轮照常往下走，真正的「请重新登录」由后面的会话、工具给出
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;来源地址取 {@code request.getRemoteAddr()}：部署在 Nginx / 网关后面时它是代理的地址，要配 {@code server.forward-headers-strategy}
+ * 让 Spring 按 {@code X-Forwarded-For} 还原，而且只能信任自己的代理加的头（否则谁都能伪造一个 IP 绕过限流）。上线清单里有这一条。
+ *
+ * &lt;p&gt;限流和预算都关掉时，不需要稳定的用户身份，就不多问一次商城，直接用令牌指纹（前几章的接口测试会断言商城收到了几次请求）。
+ */
+@Component
+public class CallerResolver {
+
+    private final ConversationOwners owners;
+    private final GuardProperties guard;
+    private final UsageProperties usage;
+
+    /**
+     * 创建。
+     *
+     * @param owners 第 6 章的归属（问商城，带缓存）
+     * @param guard {@code assistant.guard.*}
+     * @param usage {@code assistant.usage.*}
+     */
+<span class="fc" id="L42">    public CallerResolver(ConversationOwners owners, GuardProperties guard, UsageProperties usage) {</span>
+<span class="fc" id="L43">        this.owners = owners;</span>
+<span class="fc" id="L44">        this.guard = guard;</span>
+<span class="fc" id="L45">        this.usage = usage;</span>
+<span class="fc" id="L46">    }</span>
+
+    /**
+     * 这个请求算谁的。
+     *
+     * @param mallToken 商城令牌，没登录为 null
+     * @param remoteAddr 来源地址
+     * @return {@code user:…}、{@code ip:…} 或 {@code token:…}
+     */
+    public String resolve(String mallToken, String remoteAddr) {
+<span class="fc bfc" id="L56" title="All 2 branches covered.">        if (mallToken == null) {</span>
+<span class="fc" id="L57">            return &quot;ip:&quot; + remoteAddr;</span>
+        }
+<span class="pc bpc" id="L59" title="2 of 4 branches missed.">        if (!guard.enabled() &amp;&amp; usage.dailyTokenBudget() &lt;= 0) {</span>
+<span class="fc" id="L60">            return &quot;token:&quot; + fingerprint(mallToken);</span>
+        }
+        try {
+<span class="nc" id="L63">            return owners.resolve(mallToken).key();</span>
+<span class="nc" id="L64">        } catch (ConversationException e) {</span>
+<span class="nc" id="L65">            return &quot;token:&quot; + fingerprint(mallToken);</span>
+        }
+    }
+
+    /** 令牌指纹：SHA-256 前 12 个十六进制字符，不留令牌原文。 */
+    static String fingerprint(String token) {
+        try {
+<span class="fc" id="L72">            byte[] digest = MessageDigest.getInstance(&quot;SHA-256&quot;).digest(token.getBytes(StandardCharsets.UTF_8));</span>
+<span class="fc" id="L73">            return HexFormat.of().formatHex(digest, 0, 6);</span>
+<span class="nc" id="L74">        } catch (NoSuchAlgorithmException e) {</span>
+<span class="nc" id="L75">            throw new IllegalStateException(e);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

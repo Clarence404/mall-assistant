@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>TokenUsage.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.ops</a> &gt; <span class="el_source">TokenUsage.java</span></div><h1>TokenUsage.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.ops;
+
+/**
+ * 一次模型调用用了多少 Token（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：上线运维（{@code ops} 包）的数据。{@link UsageAdvisor} 从模型的响应里取（Ollama 的 {@code prompt_eval_count} / {@code eval_count}、
+ * OpenAI 的 {@code usage}、Claude CLI 的 {@code usage}），取不到时用 {@link TokenEstimator} 估算，并把 {@code estimated} 标成 true。
+ *
+ * &lt;p&gt;Token 是模型计费和上下文长度的单位：模型不是按「字」读文本，而是先切成 Token（常见词一个、生僻字可能拆成几个）。输入（提示词：系统消息 + 历史 +
+ * 资料 + 问题）和输出（回答）分开算，因为大多数厂商两者单价不同，输出通常贵几倍。
+ *
+ * @param input 输入 Token（提示词）
+ * @param output 输出 Token（回答）
+ * @param estimated 是不是估算的（模型没报告用量时）
+ */
+<span class="fc" id="L16">public record TokenUsage(int input, int output, boolean estimated) {</span>
+
+    /** 没有用量（调用失败、还没调用）。 */
+<span class="fc" id="L19">    public static final TokenUsage NONE = new TokenUsage(0, 0, false);</span>
+
+    /** 输入 + 输出。 */
+    public int total() {
+<span class="nc" id="L23">        return input + output;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

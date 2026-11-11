@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RagCandidate.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.rag</a> &gt; <span class="el_source">RagCandidate.java</span></div><h1>RagCandidate.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.rag;
+
+import java.util.List;
+
+/**
+ * 融合后的一个候选块，带着它在两路检索里各自的分数（第 5 章引入）。
+ *
+ * &lt;p&gt;所在层：RAG 的检索中间结果。{@link RagRetriever} 生成、按门槛筛选；{@link ContextPacker} 把选中的候选合并、编号成 {@link RagSource}。
+ *
+ * @param chunk 块
+ * @param vectorScore 向量检索的余弦相似度；向量检索没找到它（不在前 candidateK 块里）时为 null
+ * @param keywordScore 关键词检索的 BM25 分数；关键词检索没找到它时为 null
+ * @param coverage 问题的词项有多大比例出现在这块里；关键词检索没找到它时为 null
+ * @param fusedScore 排序用的分数：混合检索时是 RRF 总分，只用向量检索时等于 vectorScore
+ * @param foundBy 被哪些检索器找到：{@code vector}、{@code keyword}
+ */
+<span class="fc" id="L17">public record RagCandidate(</span>
+        RagChunk chunk,
+        Double vectorScore,
+        Double keywordScore,
+        Double coverage,
+        double fusedScore,
+        List&lt;String&gt; foundBy) {}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

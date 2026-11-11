@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>QuestionCondenser.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.memory</a> &gt; <span class="el_source">QuestionCondenser.java</span></div><h1>QuestionCondenser.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.memory;
+
+import io.github.clarence404.assistant.ops.UsageAdvisor;
+import io.github.clarence404.assistant.rag.Terms;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.Resource;
+import org.springframework.stereotype.Component;
+
+/**
+ * 追问改写（condense question）：先让模型结合对话历史，把追问改写成一句不依赖上文的独立问题，再拿它去识别意图、去检索（第 6 章引入）。
+ *
+ * &lt;p&gt;所在层：业务层。上游是 {@code ChatService#begin}（有历史时，每一轮开头调一次）；下游是共享的 {@link ChatClient} 和提示词
+ * {@code prompts/memory-condense.st}。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么要改写&lt;/b&gt;：先问「七天无理由退货要什么条件」，再问「那运费谁出」。第二句拿去检索，向量和关键词都只看得到「运费」两个字，
+ * 很可能检索到「买多少钱包邮」（发货运费），而不是「退货运费」；检索错了，模型再聪明也只能照着错的资料答。意图识别也一样只看这一句：实测 1.5b
+ * 把「那能抵多少钱」分成了问商品（PRODUCT_INFO），不走 RAG，然后凭常识编了一个「1000 积分 = 1 元」。检索器和意图识别都没有记忆，它们只认得你给的这一句话，
+ * 所以「上文」必须由改写这一步翻译进问题里：「七天无理由退货的运费谁出」「积分能抵多少钱」。
+ *
+ * &lt;p&gt;为什么不直接把历史拼在问题前面去检索：几轮历史混在一起，向量会被前面的话题「冲淡」，关键词检索也会被历史里的词带偏；换了话题时更糟。
+ *
+ * &lt;p&gt;&lt;b&gt;小模型改写得并不好&lt;/b&gt;（实测见 docs/ch06.md）：会照抄示例、会把新话题改回旧话题（「密码输错几次会被锁」→「七天无理由退货要什么条件」）、
+ * 会把上文的回答塞进来。所以：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;示例用几组「历史 → 最新一句 → 改写」的对话轮次给（few-shot），而且故意选和商城规则无关的话题（会员等级、快递公司、道谢），模型照抄了也不至于答非所问
+ *   &lt;li&gt;结果要校验（{@link #plausible}）：原话里的关键词（{@link Terms} 切出来的词）至少六成要还在改写结果里，不然就是改跑题了，退回原话
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;代价：每个追问多一次模型调用（本地 1.5b 约 0.5～2 秒，命令行模型 3～7 秒），所以有开关 {@code assistant.memory.condense.enabled}；温度 0，
+ * 同样的历史得到同样的改写。改写失败（模型挂了、超时、输出明显不对）不影响回答，退回原话。
+ */
+@Component
+public class QuestionCondenser {
+
+<span class="fc" id="L50">    private static final Logger log = LoggerFactory.getLogger(QuestionCondenser.class);</span>
+
+    /** 改写和意图识别一样要稳定：温度 0。 */
+    static final double TEMPERATURE = 0.0;
+
+    /**
+     * 用户消息模板：最近几轮对话 + 最新一句。历史用标签圈起来，里面的话只是待改写的材料。
+     *
+     * &lt;p&gt;{@code {history}} 和 {@code {question}} 是模板变量，值里的花括号不会再被当成占位符。
+     */
+    static final String USER_TEMPLATE = &quot;&quot;&quot;
+            &lt;对话历史&gt;
+            {history}
+            &lt;/对话历史&gt;
+            最新一句：{question}
+            改写后的问题：&quot;&quot;&quot;;
+
+    /** 示例里的历史、最新一句和改写结果：放在系统消息之后，一组是一问一答两条消息。话题故意和商城规则无关，见类注释。 */
+<span class="fc" id="L68">    static final List&lt;List&lt;String&gt;&gt; EXAMPLES = List.of(</span>
+<span class="fc" id="L69">            List.of(&quot;用户：会员等级怎么划分\n助手：按近 12 个月的消费金额分为普通、银卡、金卡三级。&quot;, &quot;那怎么升级&quot;, &quot;会员等级怎么升级&quot;),</span>
+<span class="fc" id="L70">            List.of(&quot;用户：订单 1849203385720832512 发货了吗\n助手：这笔订单已发货。&quot;, &quot;它是哪家快递&quot;, &quot;订单 1849203385720832512 是哪家快递&quot;),</span>
+<span class="fc" id="L71">            List.of(&quot;用户：会员等级怎么划分\n助手：按近 12 个月的消费金额分为三级。&quot;, &quot;谢谢&quot;, &quot;谢谢&quot;));</span>
+
+    /** 原话里的关键词至少有这么大比例出现在改写结果里，才算没改跑题。 */
+    static final double MIN_TERM_COVERAGE = 0.6;
+
+    /** 给模型看的历史里，每条消息最多多少个字：助手的长回答截短，改写只需要知道在聊什么。 */
+    static final int MESSAGE_PREVIEW_CHARS = 200;
+
+    /** 小模型有时会在结果前面加上「改写后的问题：」之类的前缀，或者用引号括起来。 */
+<span class="fc" id="L80">    private static final Pattern LABEL = Pattern.compile(&quot;^(?:改写后的问题|改写后|问题|最新一句)\\s*[:：]\\s*&quot;);</span>
+
+<span class="fc" id="L82">    private static final Pattern QUOTES = Pattern.compile(&quot;^[「“\&quot;'『]+|[」”\&quot;'』]+$&quot;);</span>
+
+    private final ChatClient chatClient;
+    private final MemoryProperties properties;
+<span class="fc" id="L86">    private final Resource systemPrompt = new ClassPathResource(&quot;prompts/memory-condense.st&quot;);</span>
+
+    /**
+     * 创建。
+     *
+     * @param chatClient 共享的 ChatClient
+     * @param properties {@code assistant.memory.*}（开关、看几轮、结果最长多少字）
+     */
+<span class="fc" id="L94">    public QuestionCondenser(ChatClient chatClient, MemoryProperties properties) {</span>
+<span class="fc" id="L95">        this.chatClient = chatClient;</span>
+<span class="fc" id="L96">        this.properties = properties;</span>
+<span class="fc" id="L97">    }</span>
+
+    /**
+     * 把追问改写成独立问题。
+     *
+     * &lt;p&gt;要求（测试按这个写）：
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;开关关着、或者没有历史：不调模型，返回 null
+     *   &lt;li&gt;否则调一次模型：系统消息 = {@code memory-condense.st}；接着是 {@link #examples()}（示例的一问一答）；最后的用户消息 =
+     *       {@link #USER_TEMPLATE}，{@code history} 是最近 {@code condense.history-turns} 轮的 {@link #transcript}，{@code question} 是用户这一句；
+     *       温度 {@link #TEMPERATURE}；不注册工具
+     *   &lt;li&gt;模型的输出用 {@link #clean} 清理；清理后为空、超过 {@code condense.max-chars} 个字、和原话一样、或者 {@link #plausible} 不通过，都返回 null
+     *   &lt;li&gt;模型调用失败（任何 RuntimeException）：记一行 warn，返回 null，不往外抛
+     * &lt;/ul&gt;
+     *
+     * @param message 用户这一句（原话）
+     * @param history 带给模型的历史，按时间从早到晚
+     * @return 改写后的问题；没改写时为 null（调用方就用原话）
+     */
+    public String condense(String message, List&lt;Message&gt; history) {
+<span class="fc bfc" id="L118" title="All 4 branches covered.">        if (!properties.condense().enabled() || history.isEmpty()) {</span>
+<span class="fc" id="L119">            return null;</span>
+        }
+<span class="fc" id="L121">        String transcript = transcript(history, properties.condense().historyTurns());</span>
+        try {
+<span class="fc" id="L123">            String output = chatClient</span>
+<span class="fc" id="L124">                    .prompt()</span>
+<span class="fc" id="L125">                    .system(systemPrompt)</span>
+<span class="fc" id="L126">                    .messages(examples())</span>
+<span class="fc" id="L127">                    .user(u -&gt;</span>
+<span class="fc" id="L128">                            u.text(USER_TEMPLATE).param(&quot;history&quot;, transcript).param(&quot;question&quot;, message))</span>
+<span class="fc" id="L129">                    .options(ChatOptions.builder().temperature(TEMPERATURE))</span>
+<span class="fc" id="L130">                    .advisors(UsageAdvisor.stage(&quot;condense&quot;)) // 第 9 章：Token 记账时标明这是追问改写</span>
+<span class="fc" id="L131">                    .call()</span>
+<span class="fc" id="L132">                    .content();</span>
+<span class="fc" id="L133">            String condensed = clean(output);</span>
+<span class="fc bfc" id="L134" title="All 2 branches covered.">            if (condensed.isEmpty()</span>
+<span class="fc bfc" id="L135" title="All 2 branches covered.">                    || condensed.length() &gt; properties.condense().maxChars()</span>
+<span class="fc bfc" id="L136" title="All 2 branches covered.">                    || condensed.equals(message.strip())) {</span>
+<span class="fc" id="L137">                log.info(&quot;追问改写「{}」→「{}」：没有改写或结果太长，用原话&quot;, message, condensed);</span>
+<span class="fc" id="L138">                return null;</span>
+            }
+<span class="fc bfc" id="L140" title="All 2 branches covered.">            if (!plausible(message, condensed)) {</span>
+<span class="fc" id="L141">                log.info(&quot;追问改写「{}」→「{}」：丢了原话里的关键词（改跑题了），用原话&quot;, message, condensed);</span>
+<span class="fc" id="L142">                return null;</span>
+            }
+<span class="fc" id="L144">            log.info(&quot;追问改写「{}」→「{}」&quot;, message, condensed);</span>
+<span class="fc" id="L145">            return condensed;</span>
+<span class="fc" id="L146">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L147">            log.warn(&quot;追问改写失败，用原话：{}&quot;, e.toString());</span>
+<span class="fc" id="L148">            return null;</span>
+        }
+    }
+
+    /**
+     * 示例：每组一条用户消息（填好模板的历史和最新一句）+ 一条助手消息（改写结果）。
+     *
+     * @return 示例消息，按顺序
+     */
+    static List&lt;Message&gt; examples() {
+<span class="fc" id="L158">        List&lt;Message&gt; messages = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L159" title="All 2 branches covered.">        for (List&lt;String&gt; example : EXAMPLES) {</span>
+<span class="fc" id="L160">            messages.add(new UserMessage(</span>
+<span class="fc" id="L161">                    USER_TEMPLATE.replace(&quot;{history}&quot;, example.get(0)).replace(&quot;{question}&quot;, example.get(1))));</span>
+<span class="fc" id="L162">            messages.add(new AssistantMessage(example.get(2)));</span>
+<span class="fc" id="L163">        }</span>
+<span class="fc" id="L164">        return messages;</span>
+    }
+
+    /**
+     * 改写结果是否可信：原话的关键字（{@link Terms#of} 切出的单个汉字和数字、英文词，去掉「的、那、吗」等）至少 {@link #MIN_TERM_COVERAGE}
+     * 出现在结果里。改写只应该「补」上文，不应该「换」掉用户问的东西。只看单字不看双字词：「运费谁出」改写成「运费由谁承担」是正常的换说法，
+     * 双字词「谁出」对不上，单字「运、费、谁」都还在。原话没有关键字（全是语气词）时不做要求。
+     *
+     * @param original 原话
+     * @param condensed 改写结果
+     * @return 可信时为 true
+     */
+    static boolean plausible(String original, String condensed) {
+<span class="fc" id="L177">        Set&lt;String&gt; terms = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L178" title="All 2 branches covered.">        for (String term : Terms.of(original)) {</span>
+<span class="pc bpc" id="L179" title="1 of 4 branches missed.">            if (term.length() == 1 || Character.UnicodeScript.of(term.charAt(0)) != Character.UnicodeScript.HAN) {</span>
+<span class="fc" id="L180">                terms.add(term);</span>
+            }
+<span class="fc" id="L182">        }</span>
+<span class="fc bfc" id="L183" title="All 2 branches covered.">        if (terms.isEmpty()) {</span>
+<span class="fc" id="L184">            return true;</span>
+        }
+<span class="fc" id="L186">        String lower = condensed.toLowerCase(java.util.Locale.ROOT);</span>
+<span class="fc" id="L187">        long kept = terms.stream().filter(lower::contains).count();</span>
+<span class="fc bfc" id="L188" title="All 2 branches covered.">        return (double) kept / terms.size() &gt;= MIN_TERM_COVERAGE;</span>
+    }
+
+    /**
+     * 最近几轮历史写成「用户：…」「助手：…」一行一条，每条最多 {@link #MESSAGE_PREVIEW_CHARS} 个字。
+     *
+     * @param history 历史
+     * @param turns 取最近几轮
+     * @return 对话文本
+     */
+    static String transcript(List&lt;Message&gt; history, int turns) {
+<span class="fc" id="L199">        List&lt;List&lt;Message&gt;&gt; all = HistoryWindow.turns(history);</span>
+<span class="fc" id="L200">        return all.subList(Math.max(0, all.size() - turns), all.size()).stream()</span>
+<span class="fc" id="L201">                .flatMap(List::stream)</span>
+<span class="fc bfc" id="L202" title="All 2 branches covered.">                .map(m -&gt; (m.getMessageType() == MessageType.USER ? &quot;用户：&quot; : &quot;助手：&quot;) + preview(MemoryMessages.text(m)))</span>
+<span class="fc" id="L203">                .collect(Collectors.joining(&quot;\n&quot;));</span>
+    }
+
+    /**
+     * 清理模型的输出：取第一行非空的文字，去掉「改写后的问题：」之类的前缀和首尾引号。
+     *
+     * @param output 模型原样输出，可以为 null
+     * @return 清理后的文字，可能为空串
+     */
+    static String clean(String output) {
+<span class="pc bpc" id="L213" title="1 of 2 branches missed.">        if (output == null) {</span>
+<span class="nc" id="L214">            return &quot;&quot;;</span>
+        }
+<span class="fc" id="L216">        String line = output.strip()</span>
+<span class="fc" id="L217">                .lines()</span>
+<span class="fc" id="L218">                .map(String::strip)</span>
+<span class="pc bpc" id="L219" title="1 of 2 branches missed.">                .filter(l -&gt; !l.isEmpty())</span>
+<span class="fc" id="L220">                .findFirst()</span>
+<span class="fc" id="L221">                .orElse(&quot;&quot;);</span>
+<span class="fc" id="L222">        line = LABEL.matcher(line).replaceFirst(&quot;&quot;);</span>
+<span class="fc" id="L223">        return QUOTES.matcher(line).replaceAll(&quot;&quot;).strip();</span>
+    }
+
+    private static String preview(String text) {
+<span class="fc" id="L227">        String oneLine = text.replaceAll(&quot;\\s+&quot;, &quot; &quot;).strip();</span>
+<span class="fc bfc" id="L228" title="All 2 branches covered.">        return oneLine.length() &lt;= MESSAGE_PREVIEW_CHARS ? oneLine : oneLine.substring(0, MESSAGE_PREVIEW_CHARS) + &quot;…&quot;;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

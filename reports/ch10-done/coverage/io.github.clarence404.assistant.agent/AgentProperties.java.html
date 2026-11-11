@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AgentProperties.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">AgentProperties.java</span></div><h1>AgentProperties.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+import java.time.Duration;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
+
+/**
+ * 售后 Agent 的配置，前缀 {@code assistant.agent}（第 7 章引入）。每一项在 {@code application.yml} 里都有注释。
+ *
+ * &lt;p&gt;所在层：业务层的配置。由 {@code @ConfigurationPropertiesScan} 绑定，注入 {@link AgentService}、{@link AgentLoop}、
+ * {@link ConfirmationService} 等。
+ *
+ * &lt;p&gt;Agent 和前几章「一问一答」最大的不同是：它会&lt;b&gt;自己连着干好几步&lt;/b&gt;（想 → 选工具 → 执行 → 看结果 → 再想……）。所以这里的配置大多是在给这个循环
+ * 「装刹车」：最多几步、同一个调用最多重复几次、总共最多多久。没有刹车的 Agent，小模型一犯傻就会无限地查同一笔订单，既慢又费钱。
+ *
+ * @param enabled 总开关；关掉后「我要退款」这类办事请求和第 5 章一样走 RAG，只回答规则、不办事
+ * @param mode 循环的实现方式：{@code loop}（默认，方案 B：自己写的循环，每一步让模型用结构化输出给出下一步动作，所有模型都能用）或 {@code native}
+ *     （方案 A：交给 Spring AI 原生的工具调用循环，只有支持工具调用的 ollama / openai 能用；命令行模型自动退回 loop）
+ * @param maxSteps 一次办事最多几步（一次「想 + 执行」算一步）；到了还没办完就停下来，告诉用户没办完
+ * @param maxSameCalls 同一个工具、同样的参数最多执行几次：小模型常常反复查同一笔订单，超过就不再执行，提醒它换一步
+ * @param timeout 一次办事最长多久（所有步骤加起来）；每一步开始前检查，超时就停
+ * @param observationMaxChars 每一步的结果（交还给模型看的「观察」）最多多少字：结果太长会挤占上下文，小模型更容易漏看关键字段
+ * @param maxOutputTokens 每一步模型最多输出多少个 token（Ollama 的 num_predict）：一步的 JSON 正常一两百个 token；不限的话，小模型在结构化输出里
+ *     偶尔会一直吐空白或重复同一句，直到读超时（录制时 1.5b 就卡过 60 秒），限住了最多是这一步「输出看不懂」，循环照常往下走
+ * @param confirmationTtl 待确认操作的有效期：生成之后多久内点确认才算数；过期要重新说一次，防止用户很久以后误点到一张旧卡片
+ * @param prompt 循环模式的系统提示词，对应 {@code prompts/&lt;prompt&gt;.st}
+ * @param nativePrompt 原生工具调用模式的系统提示词，对应 {@code prompts/&lt;nativePrompt&gt;.st}
+ */
+@ConfigurationProperties(&quot;assistant.agent&quot;)
+public record AgentProperties(
+        @DefaultValue(&quot;true&quot;) boolean enabled,
+        @DefaultValue(&quot;loop&quot;) Mode mode,
+        @DefaultValue(&quot;6&quot;) int maxSteps,
+        @DefaultValue(&quot;2&quot;) int maxSameCalls,
+        @DefaultValue(&quot;120s&quot;) Duration timeout,
+        @DefaultValue(&quot;1200&quot;) int observationMaxChars,
+        @DefaultValue(&quot;400&quot;) int maxOutputTokens,
+        @DefaultValue(&quot;5m&quot;) Duration confirmationTtl,
+        @DefaultValue(&quot;agent-v1&quot;) String prompt,
+        @DefaultValue(&quot;agent-native-v1&quot;) String nativePrompt) {
+
+    /** 启动时就校验，配错了立刻报错。 */
+<span class="fc" id="L43">    public AgentProperties {</span>
+<span class="pc bpc" id="L44" title="2 of 4 branches missed.">        if (maxSteps &lt; 1 || maxSameCalls &lt; 1) {</span>
+<span class="nc" id="L45">            throw new IllegalArgumentException(</span>
+                    &quot;assistant.agent.max-steps / max-same-calls 至少为 1，当前 &quot; + maxSteps + &quot; / &quot; + maxSameCalls);
+        }
+<span class="pc bpc" id="L48" title="1 of 2 branches missed.">        if (observationMaxChars &lt; 200) {</span>
+<span class="nc" id="L49">            throw new IllegalArgumentException(</span>
+                    &quot;assistant.agent.observation-max-chars 不能小于 200，当前 &quot; + observationMaxChars);
+        }
+<span class="fc" id="L52">    }</span>
+
+    /**
+     * 测试用：默认值，只改模式。
+     *
+     * @param mode 循环方式
+     * @return 配置
+     */
+    public static AgentProperties defaults(Mode mode) {
+<span class="fc" id="L61">        return new AgentProperties(</span>
+                true,
+                mode,
+                6,
+                2,
+<span class="fc" id="L66">                Duration.ofSeconds(120),</span>
+                1200,
+                400,
+<span class="fc" id="L69">                Duration.ofMinutes(5),</span>
+                &quot;agent-v1&quot;,
+                &quot;agent-native-v1&quot;);
+    }
+
+    /** 循环的实现方式，取舍见 docs/ch07.md「方案 A 还是方案 B」。 */
+<span class="fc" id="L75">    public enum Mode {</span>
+        /** 方案 B：自己写的循环，每一步一次结构化输出（{@link AgentLoop}）。 */
+<span class="fc" id="L77">        LOOP,</span>
+        /** 方案 A：Spring AI 原生工具调用循环（{@link NativeAgentRunner}）。 */
+<span class="fc" id="L79">        NATIVE</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

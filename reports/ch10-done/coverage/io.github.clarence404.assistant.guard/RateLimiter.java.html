@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RateLimiter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.guard</a> &gt; <span class="el_source">RateLimiter.java</span></div><h1>RateLimiter.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.guard;
+
+import java.time.Duration;
+
+/**
+ * 「每个 key 在一个窗口里最多几次」的限流器（第 10 章从 {@link SlidingWindowLimiter} 抽出接口）。
+ *
+ * &lt;p&gt;所在层：上线保护。两个实现：{@link SlidingWindowLimiter}（进程内存，第 8、9 章的做法，默认）和 {@code state.RedisRateLimiter}
+ * （Redis 有序集合 + Lua 脚本，多个实例合计）。用的人是 {@link ChatGuard}（对话接口每分钟 20 次）和 {@code mcp.McpRateLimiter}
+ * （MCP 工具每分钟 30 次），它们只认这个接口，由 {@link RateLimiterFactory} 按 {@code assistant.state.store} 造出具体的实现。
+ */
+public interface RateLimiter {
+
+    /**
+     * 这个 key 现在能不能再来一次；能的话记下这一次（被拒的不记，不占名额）。
+     *
+     * @param key 调用方，如 {@code user:10001}、{@code ip:127.0.0.1}
+     * @return 放行时为 true
+     * @throws io.github.clarence404.assistant.state.StateUnavailableException Redis 实现出错、而策略是 reject 时
+     */
+    boolean tryAcquire(String key);
+
+    /**
+     * 被拒之后多久能再来（填 {@code Retry-After}）。
+     *
+     * @param key 调用方
+     * @return 等多久；不知道时为 0
+     */
+    Duration retryAfter(String key);
+
+    /** 清掉已经空了的 key（进程内存的实现要定期清；Redis 的键自己会过期，什么都不用做）。 */
+<span class="fc" id="L32">    default void evictIdle() {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

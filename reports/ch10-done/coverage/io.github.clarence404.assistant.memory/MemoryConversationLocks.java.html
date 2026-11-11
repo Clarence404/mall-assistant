@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MemoryConversationLocks.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.memory</a> &gt; <span class="el_source">MemoryConversationLocks.java</span></div><h1>MemoryConversationLocks.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.memory;
+
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * 「正在回答」标记的内存实现：一个 {@link ConcurrentHashMap}（第 6 章的做法，第 10 章挪到这里）。只在一个进程里有效。
+ *
+ * &lt;p&gt;所在层：记忆。{@link ConcurrentHashMap#putIfAbsent} 和 Redis 的 {@code SET NX} 是同一个语义：不存在才放，原子。
+ */
+<span class="fc" id="L12">public final class MemoryConversationLocks implements ConversationLocks {</span>
+
+<span class="fc" id="L14">    private final Map&lt;String, String&gt; held = new ConcurrentHashMap&lt;&gt;();</span>
+
+    @Override
+    public String tryLock(String key) {
+<span class="fc" id="L18">        String token = UUID.randomUUID().toString();</span>
+<span class="fc bfc" id="L19" title="All 2 branches covered.">        return held.putIfAbsent(key, token) == null ? token : null;</span>
+    }
+
+    @Override
+    public void unlock(String key, String token) {
+<span class="fc" id="L24">        held.remove(key, token);</span>
+<span class="fc" id="L25">    }</span>
+
+    @Override
+    public boolean isLocked(String key) {
+<span class="fc" id="L29">        return held.containsKey(key);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

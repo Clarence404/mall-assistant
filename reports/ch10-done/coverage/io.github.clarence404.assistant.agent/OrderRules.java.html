@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>OrderRules.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">OrderRules.java</span></div><h1>OrderRules.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
+/**
+ * 一笔订单在什么状态下能办什么（第 7 章引入）：代码算好，写进查订单的结果（{@code allowedActions}）给模型看，提写操作时再核对一遍。
+ *
+ * &lt;p&gt;所在层：Agent 的业务规则。上游是 {@link AgentToolbox}（查订单时附上）和 {@link WriteActionGuard}（提写操作时核对）。
+ *
+ * &lt;p&gt;规则照抄商城 mall-evolution 的实现，外加本项目「售后申请」的约定：
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;待支付：能取消（{@code OrderCancelService}：只有待支付能取消）、能改地址（{@code updateAddress} 的 {@code status IN (10, 20)}）
+ *   &lt;li&gt;待发货：能改地址；不能取消（已经付款了，商城返回 409），要退钱只能提交售后申请（仅退款）
+ *   &lt;li&gt;已发货、已完成：只能提交售后申请（退货退款）
+ *   &lt;li&gt;已取消、已关闭：什么都办不了
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;&lt;b&gt;为什么不让模型自己判断&lt;/b&gt;：「待发货能不能取消」这种事模型会凭常识猜（很多商城付款后也能取消），而我们的商城不行。规则由代码算好、作为数据交给它，
+ * 小模型照着选就行；就算它不照着选，{@link WriteActionGuard} 也会拦下。商城自己最后还会再校验一次（状态不对 409）——三道里任何一道都不能省：
+ * 前两道是为了「提前说清原因、不让用户点了确认才发现办不了」，最后一道才是真正的保证。
+ */
+public final class OrderRules {
+
+    private OrderRules() {}
+
+    /**
+     * 这个状态下能办的写操作。
+     *
+     * @param status 商城的状态枚举名，可以为 null（当作什么都不能办）
+     * @return 写操作，按「取消、改地址、售后」的顺序
+     */
+    public static List&lt;AgentTool&gt; allowed(String status) {
+<span class="pc bpc" id="L35" title="1 of 2 branches missed.">        if (status == null) {</span>
+<span class="nc" id="L36">            return List.of();</span>
+        }
+<span class="fc bfc" id="L38" title="All 4 branches covered.">        return switch (status) {</span>
+<span class="fc" id="L39">            case &quot;PENDING_PAYMENT&quot; -&gt; List.of(AgentTool.CANCEL_ORDER, AgentTool.CHANGE_ADDRESS);</span>
+<span class="fc" id="L40">            case &quot;PENDING_SHIPMENT&quot; -&gt; List.of(AgentTool.CHANGE_ADDRESS, AgentTool.APPLY_AFTER_SALES);</span>
+<span class="fc" id="L41">            case &quot;SHIPPED&quot;, &quot;COMPLETED&quot; -&gt; List.of(AgentTool.APPLY_AFTER_SALES);</span>
+<span class="fc" id="L42">            default -&gt; List.of();</span>
+        };
+    }
+
+    /**
+     * 能办的写操作的工具名（写进查询结果给模型看）。
+     *
+     * @param status 状态
+     * @return 工具名列表，如 {@code [&quot;cancelOrder&quot;,&quot;changeAddress&quot;]}
+     */
+    public static List&lt;String&gt; allowedNames(String status) {
+<span class="fc" id="L53">        return allowed(status).stream().map(AgentTool::toolName).toList();</span>
+    }
+
+    /**
+     * 能办的写操作的中文说明（给模型看的拒绝原因里用）。
+     *
+     * @param status 状态
+     * @return 如「取消订单、修改收货地址」；什么都不能办时为「没有可以办理的操作」
+     */
+    public static String describe(String status) {
+<span class="fc" id="L63">        List&lt;AgentTool&gt; tools = allowed(status);</span>
+<span class="pc bpc" id="L64" title="1 of 2 branches missed.">        return tools.isEmpty()</span>
+<span class="nc" id="L65">                ? &quot;没有可以办理的操作&quot;</span>
+<span class="fc" id="L66">                : tools.stream().map(t -&gt; t.title() + &quot;（&quot; + t.toolName() + &quot;）&quot;).collect(Collectors.joining(&quot;、&quot;));</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

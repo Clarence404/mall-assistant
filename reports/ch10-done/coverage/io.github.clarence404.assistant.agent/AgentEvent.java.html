@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AgentEvent.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.agent</a> &gt; <span class="el_source">AgentEvent.java</span></div><h1>AgentEvent.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.agent;
+
+/**
+ * Agent 干活过程中的事件：走了一步，或生成了一个待确认操作（第 7 章引入）。
+ *
+ * &lt;p&gt;所在层：业务层与接口层之间的数据。{@link AgentLoop} 每走一步通过监听器发出 {@link StepTaken}，提出写操作时再发出 {@link ConfirmationRequested}；
+ * {@code ChatService} 把它们转成流式的 {@code step} / {@code confirm} 事件（阻塞接口不需要监听，最后从 {@link AgentResult} 一次拿全）。
+ */
+public sealed interface AgentEvent {
+
+    /**
+     * 走了一步。
+     *
+     * @param step 这一步
+     */
+<span class="fc" id="L16">    record StepTaken(AgentStep step) implements AgentEvent {}</span>
+
+    /**
+     * 生成了一个待确认操作：页面收到后画一张确认卡片。
+     *
+     * @param confirmation 待确认操作
+     */
+<span class="fc" id="L23">    record ConfirmationRequested(PendingConfirmation confirmation) implements AgentEvent {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

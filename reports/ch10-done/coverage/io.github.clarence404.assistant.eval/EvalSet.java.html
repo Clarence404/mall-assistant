@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>EvalSet.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.eval</a> &gt; <span class="el_source">EvalSet.java</span></div><h1>EvalSet.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.eval;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Set;
+import org.springframework.core.io.Resource;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.MapperFeature;
+import tools.jackson.databind.json.JsonMapper;
+
+/**
+ * 一份版本化的回归评测集：JSONL 文件（一行一条 {@link EvalCase}）+ 由内容算出的版本号（第 9 章引入）。
+ *
+ * &lt;p&gt;所在层：评测。{@link EvalRunner} 跑它；报告和基线里都记着它的名字和版本，{@link EvalComparison} 发现版本不同就拒绝比较。
+ *
+ * &lt;p&gt;&lt;b&gt;为什么要「版本化」&lt;/b&gt;：评测集本身会改——加用例、改期望、删掉过时的。如果拿「改过的评测集」跑出的通过率和「旧评测集」的基线比，
+ * 涨了跌了都说明不了问题。所以版本号由文件内容算（SHA-256 的前 12 位），改一个字就是新版本，必须重新生成基线；文件本身进 git，谁改了什么一目了然。
+ *
+ * &lt;p&gt;为什么用 JSONL 而不是一个大 JSON 数组：一行一条，加一条就是加一行，{@code git diff} 只显示那一行；也方便用 {@code grep}、{@code jq -c} 挑出一类来看。
+ */
+<span class="fc" id="L29">public record EvalSet(String name, String version, List&lt;EvalCase&gt; cases) {</span>
+
+<span class="fc" id="L31">    private static final JsonMapper JSON = JsonMapper.builder()</span>
+<span class="fc" id="L32">            .enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_ENUMS) // 文件里写小写的 &quot;rag&quot;，读成 Category.RAG</span>
+<span class="fc" id="L33">            .disable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES) // 没写 &quot;login&quot; 就是 false（Jackson 3 默认会报错）</span>
+<span class="fc" id="L34">            .build();</span>
+
+    /**
+     * 从文件读。
+     *
+     * @param resource JSONL 文件（如 {@code classpath:eval/cases-v1.jsonl}）
+     * @return 评测集，名字是文件名
+     * @throws IllegalArgumentException 格式不对、编号重复、某条没有期望
+     */
+    public static EvalSet load(Resource resource) {
+<span class="fc" id="L44">        try (InputStream in = resource.getInputStream()) {</span>
+<span class="fc" id="L45">            return parse(resource.getFilename(), new String(in.readAllBytes(), StandardCharsets.UTF_8));</span>
+<span class="nc" id="L46">        } catch (IOException e) {</span>
+<span class="nc" id="L47">            throw new IllegalArgumentException(&quot;读不到评测集 &quot; + resource, e);</span>
+        }
+    }
+
+    /**
+     * 解析 JSONL 文本：空行跳过；每行一条，编号不能重复，必须有类别、问题和至少一项期望。
+     *
+     * @param name 名字
+     * @param content 文件内容
+     * @return 评测集
+     * @throws IllegalArgumentException 哪一行有问题（带行号）
+     */
+    public static EvalSet parse(String name, String content) {
+<span class="fc" id="L60">        String normalized = content.replace(&quot;\r\n&quot;, &quot;\n&quot;);</span>
+<span class="fc" id="L61">        List&lt;EvalCase&gt; cases = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L62">        Set&lt;String&gt; ids = new HashSet&lt;&gt;();</span>
+<span class="fc" id="L63">        String[] lines = normalized.split(&quot;\n&quot;);</span>
+<span class="fc bfc" id="L64" title="All 2 branches covered.">        for (int i = 0; i &lt; lines.length; i++) {</span>
+<span class="fc" id="L65">            String line = lines[i].strip();</span>
+<span class="pc bpc" id="L66" title="1 of 2 branches missed.">            if (line.isEmpty()) {</span>
+<span class="nc" id="L67">                continue;</span>
+            }
+            EvalCase c;
+            try {
+<span class="fc" id="L71">                c = JSON.readValue(line, EvalCase.class);</span>
+<span class="fc" id="L72">            } catch (JacksonException e) {</span>
+<span class="fc" id="L73">                throw new IllegalArgumentException(name + &quot; 第 &quot; + (i + 1) + &quot; 行不是合法的用例：&quot; + e.getOriginalMessage(), e);</span>
+<span class="fc" id="L74">            }</span>
+<span class="pc bpc" id="L75" title="1 of 2 branches missed.">            if (c.id() == null</span>
+<span class="fc bfc" id="L76" title="All 2 branches covered.">                    || c.category() == null</span>
+<span class="pc bpc" id="L77" title="1 of 2 branches missed.">                    || c.message() == null</span>
+<span class="pc bpc" id="L78" title="1 of 2 branches missed.">                    || c.message().isBlank()) {</span>
+<span class="fc" id="L79">                throw new IllegalArgumentException(name + &quot; 第 &quot; + (i + 1) + &quot; 行缺 id / category / message&quot;);</span>
+            }
+<span class="pc bpc" id="L81" title="1 of 4 branches missed.">            if (c.expect() == null || c.expect().isEmpty()) {</span>
+<span class="fc" id="L82">                throw new IllegalArgumentException(name + &quot; 第 &quot; + (i + 1) + &quot; 行（&quot; + c.id() + &quot;）没有任何期望&quot;);</span>
+            }
+<span class="fc bfc" id="L84" title="All 2 branches covered.">            if (!ids.add(c.id())) {</span>
+<span class="fc" id="L85">                throw new IllegalArgumentException(name + &quot; 第 &quot; + (i + 1) + &quot; 行：编号 &quot; + c.id() + &quot; 重复&quot;);</span>
+            }
+<span class="fc" id="L87">            cases.add(c);</span>
+        }
+<span class="fc" id="L89">        return new EvalSet(name, version(normalized), List.copyOf(cases));</span>
+    }
+
+    /** 版本号：内容的 SHA-256 前 12 个十六进制字符（换行统一成 \n，Windows 上检出也一样）。 */
+    static String version(String normalized) {
+        try {
+<span class="fc" id="L95">            byte[] digest = MessageDigest.getInstance(&quot;SHA-256&quot;).digest(normalized.getBytes(StandardCharsets.UTF_8));</span>
+<span class="fc" id="L96">            return HexFormat.of().formatHex(digest, 0, 6);</span>
+<span class="nc" id="L97">        } catch (NoSuchAlgorithmException e) {</span>
+<span class="nc" id="L98">            throw new IllegalStateException(e);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
