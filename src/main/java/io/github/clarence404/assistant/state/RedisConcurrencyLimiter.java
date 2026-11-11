@@ -3,6 +3,9 @@ package io.github.clarence404.assistant.state;
 import io.github.clarence404.assistant.guard.ConcurrencyLimiter;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.function.IntSupplier;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -84,14 +87,30 @@ public final class RedisConcurrencyLimiter implements ConcurrencyLimiter {
      */
     @Override
     public Slot tryAcquire(Duration timeout) throws InterruptedException {
-        // TODO ch10-2：
-        // 截止时间 = System.nanoTime() + timeout；名额 ID = UUID.randomUUID()
-        // while (true)：
-        //   try：failures.ensureAvailable()；redis.execute(SCRIPT, List.of(key), 现在毫秒, 上限, 名额ID, 租期毫秒)
-        //        返回 1 → return () -> release(名额ID)
-        //   catch (DataAccessException e)：failures.allowOrThrow(COMPONENT, e)（拒绝策略会抛），然后退回 fallback.tryAcquire(剩下的时间)
-        //   过了截止时间 → return null；否则 TimeUnit.MILLISECONDS.sleep(pollInterval 的毫秒数) 再试
-        return () -> {};
+        long deadline = System.nanoTime() + timeout.toNanos();
+        String slotId = UUID.randomUUID().toString();
+        while (true) {
+            try {
+                failures.ensureAvailable();
+                Long got = redis.execute(
+                        SCRIPT,
+                        List.of(key),
+                        String.valueOf(clock.millis()),
+                        String.valueOf(max.getAsInt()),
+                        slotId,
+                        String.valueOf(lease.toMillis()));
+                if (got != null && got == 1L) {
+                    return () -> release(slotId);
+                }
+            } catch (DataAccessException e) {
+                failures.allowOrThrow(COMPONENT, e);
+                return fallback.tryAcquire(Duration.ofNanos(Math.max(0, deadline - System.nanoTime())));
+            }
+            if (System.nanoTime() >= deadline) {
+                return null;
+            }
+            TimeUnit.MILLISECONDS.sleep(pollInterval.toMillis());
+        }
     }
 
     /** 还名额：一条 ZREM。出错只记录，不抛（这一轮已经答完了），租期到了会自动收回。 */

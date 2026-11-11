@@ -2,6 +2,7 @@ package io.github.clarence404.assistant.state;
 
 import io.github.clarence404.assistant.memory.ConversationLocks;
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -57,10 +58,14 @@ public final class RedisConversationLocks implements ConversationLocks {
      */
     @Override
     public String tryLock(String key) {
-        // TODO ch10-5：令牌 = UUID.randomUUID().toString()；failures.ensureAvailable()；
-        // opsForValue().setIfAbsent(lockKey(key), 令牌, lease) 为 TRUE 返回令牌，否则 null。
-        // catch (DataAccessException e)：failures.allowOrThrow(COMPONENT, e)（拒绝策略会抛），返回 SKIPPED
-        return UUID.randomUUID().toString();
+        String token = UUID.randomUUID().toString();
+        try {
+            failures.ensureAvailable();
+            return Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(lockKey(key), token, lease)) ? token : null;
+        } catch (DataAccessException e) {
+            failures.allowOrThrow(COMPONENT, e);
+            return SKIPPED;
+        }
     }
 
     /**
@@ -71,8 +76,14 @@ public final class RedisConversationLocks implements ConversationLocks {
      */
     @Override
     public void unlock(String key, String token) {
-        // TODO ch10-5：token 是 null 或 SKIPPED 就返回；否则 redis.execute(UNLOCK, List.of(lockKey(key)), token)（比较再删除）。
-        // catch (DataAccessException e)：failures.record(COMPONENT, e)
+        if (token == null || SKIPPED.equals(token)) {
+            return;
+        }
+        try {
+            redis.execute(UNLOCK, List.of(lockKey(key)), token);
+        } catch (DataAccessException e) {
+            failures.record(COMPONENT, e);
+        }
     }
 
     /** 是否被占着；Redis 出错时当作「被占着」（后台清理宁可这次不删）。 */

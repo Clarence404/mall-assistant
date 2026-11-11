@@ -108,9 +108,10 @@ public class StateFailures {
      * @throws StateUnavailableException 策略是 reject
      */
     public boolean allowOrThrow(String component, RuntimeException error) {
-        // TODO ch10-6：record(component, error)；policy 是 REJECT 就 throw new StateUnavailableException(component,
-        // error)；否则返回 true
         record(component, error);
+        if (policy == StateProperties.OnError.REJECT) {
+            throw new StateUnavailableException(component, error);
+        }
         return true;
     }
 

@@ -64,12 +64,31 @@ public final class RedisUsageStore implements UsageStore {
      */
     @Override
     public long add(LocalDate day, Entry entry) {
-        // TODO ch10-3：failures.ensureAvailable()；redis.execute(ADD, 六个键, 参数...)：
-        // 键依次是 key(day, "caller")、"intent"、"conversation"、"caller-rank"、"conversation-rank"、"total"（和 usage-add.lua 的
-        // KEYS 对上）；
-        // 参数依次是调用方、意图、会话键（null 传 ""）、turns、输入、输出、估算轮数、KEEP 的毫秒数（都转成字符串）；返回脚本的结果（null 当 0）。
-        // catch (DataAccessException e)：failures.record(COMPONENT, e)，返回 0
-        return 0;
+        UsageLedger.Tally t = entry.tally();
+        try {
+            failures.ensureAvailable();
+            Long used = redis.execute(
+                    ADD,
+                    List.of(
+                            key(day, "caller"),
+                            key(day, "intent"),
+                            key(day, "conversation"),
+                            key(day, "caller-rank"),
+                            key(day, "conversation-rank"),
+                            key(day, "total")),
+                    entry.caller(),
+                    entry.intent(),
+                    entry.conversationKey() == null ? "" : entry.conversationKey(),
+                    String.valueOf(t.turns()),
+                    String.valueOf(t.inputTokens()),
+                    String.valueOf(t.outputTokens()),
+                    String.valueOf(t.estimatedTurns()),
+                    String.valueOf(KEEP.toMillis()));
+            return used == null ? 0 : used;
+        } catch (DataAccessException e) {
+            failures.record(COMPONENT, e);
+            return 0;
+        }
     }
 
     /**
@@ -80,9 +99,14 @@ public final class RedisUsageStore implements UsageStore {
      */
     @Override
     public long tokens(LocalDate day, String caller) {
-        // TODO ch10-3：failures.ensureAvailable()；redis.opsForZSet().score(key(day, "caller-rank"), caller)，null 是 0。
-        // catch (DataAccessException e)：failures.allowOrThrow(COMPONENT, e)（拒绝策略会抛），返回 0
-        return 0;
+        try {
+            failures.ensureAvailable();
+            Double score = redis.opsForZSet().score(key(day, "caller-rank"), caller);
+            return score == null ? 0 : score.longValue();
+        } catch (DataAccessException e) {
+            failures.allowOrThrow(COMPONENT, e);
+            return 0;
+        }
     }
 
     @Override

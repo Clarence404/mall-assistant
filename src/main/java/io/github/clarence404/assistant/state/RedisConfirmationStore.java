@@ -103,11 +103,17 @@ public final class RedisConfirmationStore implements ConfirmationStore {
     @Override
     public Optional<ConfirmationOutcome.Decision> claim(
             String id, ConfirmationOutcome.Decision decision, Duration ttl) {
-        // TODO ch10-4：failures.ensureAvailable()；抢占键 = key(id) + ":claim"；
-        // opsForValue().setIfAbsent(抢占键, decision.name(), ttl) 为 TRUE → Optional.empty()（我抢到了）；
-        // 否则 get(抢占键) 读出别人的决定：null 时返回我自己的 decision，否则 Decision.valueOf(...)。
-        // catch (DataAccessException e)：throw failures.fail(COMPONENT, e)
-        return Optional.empty();
+        try {
+            failures.ensureAvailable();
+            String claimKey = key(id) + ":claim";
+            if (Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(claimKey, decision.name(), ttl))) {
+                return Optional.empty();
+            }
+            String other = redis.opsForValue().get(claimKey);
+            return Optional.of(other == null ? decision : ConfirmationOutcome.Decision.valueOf(other));
+        } catch (DataAccessException e) {
+            throw failures.fail(COMPONENT, e);
+        }
     }
 
     /**
@@ -117,9 +123,12 @@ public final class RedisConfirmationStore implements ConfirmationStore {
      */
     @Override
     public void complete(String id, ConfirmationOutcome outcome, Duration ttl) {
-        // TODO ch10-4：failures.ensureAvailable()；opsForValue().set(key(id) + ":outcome",
-        // json.writeValueAsString(outcome), ttl)。
-        // catch (DataAccessException e)：throw failures.fail(COMPONENT, e)
+        try {
+            failures.ensureAvailable();
+            redis.opsForValue().set(key(id) + ":outcome", json.writeValueAsString(outcome), ttl);
+        } catch (DataAccessException e) {
+            throw failures.fail(COMPONENT, e);
+        }
     }
 
     @Override

@@ -13,8 +13,13 @@
 local now = tonumber(ARGV[1])
 local window = tonumber(ARGV[2])
 
--- TODO ch10-1：三步（start 时直接放行，所以限流不起作用）——
--- ① ZREMRANGEBYSCORE KEYS[1] '-inf' (now - window)：扔掉窗口外的（两端都包含，和内存版的 !isAfter(cutoff) 一致）
--- ② ZCARD KEYS[1] 不小于上限（tonumber(ARGV[3])）就 return 0
--- ③ ZADD KEYS[1] now ARGV[4]，再 PEXPIRE KEYS[1] window（整个键一个窗口后过期），return 1
+-- ① 扔掉窗口外的：时间早于或等于「现在 - 窗口」（ZREMRANGEBYSCORE 的两端都包含，和内存版的 !isAfter(cutoff) 一致）
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now - window)
+-- ② 数一数窗口里还有几次，够了就拒
+if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then
+  return 0
+end
+-- ③ 记下这一次；整个键一个窗口后过期（这个调用方不再来，键自己消失，不用像内存版那样定期清）
+redis.call('ZADD', KEYS[1], now, ARGV[4])
+redis.call('PEXPIRE', KEYS[1], window)
 return 1
