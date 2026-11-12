@@ -1,0 +1,11 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="智能客服流量模拟（演示账号）" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="io.github.clarence404.assistant.simulator.AssistantSimulator" />
+    <module name="mall-assistant" />
+    <option name="VM_PARAMETERS" value="-Dfile.encoding=UTF-8" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

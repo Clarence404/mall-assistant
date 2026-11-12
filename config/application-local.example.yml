@@ -81,7 +81,8 @@ spring:
 #     requests-per-minute: 60      # 每个调用方每分钟最多问几次
 #     max-concurrent: 4            # 同时最多处理几轮（共享开发机上的 Ollama 只有 CPU，一次算不了几个）
 #   usage:
-#     daily-token-budget: 0        # 每个调用方每天的 Token 上限，0 = 不限
+#     daily-token-budget: 0        # 每个调用方每天的 Token 上限，0 = 不限；长期开着流量模拟器（README「流量模拟器」）时，默认的 10 万只够它约 3～4 分钟问一次，
+#                                  # 想按它配置的约 30 秒一问跑满一天，设成 1000000 或 0
 # management:
 #   server:
 #     port: 9088                   # Actuator（/actuator/prometheus、/actuator/tokens）单独的端口

@@ -99,6 +99,7 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 | 智能客服（Claude CLI） | profile `claude-cli,local`，用本机已登录的 Claude Code 当模型，见下文「用命令行工具当模型」 |
 | 智能客服（Codex CLI） | profile `codex-cli,local`，用本机已登录的 Codex CLI 当模型 |
 | 测试：mvn verify | 跑全部检查与测试，等同 `./mvnw verify` |
+| 智能客服流量模拟（演示账号） | 工具，不属于任何一章：智能客服与 mall-evolution 都起来之后再启动，长期像真人一样提问，让监控面板一直有数据，见下文「流量模拟器」 |
 
 注意：这些配置存放在入库的 `.run/*.run.xml` 里，在里面填的值会出现在 `git diff` 中。密钥和内部地址不要填进运行配置，改用下面的本地配置文件。
 
@@ -117,6 +118,19 @@ git diff ch01-done -- src/main       # 卡住了再对照参考答案
 第 5 章：想对比只用向量检索的效果，在 Program arguments 里加 `--assistant.rag.hybrid=false`；整个关掉 RAG 用 `--assistant.rag.enabled=false`。
 
 第 3 章：先在 mall-evolution 的项目里用它自带的运行配置「全部服务（先起中间件）」启动四个服务（两个项目可以同时开在两个 IDEA 窗口里），再启动智能客服。想临时关掉某种工具用法，在运行配置的 Program arguments 里加 `--assistant.tools.direct-lookup=false` 或 `--assistant.tools.native-calling=false`。
+
+### 流量模拟器（让监控一直有数据）
+
+一个工具，不属于任何一章、不在练习 TODO 里：`src/test/java/io/github/clarence404/assistant/simulator/`（放在 src/test 下，不进应用的 jar），入口 `AssistantSimulator`，配置 `src/test/resources/simulator/assistant-simulator.yml`。它不起 Spring 容器，只用 JDK 的 HttpClient 调智能客服的接口（和页面一样），让 Grafana 的「智能客服」面板一直有数据；mall-evolution 那边也有一个商城的流量模拟器（它的 README「流量模拟器」）。
+
+IDEA 里先启动「智能客服（本地 Ollama）」和 mall-evolution 的四个服务，再选运行配置「智能客服流量模拟（演示账号）」，停止按钮即退出。配置每项都能覆盖：运行配置的 Environment variables 写 `SIMULATOR_ASKERS=1`、`SIMULATOR_INTERVAL_MIN=20s`、`SIMULATOR_BASE_URL=http://localhost:8091`，或 VM options 写 `-Dsimulator.askers=1`。
+
+- **像真人**：默认 2 个虚拟用户，问完等 40～80 秒（两人合计高峰时约 30 秒一问），夜里按 24 个整点的曲线拉长（最低 0.3 倍）；六成先用演示账号 `13800000000`–`13800000007` 登录（和页面一样走 `POST /api/mall/login`），其余匿名；问题按权重抽：规则类（走 RAG）42%、查订单 23%、闲聊 15%、查商品 13%、Agent 办事 4%、超出范围 3%，查订单和办事会先经商城网关查这个账号最近的订单号填进去；三成会在同一个会话里追问一句（第 6 章的多轮）；流式和阻塞各一半（Agent 办事一律流式：要走好几步，阻塞接口要干等）
+- **Agent 只提议**：「订单 xxx 买错了，帮我取消」这类会停在确认卡片，默认不点确认（`simulator.agent.confirm-cancel-probability: 0`）；调大后只会确认「取消自己的待支付订单」
+- **少量异常**：1% 空消息、0.5% 超长消息（都是 400，不花 Token）、1% 登录输错密码（401），不触发模型错误类告警
+- **按每日 Token 预算配速**：第 9 章每个调用方（登录用户各算各的，匿名整体按 IP 算一个）每天默认 10 万 Token。模拟器用回答里的 `usage`（今日已用、预算）把每个调用方的额度按时间均匀摊开（到某个时刻最多用「预算 × 0.9 × (已过去的比例 + 1/24)」，留一成给你在页面上用），到线就换一个调用方或暂停，所以不会上午用光、下午全是 429；真收到 `TOKEN_BUDGET_EXCEEDED` 就当天不再用这个调用方。限流、太忙、模型熔断、连不上时指数退避（30 秒起翻倍，最多 10 分钟），不狂刷
+- **默认预算下实际有多快**：9 个调用方 × 9 万 ≈ 一天 80 万 Token，一问约 1500～2000 Token（Agent 一件事约 8000），所以全天平均大约 **3～4 分钟一问**，白天前半段受配速限制、问得比配置的间隔慢。想按配置的 30 秒一问跑满一天（约 2000～2500 问、400 万 Token 上下），在 `config/application-local.yml` 里调大预算（`assistant.usage.daily-token-budget: 1000000`，或 0 不限，见 `config/application-local.example.yml` 第 9 章一段），重启智能客服后配速自动放开
+- 启动时打印目标和速率，之后每分钟一行统计（提问数、流式 / 阻塞、匿名 / 登录、成功与失败的错误码、Token、今日已用与预算合计）；不往任何地方写数据，智能客服里多出来的只有内存里的会话记忆和 Token 账（重启即清空，用 Redis 时按各自的过期时间清掉）
 
 ### 指向远程 Ollama 或 OpenAI 兼容接口（本地配置，不入库）
 
@@ -271,6 +285,7 @@ mall-assistant/
 ├── src/test/resources/rag/          检索评测集（口语化问题 → 应命中的一节）
 ├── src/test/resources/eval/         第 9 章回归评测集 cases-v1.jsonl、两篇带提示注入的文档、1.5b 的录制与基线
 ├── src/test/resources/config/       测试专用的覆盖配置（对前八章的测试关掉限流、熔断、降级、预算）
+├── src/test/java/…/simulator/ 与 src/test/resources/simulator/   流量模拟器（工具，不属于任何一章）：长期像真人一样提问，让监控面板一直有数据
 ├── monitoring/               第 9 章的 Grafana 面板 JSON、Prometheus 抓取配置与告警规则；第 10 章的 docker-compose.yml、Grafana provisioning、file_sd 目标、告警单元测试 alerts.test.yml
 ├── docs/chNN.md              每章的练习说明
 ├── .run/                     IntelliJ IDEA 共享运行配置

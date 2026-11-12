@@ -1,0 +1,109 @@
+# 智能客服流量模拟器的配置（见 SimulatorConfig 与 AssistantSimulator）。每一项都能覆盖：
+#   系统属性（IDEA 运行配置的 VM options）：-Dsimulator.askers=1
+#   环境变量（运行配置的 Environment variables）：SIMULATOR_ASKERS=1、SIMULATOR_INTERVAL_MIN=20s、SIMULATOR_ACCOUNTS=13800000000,13800000001
+# 只用于本地 / 开发环境：用的是 mall-evolution 的演示账号，不要指向生产
+simulator:
+  base-url: http://localhost:8088      # 智能客服
+  mall-base-url: http://localhost:9000 # 商城网关：只用来查自己最近的订单号，好问「我的订单 xxx 到哪了」；连不上就只问不带单号的
+  accounts:                            # 演示账号（mall-evolution 的 db/seed/R__dev_seed_users.sql，密码都是 mall123）；每个账号是一个调用方，Token 预算各算各的
+    - 13800000000
+    - 13800000001
+    - 13800000002
+    - 13800000003
+    - 13800000004
+    - 13800000005
+    - 13800000006
+    - 13800000007
+  password: mall123
+  askers: 2                            # 同时提问的虚拟用户：本机 Ollama 一次只算得动一两个，多了只会排队（第 9 章 max-concurrent 8）
+  interval:                            # 每个虚拟用户问完一个问题后等多久再问（流量最高时），两人合计平均约 30 秒一问；其他时段按曲线拉长
+    min: 40s
+    max: 80s
+  curve:                               # 0～23 点的相对流量，含义同 mall-evolution 的模拟器；夜里不低于 min-factor
+    hourly: [0.30, 0.22, 0.17, 0.15, 0.15, 0.18, 0.28, 0.42, 0.55, 0.65, 0.72, 0.80,
+             0.86, 0.76, 0.70, 0.72, 0.75, 0.80, 0.88, 0.95, 1.00, 0.97, 0.80, 0.50]
+    min-factor: 0.3
+    acceleration: 1                    # 时间加速倍数，演示起伏时设 24
+  login-ratio: 0.6                     # 先登录再问的比例；其余匿名（匿名整体按 IP 算一个调用方）
+  stream-ratio: 0.5                    # 用流式接口的比例，其余用阻塞接口（agent 类一律流式）
+  follow-up-probability: 0.3           # 问完接着追问一句（同一个会话，第 6 章的多轮）
+  categories:                          # 问什么，按权重随机；order、agent 要登录，匿名时不会抽到
+    policy: 40                         # 规则类（退换货、运费、发票、积分……）：意图 POLICY / AFTER_SALES，走 RAG
+    chitchat: 14                       # 闲聊
+    product: 12                        # 商品有没有货、多少钱：调商城工具
+    order: 22                          # 查订单：调商城工具
+    agent: 4                           # 办事（取消、改地址、退款）：Agent 只提议、停在确认卡片，模拟器默认不点确认
+    out-of-scope: 3                    # 超出范围（写代码、问天气）：直接拒答
+  token-estimates:                     # 各类问题大约花多少 Token，预算配速时先按这个估，问完以服务端返回的为准
+    policy: 1800
+    chitchat: 700
+    product: 1500
+    order: 1800
+    agent: 8000
+    out-of-scope: 700
+  anomalies:                           # 少量异常请求（都是 4xx，不算模型错误）
+    empty-message: 0.01                # 空消息 → 400
+    too-long: 0.005                    # 超过 2000 字 → 400
+    wrong-password: 0.01               # 登录时输错密码 → 401
+  budget:
+    reserve: 0.1                       # 每个调用方的每日预算留一成给真人在页面上用
+    zone: Asia/Shanghai                # 和 assistant.usage.zone 一致
+  agent:
+    confirm-cancel-probability: 0      # Agent 提出「取消待支付订单」后，模拟器点确认的概率；默认 0（只提议不执行），想看确认链路的指标可调到 0.2
+  duration: 0s                         # 跑多久后自动退出；0 = 一直跑
+  stats-interval: 1m
+
+# 各类问题。{orderNo} 换成这个账号最近的一单，{pendingOrderNo} 换成待支付的一单；查不到时跳过带占位符的问题
+questions:
+  policy:
+    - 东西坏了能退吗
+    - 七天无理由退货要什么条件
+    - 退货的运费谁出
+    - 买的水果烂了怎么办
+    - 退的钱多久能到账
+    - 发票什么时候能开
+    - 下单时忘了要发票，还能补开吗
+    - 钱被扣了两次怎么办
+    - 下单后多久不付款会被取消
+    - 积分多久过期
+    - 积分能抵多少钱
+    - 买多少钱包邮
+    - 寄到新疆要几天
+    - 下午五点付的款今天能发货吗
+    - 已经发货了还能改地址吗
+    - 有人打电话让我报验证码
+    - 密码输错几次会被锁
+    - 手机号不用了怎么换绑
+    - 耳机用了两个月坏了能保修吗
+    - 我要投诉，找谁
+    - 收到的杯子碎了，怎么申请退款
+  chitchat:
+    - 你好
+    - 谢谢你，帮了大忙
+    - 在吗
+    - 你是谁
+    - 好的，我知道了
+  product:
+    - 20001 有货吗
+    - SKU 20004 这个商品还卖吗？
+    - 红心柚多少钱
+    - 20003 洗衣液还有货吗
+    - 商品 20002 多少钱
+  order:
+    - 我有哪些订单
+    - 我的订单到哪了？
+    - 我昨天买的东西到哪了？
+    - 我的订单 {orderNo} 到哪了？
+    - 帮我看看订单 {orderNo} 发货了没有
+  agent:
+    - 订单 {pendingOrderNo} 买错了，帮我取消
+    - 订单 {orderNo} 收货地址填错了，改成杭州市西湖区文三路 100 号
+    - 订单 {orderNo} 东西坏了要退款
+  out-of-scope:
+    - 帮我写一段 Python 冒泡排序
+    - 明天北京天气怎么样
+  follow-ups:                          # 追问：第一句问完，同一个会话里接着问第二句
+    - [七天无理由退货要什么条件, 那运费谁出]
+    - [积分多久过期, 那能抵多少钱]
+    - [发票什么时候能开, 电子发票还是纸质的]
+    - [我有哪些订单, 第一单什么时候能到]
