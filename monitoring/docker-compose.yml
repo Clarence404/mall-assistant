@@ -6,12 +6,12 @@
 #   docker compose up -d
 # 打开：Prometheus http://<这台机器>:9090（Status → Targets 看抓取状态，Alerts 看告警），Grafana http://<这台机器>:3000（admin / .env 里的口令）
 # 抓谁：prometheus/targets/*.json（file_sd，改了自动生效，不用重启），见 docs/ch10.md「监控跑起来」
-name: mall-assistant-monitoring
+name: mall-monitoring          # 项目名不带 mall-assistant：同一套 Prometheus + Grafana 也可以顺带监控 mall-evolution（在部署目录里加抓取任务即可）
 
 services:
   prometheus:
     image: prom/prometheus:v3.5.0
-    container_name: mall-assistant-prometheus
+    container_name: mall-prometheus
     restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -29,7 +29,7 @@ services:
 
   grafana:
     image: grafana/grafana:11.6.1
-    container_name: mall-assistant-grafana
+    container_name: mall-grafana
     restart: unless-stopped
     depends_on:
       - prometheus
