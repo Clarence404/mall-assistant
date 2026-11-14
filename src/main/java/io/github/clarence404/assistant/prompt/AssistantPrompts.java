@@ -32,18 +32,8 @@ import org.springframework.stereotype.Component;
  *       也方便拿同一批问题对比两版的回答
  * </ul>
  *
- * <p>目前用到的模板（都在 {@code src/main/resources/prompts/}，模板里不能写注释，否则会一起发给模型；同目录的 README.md 有同样的说明）：
- *
- * <ul>
- *   <li>{@code system-v1.st} / {@code system-v2.st} / {@code system-v3.st}：回答用的系统提示词（客服人设与规则），按版本三选一；v2 比 v1 多了
- *       {@code {today}}、更明确的「不编造」规则和 few-shot 示例；v3（第 3 章，默认）让模型先调工具查、事实只能来自工具或查询结果，
- *       而且刻意写得很短（长提示词会让小模型不调工具）。变量：shopName、assistantName、supportScope、today（v1 不用 today）
- *   <li>{@code refusal.st}：拒答话术，直接返回给用户，不发给模型。变量同上
- *   <li>{@code intent-v2.st}（第 5 章起；{@code intent-v1.st} 是第 2～4 章的版本）：意图识别的系统提示词，没有变量，由 {@code IntentService}
- *       直接加载，不经过这个类
- *   <li>{@code rag-v1.st} / {@code rag-not-found.st} / {@code rag-unavailable.st} / {@code rag-rewrite.st}（第 5 章）：RAG 回答的系统提示词、
- *       检索不到时的固定话术、知识库不可用时的固定话术、问题改写，由 {@code rag.RagService} 加载，变量用这里的 {@link #variables()}
- * </ul>
+ * <p>目前有哪些模板、各自的用途、由谁加载、用到哪些变量，见同目录的说明 {@code src/main/resources/prompts/README.md}
+ * （模板文件里不能写注释，否则会一起发给模型，所以说明都写在那里）。
  */
 @Component
 public class AssistantPrompts {
