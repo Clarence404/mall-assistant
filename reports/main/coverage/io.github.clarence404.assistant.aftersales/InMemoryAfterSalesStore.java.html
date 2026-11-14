@@ -15,30 +15,44 @@ import java.util.concurrent.ConcurrentHashMap;
 
 <span class="fc" id="L16">    private final Map&lt;String, AfterSalesApplication&gt; byConfirmation = new ConcurrentHashMap&lt;&gt;();</span>
 
+    /**
+     * 存一张申请单。整个方法加锁（审查修复）：「这个确认存过没有」「这笔订单有没有待审核的」「存」三步要一气呵成，中间不能插进另一个线程；
+     * 申请单一天也没几张，一把锁足够。
+     */
     @Override
-    public AfterSalesApplication create(AfterSalesApplication application) {
-<span class="fc" id="L20">        AfterSalesApplication existing = byConfirmation.putIfAbsent(application.confirmationId(), application);</span>
-<span class="pc bpc" id="L21" title="1 of 2 branches missed.">        return existing != null ? existing : application;</span>
+    public synchronized AfterSalesApplication create(AfterSalesApplication application) {
+<span class="fc" id="L24">        AfterSalesApplication sameConfirmation = byConfirmation.get(application.confirmationId());</span>
+<span class="fc bfc" id="L25" title="All 2 branches covered.">        if (sameConfirmation != null) {</span>
+<span class="fc" id="L26">            return sameConfirmation;</span>
+        }
+<span class="pc bpc" id="L28" title="1 of 2 branches missed.">        if (application.status() == AfterSalesApplication.Status.PENDING_REVIEW) {</span>
+<span class="fc" id="L29">            Optional&lt;AfterSalesApplication&gt; open = findOpen(application.ownerKey(), application.orderNo());</span>
+<span class="fc bfc" id="L30" title="All 2 branches covered.">            if (open.isPresent()) {</span>
+<span class="fc" id="L31">                return open.get();</span>
+            }
+        }
+<span class="fc" id="L34">        byConfirmation.put(application.confirmationId(), application);</span>
+<span class="fc" id="L35">        return application;</span>
     }
 
     @Override
     public List&lt;AfterSalesApplication&gt; findByOwner(String ownerKey) {
-<span class="fc" id="L26">        return byConfirmation.values().stream()</span>
-<span class="fc" id="L27">                .filter(a -&gt; a.ownerKey().equals(ownerKey))</span>
-<span class="fc" id="L28">                .sorted(Comparator.comparing(AfterSalesApplication::createdAt).reversed())</span>
-<span class="fc" id="L29">                .toList();</span>
+<span class="fc" id="L40">        return byConfirmation.values().stream()</span>
+<span class="fc" id="L41">                .filter(a -&gt; a.ownerKey().equals(ownerKey))</span>
+<span class="fc" id="L42">                .sorted(Comparator.comparing(AfterSalesApplication::createdAt).reversed())</span>
+<span class="fc" id="L43">                .toList();</span>
     }
 
     @Override
     public Optional&lt;AfterSalesApplication&gt; findOpen(String ownerKey, String orderNo) {
-<span class="fc" id="L34">        return findByOwner(ownerKey).stream()</span>
-<span class="pc bpc" id="L35" title="2 of 4 branches missed.">                .filter(a -&gt; a.orderNo().equals(orderNo) &amp;&amp; a.status() == AfterSalesApplication.Status.PENDING_REVIEW)</span>
-<span class="fc" id="L36">                .findFirst();</span>
+<span class="fc" id="L48">        return findByOwner(ownerKey).stream()</span>
+<span class="pc bpc" id="L49" title="1 of 4 branches missed.">                .filter(a -&gt; a.orderNo().equals(orderNo) &amp;&amp; a.status() == AfterSalesApplication.Status.PENDING_REVIEW)</span>
+<span class="fc" id="L50">                .findFirst();</span>
     }
 
     @Override
     public String type() {
-<span class="nc" id="L41">        return &quot;memory&quot;;</span>
+<span class="nc" id="L55">        return &quot;memory&quot;;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

@@ -165,23 +165,48 @@ public class ChatGuard {
 <span class="fc" id="L165">        };</span>
     }
 
+    /**
+     * 只过「每分钟次数」这一关（审查修复时加的）：给不占并发名额、但也不能让人随便刷的辅助接口用——知识库检索调试
+     * （{@code GET /api/knowledge/search}，每次要调一次向量模型）、登录代理（{@code POST /api/mall/login}，不限的话可以拿它撞密码）。
+     *
+     * &lt;p&gt;和 {@link #admit} 用的是同一个限流器、同一个计数：这些接口和对话加在一起，每个调用方每分钟不超过
+     * {@code assistant.guard.requests-per-minute} 次。{@code assistant.guard.enabled=false} 时不检查。
+     *
+     * @param caller 调用方（{@link CallerResolver#resolve}；这些接口不带令牌，按来源 IP 算）
+     * @throws ChatRejection 太频繁（RATE_LIMITED，429），或者共享状态出错而策略是拒绝（STATE_UNAVAILABLE，503）
+     */
+    public void throttle(String caller) {
+<span class="fc bfc" id="L179" title="All 2 branches covered.">        if (!properties.enabled()) {</span>
+<span class="fc" id="L180">            return;</span>
+        }
+        try {
+<span class="fc bfc" id="L183" title="All 2 branches covered.">            if (!limiter.tryAcquire(caller)) {</span>
+<span class="fc" id="L184">                log.info(&quot;辅助接口限流：{} 一分钟内超过 {} 次&quot;, caller, properties.requestsPerMinute());</span>
+<span class="fc" id="L185">                throw new ChatRejection(ChatRejection.Reason.RATE_LIMITED, limiter.retryAfter(caller));</span>
+            }
+<span class="nc" id="L187">        } catch (StateUnavailableException e) {</span>
+<span class="nc" id="L188">            log.warn(&quot;辅助接口限流用不了共享状态（{}），按策略拒绝 {}&quot;, e.component(), caller);</span>
+<span class="nc" id="L189">            throw new ChatRejection(ChatRejection.Reason.STATE_UNAVAILABLE, STATE_RETRY_AFTER);</span>
+<span class="fc" id="L190">        }</span>
+<span class="fc" id="L191">    }</span>
+
     /** 正在处理几轮（测试与指标用）。 */
     public int inflight() {
-<span class="fc" id="L170">        return inflight.get();</span>
+<span class="fc" id="L195">        return inflight.get();</span>
     }
 
     /** 每 10 分钟清掉一分钟内没来过的调用方（匿名 IP 很多，不清会一直占内存；Redis 实现什么都不做，键自己会过期）。 */
     @Scheduled(fixedDelay = 10, timeUnit = TimeUnit.MINUTES)
     void evictIdle() {
-<span class="fc" id="L176">        limiter.evictIdle();</span>
-<span class="fc" id="L177">    }</span>
+<span class="fc" id="L201">        limiter.evictIdle();</span>
+<span class="fc" id="L202">    }</span>
 
     /** 一轮对话占着的名额：close 时归还。 */
     @FunctionalInterface
     public interface Permit extends AutoCloseable {
 
         /** 什么都不占（限流关掉时）。 */
-<span class="fc" id="L184">        Permit NONE = () -&gt; {};</span>
+<span class="fc" id="L209">        Permit NONE = () -&gt; {};</span>
 
         @Override
         void close();

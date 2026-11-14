@@ -171,42 +171,49 @@ public class ChatController {
 <span class="fc" id="L171">                                                    .filter(part -&gt; !(part instanceof AnswerPart.Text text</span>
 <span class="pc bpc" id="L172" title="2 of 6 branches missed.">                                                            &amp;&amp; text.text().isEmpty()))</span>
 <span class="fc" id="L173">                                                    .map(ChatController::partEvent)),</span>
-<span class="fc" id="L174">                                    turn -&gt; turn.conversation().close())</span>
+                                    // 审查修复：等这一轮的后台工作（被取消的 Agent）停了再放开会话，见 TurnRecord#hold
+<span class="fc" id="L175">                                    turn -&gt; record.whenSettled(</span>
+<span class="fc" id="L176">                                            () -&gt; turn.conversation().close()))</span>
                             // 第 9 章：说完了先记账，再把这一轮的用量放进 done 事件推给页面
-<span class="fc" id="L176">                            .concatWith(Mono.fromSupplier(() -&gt; {</span>
-<span class="fc" id="L177">                                outcome.set(ChatMetrics.OK);</span>
-<span class="fc" id="L178">                                ledger.commit(record);</span>
-<span class="fc" id="L179">                                return event(StreamEvents.DONE, StreamEvents.Done.stop(budgeted(record)));</span>
+<span class="fc" id="L178">                            .concatWith(Mono.fromSupplier(() -&gt; {</span>
+<span class="fc" id="L179">                                outcome.set(ChatMetrics.OK);</span>
+<span class="fc" id="L180">                                ledger.commit(record);</span>
+<span class="fc" id="L181">                                return event(StreamEvents.DONE, StreamEvents.Done.stop(budgeted(record)));</span>
                             }))
-<span class="fc" id="L181">                            .doOnError(e -&gt; outcome.set(outcomeOf(e)))</span>
-<span class="fc" id="L182">                            .doFinally(signal -&gt; {</span>
-<span class="fc" id="L183">                                permit.close();</span>
-<span class="fc" id="L184">                                ledger.commit(record);</span>
-<span class="fc" id="L185">                                metrics.turn(&quot;stream&quot;, record, outcome.get());</span>
-<span class="fc" id="L186">                            });</span>
+<span class="fc" id="L183">                            .doOnError(e -&gt; outcome.set(outcomeOf(e)))</span>
+                            // 收尾：归还并发名额、记账、记指标。两点审查修复——
+                            // 一、线程：这里可能是同步的 Redis 调用，不能跑在 Reactor「不许阻塞」的线程上。ChatService#answerStream 已经把
+                            //    交出来的信号统一换到了 boundedElastic 线程；begin 之前 / 之中出的错发生在订阅的线程（请求线程）上，也可以阻塞
+                            // 二、时机：Agent 被取消后那次模型调用还在跑，经 whenSettled 等它停了再还名额、记账（否则名额提前放了、
+                            //    后来的 Token 记不进账）；没有后台工作时立刻执行
+<span class="fc" id="L189">                            .doFinally(signal -&gt; record.whenSettled(() -&gt; {</span>
+<span class="fc" id="L190">                                permit.close();</span>
+<span class="fc" id="L191">                                ledger.commit(record);</span>
+<span class="fc" id="L192">                                metrics.turn(&quot;stream&quot;, record, outcome.get());</span>
+<span class="fc" id="L193">                            }));</span>
                 })
-<span class="fc" id="L188">                .onErrorResume(e -&gt; {</span>
-<span class="fc bfc" id="L189" title="All 2 branches covered.">                    if (e instanceof ChatRejection rejection) {</span>
-<span class="fc" id="L190">                        metrics.rejected(&quot;stream&quot;, rejection.reason().name());</span>
+<span class="fc" id="L195">                .onErrorResume(e -&gt; {</span>
+<span class="fc bfc" id="L196" title="All 2 branches covered.">                    if (e instanceof ChatRejection rejection) {</span>
+<span class="fc" id="L197">                        metrics.rejected(&quot;stream&quot;, rejection.reason().name());</span>
                     }
-<span class="fc" id="L192">                    return Mono.just(errorEvent(e));</span>
+<span class="fc" id="L199">                    return Mono.just(errorEvent(e));</span>
                 });
     }
 
     /** 这一轮的用量，补上今日用量与预算（记完账之后调）。 */
     private UsageTrace budgeted(TurnRecord record) {
-<span class="fc" id="L198">        return record.usage().withBudget(ledger.usedToday(record.caller()), ledger.dailyBudget());</span>
+<span class="fc" id="L205">        return record.usage().withBudget(ledger.usedToday(record.caller()), ledger.dailyBudget());</span>
     }
 
     /** 失败时指标里的 outcome：模型、会话、进门各自的错误码。 */
     static String outcomeOf(Throwable e) {
-<span class="pc bpc" id="L203" title="1 of 2 branches missed.">        if (e instanceof ChatRejection rejection) {</span>
-<span class="nc" id="L204">            return rejection.reason().name();</span>
+<span class="pc bpc" id="L210" title="1 of 2 branches missed.">        if (e instanceof ChatRejection rejection) {</span>
+<span class="nc" id="L211">            return rejection.reason().name();</span>
         }
-<span class="pc bpc" id="L206" title="1 of 2 branches missed.">        if (e instanceof ConversationException conversation) {</span>
-<span class="nc" id="L207">            return conversation.failure().name();</span>
+<span class="pc bpc" id="L213" title="1 of 2 branches missed.">        if (e instanceof ConversationException conversation) {</span>
+<span class="nc" id="L214">            return conversation.failure().name();</span>
         }
-<span class="fc" id="L209">        return ModelCallException.from(e).failure().name();</span>
+<span class="fc" id="L216">        return ModelCallException.from(e).failure().name();</span>
     }
 
     /**
@@ -216,14 +223,14 @@ public class ChatController {
      * @param part {@link ChatService#answerStream} 产出的片段
      */
     private static ServerSentEvent&lt;Object&gt; partEvent(AnswerPart part) {
-<span class="pc bpc" id="L219" title="1 of 7 branches missed.">        return switch (part) {</span>
-<span class="fc" id="L220">            case AnswerPart.Text text -&gt; event(StreamEvents.TOKEN, new StreamEvents.Token(text.text()));</span>
-<span class="fc" id="L221">            case AnswerPart.ToolUse tool -&gt; event(StreamEvents.TOOL, tool.invocation());</span>
-<span class="fc" id="L222">            case AnswerPart.Source source -&gt; event(StreamEvents.SOURCE, source.source());</span>
-<span class="fc" id="L223">            case AnswerPart.Memory memory -&gt; event(StreamEvents.MEMORY, memory.trace());</span>
-<span class="fc" id="L224">            case AnswerPart.Step step -&gt; event(StreamEvents.STEP, step.step());</span>
-<span class="fc" id="L225">            case AnswerPart.Confirm confirm -&gt; event(StreamEvents.CONFIRM, confirm.confirmation());</span>
-<span class="nc" id="L226">            case AnswerPart.Blocked blocked -&gt; event(StreamEvents.BLOCKED, blocked.source());</span>
+<span class="pc bpc" id="L226" title="1 of 7 branches missed.">        return switch (part) {</span>
+<span class="fc" id="L227">            case AnswerPart.Text text -&gt; event(StreamEvents.TOKEN, new StreamEvents.Token(text.text()));</span>
+<span class="fc" id="L228">            case AnswerPart.ToolUse tool -&gt; event(StreamEvents.TOOL, tool.invocation());</span>
+<span class="fc" id="L229">            case AnswerPart.Source source -&gt; event(StreamEvents.SOURCE, source.source());</span>
+<span class="fc" id="L230">            case AnswerPart.Memory memory -&gt; event(StreamEvents.MEMORY, memory.trace());</span>
+<span class="fc" id="L231">            case AnswerPart.Step step -&gt; event(StreamEvents.STEP, step.step());</span>
+<span class="fc" id="L232">            case AnswerPart.Confirm confirm -&gt; event(StreamEvents.CONFIRM, confirm.confirmation());</span>
+<span class="nc" id="L233">            case AnswerPart.Blocked blocked -&gt; event(StreamEvents.BLOCKED, blocked.source());</span>
         };
     }
 
@@ -234,26 +241,26 @@ public class ChatController {
      * @return {@code event: error} 事件，code 与阻塞接口 ProblemDetail 里的 code 相同
      */
     private static ServerSentEvent&lt;Object&gt; errorEvent(Throwable e) {
-<span class="fc bfc" id="L237" title="All 2 branches covered.">        if (e instanceof ChatRejection rejection) {</span>
+<span class="fc bfc" id="L244" title="All 2 branches covered.">        if (e instanceof ChatRejection rejection) {</span>
             // 第 9 章：进门被挡下（太频繁、太忙、今日额度用完），不是模型的问题
-<span class="fc" id="L239">            log.info(&quot;流式对话被挡下：{}&quot;, rejection.reason());</span>
-<span class="fc" id="L240">            return event(</span>
+<span class="fc" id="L246">            log.info(&quot;流式对话被挡下：{}&quot;, rejection.reason());</span>
+<span class="fc" id="L247">            return event(</span>
                     StreamEvents.ERROR,
                     new StreamEvents.Error(
-<span class="fc" id="L243">                            rejection.reason().name(), rejection.reason().message()));</span>
+<span class="fc" id="L250">                            rejection.reason().name(), rejection.reason().message()));</span>
         }
-<span class="pc bpc" id="L245" title="1 of 2 branches missed.">        if (e instanceof ConversationException conversation) {</span>
+<span class="pc bpc" id="L252" title="1 of 2 branches missed.">        if (e instanceof ConversationException conversation) {</span>
             // 第 6 章：会话正忙等不是模型的问题，用会话自己的错误码
-<span class="nc" id="L247">            log.info(&quot;流式对话的会话操作失败：{}&quot;, conversation.failure());</span>
-<span class="nc" id="L248">            return event(</span>
+<span class="nc" id="L254">            log.info(&quot;流式对话的会话操作失败：{}&quot;, conversation.failure());</span>
+<span class="nc" id="L255">            return event(</span>
                     StreamEvents.ERROR,
                     new StreamEvents.Error(
-<span class="nc" id="L251">                            conversation.failure().name(),</span>
-<span class="nc" id="L252">                            conversation.failure().message()));</span>
+<span class="nc" id="L258">                            conversation.failure().name(),</span>
+<span class="nc" id="L259">                            conversation.failure().message()));</span>
         }
-<span class="fc" id="L254">        ModelFailure failure = ModelCallException.from(e).failure();</span>
-<span class="fc" id="L255">        log.warn(&quot;流式调用模型失败：{}&quot;, failure, e);</span>
-<span class="fc" id="L256">        return event(StreamEvents.ERROR, new StreamEvents.Error(failure.name(), failure.message()));</span>
+<span class="fc" id="L261">        ModelFailure failure = ModelCallException.from(e).failure();</span>
+<span class="fc" id="L262">        log.warn(&quot;流式调用模型失败：{}&quot;, failure, e);</span>
+<span class="fc" id="L263">        return event(StreamEvents.ERROR, new StreamEvents.Error(failure.name(), failure.message()));</span>
     }
 
     /**
@@ -263,7 +270,7 @@ public class ChatController {
      * @param data 事件数据，由 Spring 的 JSON 编码器写成一行 JSON
      */
     private static ServerSentEvent&lt;Object&gt; event(String name, Object data) {
-<span class="fc" id="L266">        return ServerSentEvent.builder(data).event(name).build();</span>
+<span class="fc" id="L273">        return ServerSentEvent.builder(data).event(name).build();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

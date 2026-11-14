@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
@@ -35,10 +36,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
  */
 public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable {
 
-<span class="fc" id="L38">    private static final Logger log = LoggerFactory.getLogger(JdbcAfterSalesStore.class);</span>
+<span class="fc" id="L39">    private static final Logger log = LoggerFactory.getLogger(JdbcAfterSalesStore.class);</span>
 
     /** 建表与索引：都是 IF NOT EXISTS，重复执行无害。 */
-<span class="fc" id="L41">    static final List&lt;String&gt; SCHEMA = List.of(</span>
+<span class="fc" id="L42">    static final List&lt;String&gt; SCHEMA = List.of(</span>
             &quot;&quot;&quot;
             CREATE TABLE IF NOT EXISTS after_sales_application (
                 id VARCHAR(40) PRIMARY KEY,
@@ -51,6 +52,15 @@ public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable
                 created_at TIMESTAMPTZ NOT NULL
             )&quot;&quot;&quot;, &quot;CREATE INDEX IF NOT EXISTS idx_after_sales_owner ON after_sales_application (owner_key, created_at)&quot;);
 
+    /**
+     * 部分唯一索引（审查修复）：同一个用户的同一笔订单，状态是「待人工审核」的申请最多一张。
+     *
+     * &lt;p&gt;「部分」（{@code WHERE status = ...}）的意思是只有待审核的行参与唯一性：以后审核通过 / 驳回的申请状态变了，就不再占着位置，同一笔订单
+     * 可以再提一次。普通的唯一约束做不到这一点。有了它，两张确认单并发确认时由数据库保证只有一次插入成功。
+     */
+    static final String UNIQUE_OPEN_INDEX = &quot;CREATE UNIQUE INDEX IF NOT EXISTS uq_after_sales_open&quot;
+            + &quot; ON after_sales_application (owner_key, order_no) WHERE status = 'PENDING_REVIEW'&quot;;
+
     private static final String COLUMNS = &quot;id, owner_key, order_no, type, reason, status, confirmation_id, created_at&quot;;
 
     private final HikariDataSource dataSource;
@@ -62,20 +72,20 @@ public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable
      *
      * @param properties 连接配置
      */
-<span class="fc" id="L65">    public JdbcAfterSalesStore(AfterSalesProperties.Jdbc properties) {</span>
-<span class="fc" id="L66">        HikariConfig config = new HikariConfig();</span>
-<span class="fc" id="L67">        config.setPoolName(&quot;after-sales-jdbc&quot;);</span>
-<span class="fc" id="L68">        config.setJdbcUrl(properties.url());</span>
-<span class="fc" id="L69">        config.setUsername(properties.username());</span>
-<span class="fc" id="L70">        config.setPassword(properties.password());</span>
-<span class="fc" id="L71">        config.setMaximumPoolSize(properties.maxPoolSize());</span>
-<span class="fc" id="L72">        config.setMinimumIdle(0);</span>
-<span class="fc" id="L73">        config.setConnectionTimeout(3_000);</span>
+<span class="fc" id="L75">    public JdbcAfterSalesStore(AfterSalesProperties.Jdbc properties) {</span>
+<span class="fc" id="L76">        HikariConfig config = new HikariConfig();</span>
+<span class="fc" id="L77">        config.setPoolName(&quot;after-sales-jdbc&quot;);</span>
+<span class="fc" id="L78">        config.setJdbcUrl(properties.url());</span>
+<span class="fc" id="L79">        config.setUsername(properties.username());</span>
+<span class="fc" id="L80">        config.setPassword(properties.password());</span>
+<span class="fc" id="L81">        config.setMaximumPoolSize(properties.maxPoolSize());</span>
+<span class="fc" id="L82">        config.setMinimumIdle(0);</span>
+<span class="fc" id="L83">        config.setConnectionTimeout(3_000);</span>
         // -1：启动时不试连接，数据库没开也能起来（同第 6 章）
-<span class="fc" id="L75">        config.setInitializationFailTimeout(-1);</span>
-<span class="fc" id="L76">        this.dataSource = new HikariDataSource(config);</span>
-<span class="fc" id="L77">        this.initializeSchema = properties.initializeSchema();</span>
-<span class="fc" id="L78">    }</span>
+<span class="fc" id="L85">        config.setInitializationFailTimeout(-1);</span>
+<span class="fc" id="L86">        this.dataSource = new HikariDataSource(config);</span>
+<span class="fc" id="L87">        this.initializeSchema = properties.initializeSchema();</span>
+<span class="fc" id="L88">    }</span>
 
     /**
      * 第一次用到时（按配置）建表，再创建 {@link JdbcTemplate}（ch07-7）。
@@ -86,48 +96,73 @@ public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable
      * @return 可以用的 JdbcTemplate
      */
     JdbcTemplate jdbc() {
-<span class="fc" id="L89">        JdbcTemplate current = jdbc;</span>
-<span class="fc bfc" id="L90" title="All 2 branches covered.">        if (current != null) {</span>
-<span class="fc" id="L91">            return current;</span>
+<span class="fc" id="L99">        JdbcTemplate current = jdbc;</span>
+<span class="fc bfc" id="L100" title="All 2 branches covered.">        if (current != null) {</span>
+<span class="fc" id="L101">            return current;</span>
         }
-<span class="fc" id="L93">        synchronized (this) {</span>
-<span class="pc bpc" id="L94" title="1 of 2 branches missed.">            if (jdbc == null) {</span>
-<span class="fc" id="L95">                JdbcTemplate template = new JdbcTemplate(dataSource);</span>
-<span class="pc bpc" id="L96" title="1 of 2 branches missed.">                if (initializeSchema) {</span>
-<span class="fc" id="L97">                    SCHEMA.forEach(template::execute);</span>
+<span class="fc" id="L103">        synchronized (this) {</span>
+<span class="pc bpc" id="L104" title="1 of 2 branches missed.">            if (jdbc == null) {</span>
+<span class="fc" id="L105">                JdbcTemplate template = new JdbcTemplate(dataSource);</span>
+<span class="pc bpc" id="L106" title="1 of 2 branches missed.">                if (initializeSchema) {</span>
+<span class="fc" id="L107">                    SCHEMA.forEach(template::execute);</span>
+<span class="fc" id="L108">                    createUniqueOpenIndex(template);</span>
                 }
-<span class="fc" id="L99">                jdbc = template;</span>
-<span class="fc" id="L100">                log.info(&quot;售后申请单库已就绪：PostgreSQL 表 after_sales_application&quot;);</span>
+<span class="fc" id="L110">                jdbc = template;</span>
+<span class="fc" id="L111">                log.info(&quot;售后申请单库已就绪：PostgreSQL 表 after_sales_application&quot;);</span>
             }
-<span class="fc" id="L102">            return jdbc;</span>
+<span class="fc" id="L113">            return jdbc;</span>
         }
     }
 
     /**
+     * 建部分唯一索引。表里已经有重复的待审核申请（这个索引是后来加的，旧数据可能有）时建不成：只打一行警告、照常工作——这时「一笔订单一张」
+     * 退回到调用方先查后存的老办法，等人工把重复的清掉、重启后索引就建上了。不能因为它让整个售后申请功能起不来。
+     *
+     * @param template 连接
+     */
+    private static void createUniqueOpenIndex(JdbcTemplate template) {
+        try {
+<span class="fc" id="L125">            template.execute(UNIQUE_OPEN_INDEX);</span>
+<span class="nc" id="L126">        } catch (DataAccessException e) {</span>
+<span class="nc" id="L127">            log.warn(</span>
+                    &quot;售后申请单的唯一索引 uq_after_sales_open 没建成（表里可能已经有同一笔订单的多张待审核申请，清理后重启即可）：{}&quot;,
+<span class="nc" id="L129">                    e.getMostSpecificCause().getMessage());</span>
+<span class="fc" id="L130">        }</span>
+<span class="fc" id="L131">    }</span>
+
+    /**
      * 存一张申请单（ch07-7）。
      *
-     * &lt;p&gt;要求：{@code INSERT ... ON CONFLICT (confirmation_id) DO NOTHING}（PostgreSQL 的「有就跳过」，并发的两次插入也只有一次生效），
-     * 然后按 confirmation_id 查回来返回（可能是之前那张）。时间存成 {@link Timestamp}。
+     * &lt;p&gt;要求：{@code INSERT ... ON CONFLICT DO NOTHING}（PostgreSQL 的「有就跳过」，并发的两次插入也只有一次生效），然后查回来返回
+     * （可能是之前那张）。时间存成 {@link Timestamp}。
+     *
+     * &lt;p&gt;审查修复：{@code ON CONFLICT} 后面不再写 {@code (confirmation_id)}——不指定哪个约束，就是「撞上任何一个唯一约束都跳过」，这样
+     * 「同一个确认 ID」和「这笔订单已有待审核的申请」（{@link #UNIQUE_OPEN_INDEX}）两种情况都不会报错。查回来时先按确认 ID 找；找不到说明
+     * 是被第二种情况挡下的，返回那张已有的待审核申请。
      */
     @Override
     public AfterSalesApplication create(AfterSalesApplication a) {
-<span class="fc" id="L114">        JdbcTemplate template = jdbc();</span>
-<span class="fc" id="L115">        template.update(</span>
+<span class="fc" id="L145">        JdbcTemplate template = jdbc();</span>
+<span class="fc" id="L146">        template.update(</span>
                 &quot;INSERT INTO after_sales_application (&quot; + COLUMNS + &quot;) VALUES (?, ?, ?, ?, ?, ?, ?, ?)&quot;
-                        + &quot; ON CONFLICT (confirmation_id) DO NOTHING&quot;,
-<span class="fc" id="L118">                a.id(),</span>
-<span class="fc" id="L119">                a.ownerKey(),</span>
-<span class="fc" id="L120">                a.orderNo(),</span>
-<span class="fc" id="L121">                a.type().name(),</span>
-<span class="fc" id="L122">                a.reason(),</span>
-<span class="fc" id="L123">                a.status().name(),</span>
-<span class="fc" id="L124">                a.confirmationId(),</span>
-<span class="fc" id="L125">                Timestamp.from(a.createdAt()));</span>
-<span class="fc" id="L126">        return template.query(</span>
-                        &quot;SELECT &quot; + COLUMNS + &quot; FROM after_sales_application WHERE confirmation_id = ?&quot;,
-                        JdbcAfterSalesStore::map,
-<span class="fc" id="L129">                        a.confirmationId())</span>
-<span class="fc" id="L130">                .getFirst();</span>
+                        + &quot; ON CONFLICT DO NOTHING&quot;,
+<span class="fc" id="L149">                a.id(),</span>
+<span class="fc" id="L150">                a.ownerKey(),</span>
+<span class="fc" id="L151">                a.orderNo(),</span>
+<span class="fc" id="L152">                a.type().name(),</span>
+<span class="fc" id="L153">                a.reason(),</span>
+<span class="fc" id="L154">                a.status().name(),</span>
+<span class="fc" id="L155">                a.confirmationId(),</span>
+<span class="fc" id="L156">                Timestamp.from(a.createdAt()));</span>
+<span class="fc" id="L157">        List&lt;AfterSalesApplication&gt; mine = template.query(</span>
+                &quot;SELECT &quot; + COLUMNS + &quot; FROM after_sales_application WHERE confirmation_id = ?&quot;,
+                JdbcAfterSalesStore::map,
+<span class="fc" id="L160">                a.confirmationId());</span>
+<span class="fc bfc" id="L161" title="All 2 branches covered.">        if (!mine.isEmpty()) {</span>
+<span class="fc" id="L162">            return mine.getFirst();</span>
+        }
+<span class="fc" id="L164">        return findOpen(a.ownerKey(), a.orderNo())</span>
+<span class="pc" id="L165">                .orElseThrow(() -&gt; new IllegalStateException(&quot;售后申请单没有存进去，也找不到挡住它的那一张：&quot; + a.confirmationId()));</span>
     }
 
     /**
@@ -135,7 +170,7 @@ public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable
      */
     @Override
     public List&lt;AfterSalesApplication&gt; findByOwner(String ownerKey) {
-<span class="fc" id="L138">        return jdbc().query(</span>
+<span class="fc" id="L173">        return jdbc().query(</span>
                         &quot;SELECT &quot; + COLUMNS
                                 + &quot; FROM after_sales_application WHERE owner_key = ? ORDER BY created_at DESC&quot;,
                         JdbcAfterSalesStore::map,
@@ -144,40 +179,40 @@ public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable
 
     @Override
     public Optional&lt;AfterSalesApplication&gt; findOpen(String ownerKey, String orderNo) {
-<span class="fc" id="L147">        return jdbc()</span>
-<span class="fc" id="L148">                .query(</span>
+<span class="fc" id="L182">        return jdbc()</span>
+<span class="fc" id="L183">                .query(</span>
                         &quot;SELECT &quot; + COLUMNS + &quot; FROM after_sales_application WHERE owner_key = ? AND order_no = ?&quot;
                                 + &quot; AND status = ? ORDER BY created_at DESC&quot;,
                         JdbcAfterSalesStore::map,
                         ownerKey,
                         orderNo,
-<span class="fc" id="L154">                        AfterSalesApplication.Status.PENDING_REVIEW.name())</span>
-<span class="fc" id="L155">                .stream()</span>
-<span class="fc" id="L156">                .findFirst();</span>
+<span class="fc" id="L189">                        AfterSalesApplication.Status.PENDING_REVIEW.name())</span>
+<span class="fc" id="L190">                .stream()</span>
+<span class="fc" id="L191">                .findFirst();</span>
     }
 
     @Override
     public String type() {
-<span class="fc" id="L161">        return &quot;jdbc&quot;;</span>
+<span class="fc" id="L196">        return &quot;jdbc&quot;;</span>
     }
 
     /** 一行 → 申请单。 */
     private static AfterSalesApplication map(ResultSet rs, int row) throws SQLException {
-<span class="fc" id="L166">        return new AfterSalesApplication(</span>
-<span class="fc" id="L167">                rs.getString(&quot;id&quot;),</span>
-<span class="fc" id="L168">                rs.getString(&quot;owner_key&quot;),</span>
-<span class="fc" id="L169">                rs.getString(&quot;order_no&quot;),</span>
-<span class="fc" id="L170">                AfterSalesApplication.Type.valueOf(rs.getString(&quot;type&quot;)),</span>
-<span class="fc" id="L171">                rs.getString(&quot;reason&quot;),</span>
-<span class="fc" id="L172">                AfterSalesApplication.Status.valueOf(rs.getString(&quot;status&quot;)),</span>
-<span class="fc" id="L173">                rs.getString(&quot;confirmation_id&quot;),</span>
-<span class="fc" id="L174">                rs.getTimestamp(&quot;created_at&quot;).toInstant());</span>
+<span class="fc" id="L201">        return new AfterSalesApplication(</span>
+<span class="fc" id="L202">                rs.getString(&quot;id&quot;),</span>
+<span class="fc" id="L203">                rs.getString(&quot;owner_key&quot;),</span>
+<span class="fc" id="L204">                rs.getString(&quot;order_no&quot;),</span>
+<span class="fc" id="L205">                AfterSalesApplication.Type.valueOf(rs.getString(&quot;type&quot;)),</span>
+<span class="fc" id="L206">                rs.getString(&quot;reason&quot;),</span>
+<span class="fc" id="L207">                AfterSalesApplication.Status.valueOf(rs.getString(&quot;status&quot;)),</span>
+<span class="fc" id="L208">                rs.getString(&quot;confirmation_id&quot;),</span>
+<span class="fc" id="L209">                rs.getTimestamp(&quot;created_at&quot;).toInstant());</span>
     }
 
     /** 应用关闭时关掉连接池。 */
     @Override
     public void close() {
-<span class="fc" id="L180">        dataSource.close();</span>
-<span class="fc" id="L181">    }</span>
+<span class="fc" id="L215">        dataSource.close();</span>
+<span class="fc" id="L216">    }</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>

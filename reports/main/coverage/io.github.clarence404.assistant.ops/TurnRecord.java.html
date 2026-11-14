@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>TurnRecord.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">mall-assistant</a> &gt; <a href="index.source.html" class="el_package">io.github.clarence404.assistant.ops</a> &gt; <span class="el_source">TurnRecord.java</span></div><h1>TurnRecord.java</h1><pre class="source lang-java linenums">package io.github.clarence404.assistant.ops;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.LoggerFactory;
 
 /**
  * 一轮对话的「账本」：谁问的、哪个会话、什么意图，以及这一轮里每次模型调用的 Token、RAG 的结果、Agent 走了几步（第 9 章引入）。
@@ -26,22 +28,27 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class TurnRecord {
 
     /** 放进 ChatClient 请求上下文里的键。 */
-<span class="fc" id="L29">    public static final String CONTEXT_KEY = TurnRecord.class.getName();</span>
+<span class="fc" id="L31">    public static final String CONTEXT_KEY = TurnRecord.class.getName();</span>
 
     /** 没有调用方信息时的归属（测试、评测、调试接口）。 */
     public static final String UNATTRIBUTED = &quot;unattributed&quot;;
 
-<span class="fc" id="L34">    private static final ThreadLocal&lt;TurnRecord&gt; CURRENT = new ThreadLocal&lt;&gt;();</span>
+<span class="fc" id="L36">    private static final ThreadLocal&lt;TurnRecord&gt; CURRENT = new ThreadLocal&lt;&gt;();</span>
 
     private final String caller;
     private final String conversationId;
-<span class="fc" id="L38">    private final long startNanos = System.nanoTime();</span>
-<span class="fc" id="L39">    private final List&lt;ModelCall&gt; calls = new CopyOnWriteArrayList&lt;&gt;();</span>
-<span class="fc" id="L40">    private final AtomicBoolean committed = new AtomicBoolean();</span>
+<span class="fc" id="L40">    private final long startNanos = System.nanoTime();</span>
+<span class="fc" id="L41">    private final List&lt;ModelCall&gt; calls = new CopyOnWriteArrayList&lt;&gt;();</span>
+<span class="fc" id="L42">    private final AtomicBoolean committed = new AtomicBoolean();</span>
+
+    // 审查修复：后台工作的计数与等它停下再执行的收尾动作，见 hold() / whenSettled()；都在 settleLock 里读写
+<span class="fc" id="L45">    private final Object settleLock = new Object();</span>
+<span class="fc" id="L46">    private final List&lt;Runnable&gt; deferred = new ArrayList&lt;&gt;();</span>
+    private int holds;
     private volatile String intent;
     private volatile String ragResult;
     private volatile int blockedChunks;
-<span class="fc" id="L44">    private volatile int agentSteps = -1;</span>
+<span class="fc" id="L51">    private volatile int agentSteps = -1;</span>
     private volatile String agentStop;
 
     /**
@@ -50,10 +57,10 @@ public final class TurnRecord {
      * @param caller 调用方：{@code user:&lt;商城用户 ID&gt;}、{@code ip:&lt;地址&gt;}，不知道时 {@link #UNATTRIBUTED}
      * @param conversationId 会话 ID，单轮时为 null
      */
-<span class="fc" id="L53">    public TurnRecord(String caller, String conversationId) {</span>
-<span class="pc bpc" id="L54" title="1 of 2 branches missed.">        this.caller = caller == null ? UNATTRIBUTED : caller;</span>
-<span class="fc" id="L55">        this.conversationId = conversationId;</span>
-<span class="fc" id="L56">    }</span>
+<span class="fc" id="L60">    public TurnRecord(String caller, String conversationId) {</span>
+<span class="pc bpc" id="L61" title="1 of 2 branches missed.">        this.caller = caller == null ? UNATTRIBUTED : caller;</span>
+<span class="fc" id="L62">        this.conversationId = conversationId;</span>
+<span class="fc" id="L63">    }</span>
 
     /**
      * 不属于任何调用方的一轮（前几章的测试手工调 ChatService、评测运行器用）：照样收集每次调用的 Token，只是不进总账。
@@ -61,7 +68,7 @@ public final class TurnRecord {
      * @return 一轮
      */
     public static TurnRecord detached() {
-<span class="fc" id="L64">        return new TurnRecord(UNATTRIBUTED, null);</span>
+<span class="fc" id="L71">        return new TurnRecord(UNATTRIBUTED, null);</span>
     }
 
     /**
@@ -70,7 +77,7 @@ public final class TurnRecord {
      * @return 一轮；没有绑定时为 null
      */
     public static TurnRecord current() {
-<span class="fc" id="L73">        return CURRENT.get();</span>
+<span class="fc" id="L80">        return CURRENT.get();</span>
     }
 
     /**
@@ -79,15 +86,89 @@ public final class TurnRecord {
      * @return 用 try-with-resources 关闭的句柄
      */
     public Binding bind() {
-<span class="fc" id="L82">        TurnRecord previous = CURRENT.get();</span>
-<span class="fc" id="L83">        CURRENT.set(this);</span>
-<span class="fc" id="L84">        return () -&gt; {</span>
-<span class="fc bfc" id="L85" title="All 2 branches covered.">            if (previous == null) {</span>
-<span class="fc" id="L86">                CURRENT.remove();</span>
+<span class="fc" id="L89">        TurnRecord previous = CURRENT.get();</span>
+<span class="fc" id="L90">        CURRENT.set(this);</span>
+<span class="fc" id="L91">        return () -&gt; {</span>
+<span class="fc bfc" id="L92" title="All 2 branches covered.">            if (previous == null) {</span>
+<span class="fc" id="L93">                CURRENT.remove();</span>
             } else {
-<span class="fc" id="L88">                CURRENT.set(previous);</span>
+<span class="fc" id="L95">                CURRENT.set(previous);</span>
             }
-<span class="fc" id="L90">        };</span>
+<span class="fc" id="L97">        };</span>
+    }
+
+    /**
+     * 声明「这一轮还有后台工作在跑」，返回的句柄关掉时表示它停了（审查修复时引入）。
+     *
+     * &lt;p&gt;为什么要它：流式回答被取消（页面关了）时，下游的收尾立刻就会执行——放开会话的「正在回答」标记、归还并发名额、把这一轮记账。
+     * 但 Agent 是一串阻塞调用，跑在另一个线程上，取消只是让它「下一步不再继续」，正在等的那次模型调用还要跑完。如果收尾不等它：名额和会话锁
+     * 已经放了（别的请求进来，实际并发超过上限；同一个会话可以再发一句，两轮同时在写），这次调用的 Token 也落在已经提交的账之外。
+     *
+     * &lt;p&gt;用法：干活的线程开头 {@code hold()}，退出时（finally / try-with-resources）关掉；收尾的一方不直接执行，而是交给
+     * {@link #whenSettled}。没有人 hold 时 {@code whenSettled} 立刻执行，和原来完全一样（普通问答、RAG 都是这种情况）。
+     *
+     * @return 句柄；重复关闭只算一次
+     */
+    public Hold hold() {
+<span class="fc" id="L113">        synchronized (settleLock) {</span>
+<span class="fc" id="L114">            holds++;</span>
+<span class="fc" id="L115">        }</span>
+<span class="fc" id="L116">        AtomicBoolean released = new AtomicBoolean();</span>
+<span class="fc" id="L117">        return () -&gt; {</span>
+<span class="fc bfc" id="L118" title="All 2 branches covered.">            if (!released.compareAndSet(false, true)) {</span>
+<span class="fc" id="L119">                return;</span>
+            }
+            List&lt;Runnable&gt; ready;
+<span class="fc" id="L122">            synchronized (settleLock) {</span>
+<span class="fc bfc" id="L123" title="All 2 branches covered.">                if (--holds &gt; 0) {</span>
+<span class="fc" id="L124">                    return;</span>
+                }
+<span class="fc" id="L126">                ready = List.copyOf(deferred);</span>
+<span class="fc" id="L127">                deferred.clear();</span>
+<span class="fc" id="L128">            }</span>
+            // 在锁外面执行：收尾里有网络调用（Redis），不能占着锁；一个收尾抛异常不能连累后面的。
+            // 先把线程的「被打断」标记拿掉、执行完再放回去：取消订阅时 Reactor 会打断跑 Agent 的线程，带着这个标记去做同步的 Redis 调用
+            // 会立刻以 InterruptedException 失败——名额和会话锁就还不回去了（要等租期到）
+<span class="fc" id="L132">            boolean interrupted = Thread.interrupted();</span>
+            try {
+<span class="fc" id="L134">                ready.forEach(TurnRecord::runQuietly);</span>
+            } finally {
+<span class="fc bfc" id="L136" title="All 2 branches covered.">                if (interrupted) {</span>
+<span class="fc" id="L137">                    Thread.currentThread().interrupt();</span>
+                }
+            }
+<span class="fc" id="L140">        };</span>
+    }
+
+    /**
+     * 这一轮的后台工作都停了之后执行 {@code action}：没有后台工作时立刻在当前线程执行；有的话记下来，等最后一个 {@link Hold} 关掉时，
+     * 在关它的那个线程上按登记的顺序执行。
+     *
+     * @param action 收尾动作（放开会话、归还名额、记账……）
+     */
+    public void whenSettled(Runnable action) {
+<span class="fc" id="L150">        synchronized (settleLock) {</span>
+<span class="fc bfc" id="L151" title="All 2 branches covered.">            if (holds &gt; 0) {</span>
+<span class="fc" id="L152">                deferred.add(action);</span>
+<span class="fc" id="L153">                return;</span>
+            }
+<span class="fc" id="L155">        }</span>
+<span class="fc" id="L156">        action.run();</span>
+<span class="fc" id="L157">    }</span>
+
+    private static void runQuietly(Runnable action) {
+        try {
+<span class="fc" id="L161">            action.run();</span>
+<span class="fc" id="L162">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L163">            LoggerFactory.getLogger(TurnRecord.class).warn(&quot;这一轮的收尾动作出错：{}&quot;, e.toString());</span>
+<span class="fc" id="L164">        }</span>
+<span class="fc" id="L165">    }</span>
+
+    /** {@link #hold()} 的句柄：关掉表示后台工作停了。 */
+    @FunctionalInterface
+    public interface Hold extends AutoCloseable {
+        @Override
+        void close();
     }
 
     /** 绑定句柄：close 不抛受检异常。 */
@@ -103,17 +184,17 @@ public final class TurnRecord {
      * @param call 调用
      */
     public void add(ModelCall call) {
-<span class="fc" id="L106">        calls.add(call);</span>
-<span class="fc" id="L107">    }</span>
+<span class="fc" id="L187">        calls.add(call);</span>
+<span class="fc" id="L188">    }</span>
 
     /** 这一轮到现在为止的用量。 */
     public UsageTrace usage() {
-<span class="fc" id="L111">        return UsageTrace.of(calls);</span>
+<span class="fc" id="L192">        return UsageTrace.of(calls);</span>
     }
 
     /** 这一轮的每次调用。 */
     public List&lt;ModelCall&gt; calls() {
-<span class="fc" id="L116">        return List.copyOf(calls);</span>
+<span class="fc" id="L197">        return List.copyOf(calls);</span>
     }
 
     /**
@@ -122,8 +203,8 @@ public final class TurnRecord {
      * @param intent 意图名，如 {@code POLICY}
      */
     public void intent(String intent) {
-<span class="fc" id="L125">        this.intent = intent;</span>
-<span class="fc" id="L126">    }</span>
+<span class="fc" id="L206">        this.intent = intent;</span>
+<span class="fc" id="L207">    }</span>
 
     /**
      * RAG 的结果（{@code ChatService} 的 RAG 路径）。
@@ -132,9 +213,9 @@ public final class TurnRecord {
      * @param blocked 被提示注入过滤挡下的资料块数
      */
     public void rag(String result, int blocked) {
-<span class="fc" id="L135">        this.ragResult = result;</span>
-<span class="fc" id="L136">        this.blockedChunks = blocked;</span>
-<span class="fc" id="L137">    }</span>
+<span class="fc" id="L216">        this.ragResult = result;</span>
+<span class="fc" id="L217">        this.blockedChunks = blocked;</span>
+<span class="fc" id="L218">    }</span>
 
     /**
      * Agent 走了几步、为什么停（{@code ChatService} 的 Agent 路径）。
@@ -143,9 +224,9 @@ public final class TurnRecord {
      * @param stop 停止原因
      */
     public void agent(int steps, String stop) {
-<span class="fc" id="L146">        this.agentSteps = steps;</span>
-<span class="fc" id="L147">        this.agentStop = stop;</span>
-<span class="fc" id="L148">    }</span>
+<span class="fc" id="L227">        this.agentSteps = steps;</span>
+<span class="fc" id="L228">        this.agentStop = stop;</span>
+<span class="fc" id="L229">    }</span>
 
     /**
      * 标记已经记过账（{@link UsageLedger#commit} 用，保证一轮只记一次：流式接口在 usage 事件和 doFinally 里都会尝试记）。
@@ -153,44 +234,44 @@ public final class TurnRecord {
      * @return 第一次调用时为 true
      */
     boolean markCommitted() {
-<span class="fc" id="L156">        return committed.compareAndSet(false, true);</span>
+<span class="fc" id="L237">        return committed.compareAndSet(false, true);</span>
     }
 
     public String caller() {
-<span class="fc" id="L160">        return caller;</span>
+<span class="fc" id="L241">        return caller;</span>
     }
 
     public String conversationId() {
-<span class="fc" id="L164">        return conversationId;</span>
+<span class="fc" id="L245">        return conversationId;</span>
     }
 
     /** 意图；还没识别出来时为 null。 */
     public String intent() {
-<span class="fc" id="L169">        return intent;</span>
+<span class="fc" id="L250">        return intent;</span>
     }
 
     /** RAG 结果；不走 RAG 时为 null。 */
     public String ragResult() {
-<span class="fc" id="L174">        return ragResult;</span>
+<span class="fc" id="L255">        return ragResult;</span>
     }
 
     public int blockedChunks() {
-<span class="nc" id="L178">        return blockedChunks;</span>
+<span class="nc" id="L259">        return blockedChunks;</span>
     }
 
     /** Agent 步数；不走 Agent 时为 -1。 */
     public int agentSteps() {
-<span class="fc" id="L183">        return agentSteps;</span>
+<span class="fc" id="L264">        return agentSteps;</span>
     }
 
     /** Agent 停止原因；不走 Agent 时为 null。 */
     public String agentStop() {
-<span class="fc" id="L188">        return agentStop;</span>
+<span class="fc" id="L269">        return agentStop;</span>
     }
 
     /** 从开始到现在过了多少纳秒。 */
     public long elapsedNanos() {
-<span class="fc" id="L193">        return System.nanoTime() - startNanos;</span>
+<span class="fc" id="L274">        return System.nanoTime() - startNanos;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.13.202504020838</span></div></body></html>
