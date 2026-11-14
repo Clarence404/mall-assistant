@@ -11,6 +11,7 @@ import java.net.ConnectException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -248,6 +249,36 @@ class AgentLoopTest {
 
         assertThat(result.trace().stopReason()).isEqualTo(AgentTrace.StopReason.CANCELLED);
         assertThat(model.agentPrompts()).isEmpty();
+    }
+
+    /**
+     * 审查修复：模型「想」第二步的时候页面关了——它回来说要取消订单，这时不能再替一个已经走掉的用户生成确认单。
+     *
+     * <p>「页面关了没有」每一步问两次：这一步开始前、模型返回之后。这里前三次回答没关（第一步开始前、第一步模型返回后、第二步开始前），第四次
+     * （第二步模型返回后）回答关了。修复前只在每一步开始前问，第二步照常提出取消、留下一张没人看得到的待确认操作。
+     */
+    @Test
+    void cancelledWhileThinkingDoesNotPropose() {
+        model.willAct(act("queryOrder", "orderNo", PENDING), act("cancelOrder", "orderNo", PENDING));
+        AtomicInteger asked = new AtomicInteger();
+
+        AgentResult result = agent.service()
+                .run(
+                        "订单 " + PENDING + " 买错了，帮我取消",
+                        List.of(),
+                        TOKEN,
+                        null,
+                        events::add,
+                        () -> asked.getAndIncrement() >= 3);
+
+        assertThat(result.trace().stopReason()).isEqualTo(AgentTrace.StopReason.CANCELLED);
+        assertThat(kinds(result)).as("第一步照常查了订单，第二步的提议被丢掉").containsExactly(AgentStep.Kind.READ);
+        assertThat(result.confirmation()).isNull();
+        assertThat(agent.confirmations().pendingFor(AgentFixtures.DEMO_USER, null))
+                .as("没有留下待确认操作")
+                .isEmpty();
+        assertThat(model.agentPrompts()).hasSize(2);
+        assertThat(events).noneMatch(e -> e instanceof AgentEvent.ConfirmationRequested);
     }
 
     /** 某一步模型挂了：整次办事失败（ModelCallException），什么都没执行。 */

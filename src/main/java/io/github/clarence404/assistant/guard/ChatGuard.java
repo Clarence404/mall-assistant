@@ -165,6 +165,31 @@ public class ChatGuard {
         };
     }
 
+    /**
+     * 只过「每分钟次数」这一关（审查修复时加的）：给不占并发名额、但也不能让人随便刷的辅助接口用——知识库检索调试
+     * （{@code GET /api/knowledge/search}，每次要调一次向量模型）、登录代理（{@code POST /api/mall/login}，不限的话可以拿它撞密码）。
+     *
+     * <p>和 {@link #admit} 用的是同一个限流器、同一个计数：这些接口和对话加在一起，每个调用方每分钟不超过
+     * {@code assistant.guard.requests-per-minute} 次。{@code assistant.guard.enabled=false} 时不检查。
+     *
+     * @param caller 调用方（{@link CallerResolver#resolve}；这些接口不带令牌，按来源 IP 算）
+     * @throws ChatRejection 太频繁（RATE_LIMITED，429），或者共享状态出错而策略是拒绝（STATE_UNAVAILABLE，503）
+     */
+    public void throttle(String caller) {
+        if (!properties.enabled()) {
+            return;
+        }
+        try {
+            if (!limiter.tryAcquire(caller)) {
+                log.info("辅助接口限流：{} 一分钟内超过 {} 次", caller, properties.requestsPerMinute());
+                throw new ChatRejection(ChatRejection.Reason.RATE_LIMITED, limiter.retryAfter(caller));
+            }
+        } catch (StateUnavailableException e) {
+            log.warn("辅助接口限流用不了共享状态（{}），按策略拒绝 {}", e.component(), caller);
+            throw new ChatRejection(ChatRejection.Reason.STATE_UNAVAILABLE, STATE_RETRY_AFTER);
+        }
+    }
+
     /** 正在处理几轮（测试与指标用）。 */
     public int inflight() {
         return inflight.get();

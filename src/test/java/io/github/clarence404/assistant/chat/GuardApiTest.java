@@ -10,10 +10,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.error.ModelFailure;
 import io.github.clarence404.assistant.guard.ModelCircuitBreaker;
+import io.github.clarence404.assistant.intent.IntentResult;
 import io.github.clarence404.assistant.knowledge.KnowledgeIngestionService;
 import java.net.ConnectException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
@@ -25,6 +29,8 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.web.client.ResourceAccessException;
+import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 
 /**
  * 第 9 章：上线保护在接口上的样子——限流 429 与 Retry-After、每日预算、流式被挡下是一个 error 事件、熔断 503 MODEL_CIRCUIT_OPEN、
@@ -40,6 +46,7 @@ import org.springframework.web.client.ResourceAccessException;
             "assistant.guard.circuit.enabled=true",
             "assistant.guard.circuit.failure-threshold=2",
             "assistant.guard.degrade.enabled=true",
+            "assistant.chat.stream-timeout=500ms",
             "assistant.usage.daily-token-budget=20000"
         })
 class GuardApiTest extends FakeModelWebTest {
@@ -49,6 +56,9 @@ class GuardApiTest extends FakeModelWebTest {
 
     @Autowired
     ModelCircuitBreaker breaker;
+
+    @Autowired
+    ChatService chatService;
 
     @Autowired
     KnowledgeIngestionService ingestion;
@@ -159,6 +169,46 @@ class GuardApiTest extends FakeModelWebTest {
                 .andExpect(jsonPath("$.code").value("MODEL_CIRCUIT_OPEN"));
         assertThat(model.prompts()).as("熔断后不再调模型").hasSize(calls);
         assertThat(breaker.state()).isEqualTo(ModelCircuitBreaker.State.OPEN);
+    }
+
+    /**
+     * 审查修复：流式回答一直等不到下一段（模型挂起）——超时要计入熔断。修复前流式超时在熔断器那一层只是一次「取消」，和用户关页面分不出来，
+     * 完全不计，模型挂起时每个用户都要各等满一个超时。这里连续两次超时（门槛是 2）之后熔断器打开，第三次直接 MODEL_CIRCUIT_OPEN。
+     */
+    @Test
+    void streamIdleTimeoutsCountTowardsTheCircuit() {
+        model.willStream(Flux.never());
+
+        for (int i = 0; i < 2; i++) {
+            StepVerifier.create(chatService.answerStream("zzz", IntentResult.unknown(), null))
+                    .expectErrorSatisfies(e ->
+                            assertThat(ModelCallException.from(e).failure()).isEqualTo(ModelFailure.MODEL_TIMEOUT))
+                    .verify(Duration.ofSeconds(5));
+        }
+
+        assertThat(breaker.state()).isEqualTo(ModelCircuitBreaker.State.OPEN);
+        StepVerifier.create(chatService.answerStream("zzz", IntentResult.unknown(), null))
+                .expectErrorSatisfies(e ->
+                        assertThat(ModelCallException.from(e).failure()).isEqualTo(ModelFailure.MODEL_CIRCUIT_OPEN))
+                .verify(Duration.ofSeconds(5));
+    }
+
+    /** 用户主动取消（页面关了）不是模型的错：取消多少次熔断器都不动。 */
+    @Test
+    void cancelledStreamsDoNotCountTowardsTheCircuit() {
+        model.willStream(Flux.never());
+
+        for (int i = 0; i < 3; i++) {
+            StepVerifier.create(chatService.answerStream("zzz", IntentResult.unknown(), null))
+                    .thenAwait(Duration.ofMillis(50))
+                    .thenCancel()
+                    .verify(Duration.ofSeconds(5));
+        }
+
+        assertThat(breaker.state()).isEqualTo(ModelCircuitBreaker.State.CLOSED);
+        // 再来一次真失败也只算第 1 次（门槛 2），说明前面的取消没有被悄悄记成失败
+        breaker.onFailure();
+        assertThat(breaker.state()).isEqualTo(ModelCircuitBreaker.State.CLOSED);
     }
 
     /** 规则类问题：回答模型挂了，检索到的原文照样给用户（200，不是 503）。 */

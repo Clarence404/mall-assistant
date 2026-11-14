@@ -64,6 +64,14 @@ public interface KnowledgeStore {
      */
     List<Document> chunks();
 
+    /**
+     * 库里的内容变了（入库写完之后由 {@link KnowledgeIngestionService} 调用）：实现里缓存了 {@link #documents()} 的，在这里丢掉缓存。
+     *
+     * <p>审查修复时加的：每次检索都要用到文档汇总，pgvector 版把它缓存起来，不再每次查库（见 {@link PgVectorKnowledgeStore}）。
+     * 内存版自己盯着写入（见 {@link MemoryKnowledgeStore}），不靠这个通知，所以默认什么也不做。
+     */
+    default void invalidate() {}
+
     /** 写完之后持久化：内存版存成 JSON 文件（配置了目录时），pgvector 每次写入都已经落库，什么也不做。 */
     void persist();
 

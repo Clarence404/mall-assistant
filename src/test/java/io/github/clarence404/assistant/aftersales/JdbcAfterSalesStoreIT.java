@@ -124,6 +124,33 @@ class JdbcAfterSalesStoreIT {
                 .isEqualTo(1);
     }
 
+    /**
+     * 审查修复：同一笔订单、两张不同的确认单同时来存（各自都以为「还没有待审核的申请」）——部分唯一索引保证表里只有一张，
+     * 两边拿到的都是它。修复前（只有 confirmation_id 唯一）会存出两张。
+     */
+    @Test
+    void sameOrderGetsOnlyOneOpenApplicationEvenConcurrently() throws Exception {
+        String orderNo = "21182516707889029180785";
+        AfterSalesApplication first = application(OWNER, orderNo, Instant.now());
+        AfterSalesApplication second = application(OWNER, orderNo, Instant.now());
+
+        CompletableFuture<AfterSalesApplication> a = CompletableFuture.supplyAsync(() -> store.create(first));
+        CompletableFuture<AfterSalesApplication> b = CompletableFuture.supplyAsync(() -> store.create(second));
+
+        assertThat(a.get()).isEqualTo(b.get());
+        assertThat(raw().queryForObject(
+                                "SELECT count(*) FROM after_sales_application WHERE owner_key = ? AND order_no = ?",
+                                Integer.class,
+                                OWNER,
+                                orderNo))
+                .isEqualTo(1);
+        assertThat(raw().queryForObject(
+                                "SELECT count(*) FROM pg_indexes WHERE indexname = 'uq_after_sales_open'",
+                                Integer.class))
+                .as("部分唯一索引建上了")
+                .isEqualTo(1);
+    }
+
     /** 按用户查：只看得到自己的，从新到旧；别人的订单查不到待审核的申请。 */
     @Test
     void applicationsAreScopedToOwnerAndSorted() {

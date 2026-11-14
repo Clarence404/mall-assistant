@@ -18,6 +18,8 @@ spring:
 assistant:
   knowledge:
     embedding-model: ${spring.ai.ollama.embedding.model}   # 知识库用这个名字选前缀、给表名加后缀
+  guard:
+    short-call-timeout: 60s  # 追问改写、意图识别的短时限：命令行模型每次调用都要起一个进程（常见 3～14 秒），默认的 15 秒太紧，放宽到 60 秒
   tools:
     native-calling: false    # 命令行模型只当纯文本模型用，不支持原生工具调用；查订单 / 商品只走「按意图直接查询」
   cli:

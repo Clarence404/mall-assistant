@@ -1,8 +1,11 @@
 package io.github.clarence404.assistant.knowledge;
 
+import java.time.Duration;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.function.IntFunction;
+import java.util.function.LongSupplier;
 import java.util.regex.Pattern;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -26,11 +29,20 @@ import tools.jackson.databind.json.JsonMapper;
  * 一张别的模型建的表时，建表前会读出已有表的维度，对不上就报 INDEX_MODEL_MISMATCH。
  *
  * <p>只读写自己这一张表（和它的索引），不碰库里的其他表。
+ *
+ * <p>文档汇总的缓存（审查修复）：{@link #documents()} 每次 RAG 检索要用两次（核对向量模型、判断关键词索引要不要重建）。原来每次都把
+ * 整张表每一块的元数据拉回应用里再分组，等于每个问题多两次全表扫描。现在分组放在数据库里做（{@code GROUP BY}，一篇文档一行），
+ * 结果缓存起来，三种情况才重新查：入库写完（{@link #invalidate()}）、删表重建（{@link #reset()}）、超过
+ * {@link #DOCUMENTS_CACHE_TTL}。最后一种是给多实例兜底的：别的实例入了库，这个实例收不到通知，最多晚这么久看到（这期间关键词索引是旧的，
+ * 向量检索不受影响——它每次都查数据库）。
  */
 public class PgVectorKnowledgeStore implements KnowledgeStore {
 
     /** 表名只允许小写字母、数字、下划线，以字母或下划线开头，最长 57 个字符（加上 PgVectorStore 自动拼的 {@code _index} 不超过 63）。 */
     static final Pattern SAFE_NAME = Pattern.compile("[a-z_][a-z0-9_]{0,56}");
+
+    /** 文档汇总缓存多久：本实例入库会立刻失效，这个时长只影响「别的实例入了库，这里多久之后看到」。 */
+    static final Duration DOCUMENTS_CACHE_TTL = Duration.ofSeconds(30);
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final TypeReference<Map<String, Object>> METADATA = new TypeReference<>() {};
@@ -40,7 +52,15 @@ public class PgVectorKnowledgeStore implements KnowledgeStore {
     private final String table;
     private final KnowledgeEmbedding embedding;
     private final IntFunction<PgVectorStore> storeFactory;
+    private final long cacheTtlNanos;
+    private final LongSupplier nanoTime;
     private volatile PgVectorStore store;
+
+    /** 缓存的文档汇总；null = 没有缓存（还没查过，或者刚入过库）。整个对象一起换，读的一方不用加锁。 */
+    private volatile CachedDocuments cached;
+
+    /** 一次汇总查询的结果和它的时间（单调时钟，纳秒）。 */
+    private record CachedDocuments(List<StoredDocument> documents, long loadedAtNanos) {}
 
     /**
      * 创建。
@@ -58,6 +78,29 @@ public class PgVectorKnowledgeStore implements KnowledgeStore {
             String table,
             KnowledgeEmbedding embedding,
             IntFunction<PgVectorStore> storeFactory) {
+        this(jdbc, schema, table, embedding, storeFactory, DOCUMENTS_CACHE_TTL, System::nanoTime);
+    }
+
+    /**
+     * 创建，指定文档汇总缓存的有效期和时钟（测试用假时钟验证过期）。
+     *
+     * @param jdbc 连到知识库数据库的 JdbcTemplate
+     * @param schema schema 名
+     * @param table 表名
+     * @param embedding 当前向量模型
+     * @param storeFactory 按维度创建（并初始化）PgVectorStore 的函数
+     * @param documentsCacheTtl 文档汇总缓存多久
+     * @param nanoTime 单调时钟（纳秒）
+     * @throws IllegalArgumentException schema 或表名含有不安全的字符（它们会被拼进 SQL）
+     */
+    PgVectorKnowledgeStore(
+            JdbcTemplate jdbc,
+            String schema,
+            String table,
+            KnowledgeEmbedding embedding,
+            IntFunction<PgVectorStore> storeFactory,
+            Duration documentsCacheTtl,
+            LongSupplier nanoTime) {
         if (!SAFE_NAME.matcher(schema).matches() || !SAFE_NAME.matcher(table).matches()) {
             throw new IllegalArgumentException("pgvector 的 schema / 表名只能用小写字母、数字和下划线：" + schema + "." + table);
         }
@@ -66,6 +109,8 @@ public class PgVectorKnowledgeStore implements KnowledgeStore {
         this.table = table;
         this.embedding = embedding;
         this.storeFactory = storeFactory;
+        this.cacheTtlNanos = documentsCacheTtl.toNanos();
+        this.nanoTime = nanoTime;
     }
 
     @Override
@@ -106,28 +151,58 @@ public class PgVectorKnowledgeStore implements KnowledgeStore {
     }
 
     /**
-     * 按 source 汇总：metadata 列是 json 类型，{@code ->>} 取出字段的文字值。表还没建时返回空列表，不触发建表（也就不用探测维度）。
+     * 按 source 汇总，带缓存（见类说明）：缓存还新就直接返回，否则查一次数据库。表还没建时返回空列表，不触发建表（也就不用探测维度）。
+     *
+     * <p>两个线程同时发现缓存没了会各查一次，结果一样，后写的覆盖先写的，不值得为它加锁。
      */
     @Override
     public List<StoredDocument> documents() {
+        CachedDocuments current = cached;
+        long now = nanoTime.getAsLong();
+        if (current != null && now - current.loadedAtNanos() < cacheTtlNanos) {
+            return current.documents();
+        }
+        List<StoredDocument> loaded = loadDocuments();
+        cached = new CachedDocuments(loaded, now);
+        return loaded;
+    }
+
+    /**
+     * 真正查数据库：在库里按 source 分组，一篇文档一行（metadata 列是 json 类型，{@code ->>} 取出字段的文字值）。
+     *
+     * <p>同一篇文档的每一块，标题、版本、哈希、模型名都一样（入库时由 {@link ChunkDocumentFactory} 统一写的），取 {@code min} 只是为了
+     * 满足 {@code GROUP BY} 的语法。排序放在 Java 里做：数据库的排序规则（collation）不一定和 {@link String#compareTo} 一致，而
+     * 关键词索引的签名、增量入库的比较都按这个顺序。
+     */
+    private List<StoredDocument> loadDocuments() {
         try {
             if (!tableExists()) {
                 return List.of();
             }
-            List<Map<String, Object>> metadata = jdbc.query(
-                    "SELECT metadata->>'source' AS source, metadata->>'title' AS title,"
-                            + " metadata->>'docVersion' AS doc_version, metadata->>'docHash' AS doc_hash,"
-                            + " metadata->>'embeddingModel' AS embedding_model FROM " + location(),
-                    (rs, i) -> Map.of(
-                            ChunkMetadata.SOURCE, nullToEmpty(rs.getString("source")),
-                            ChunkMetadata.TITLE, nullToEmpty(rs.getString("title")),
-                            ChunkMetadata.DOC_VERSION, nullToEmpty(rs.getString("doc_version")),
-                            ChunkMetadata.DOC_HASH, nullToEmpty(rs.getString("doc_hash")),
-                            ChunkMetadata.EMBEDDING_MODEL, nullToEmpty(rs.getString("embedding_model"))));
-            return StoredDocument.summarize(metadata);
+            List<StoredDocument> documents = jdbc.query(
+                    "SELECT metadata->>'source' AS source, min(metadata->>'title') AS title,"
+                            + " min(metadata->>'docVersion') AS doc_version, min(metadata->>'docHash') AS doc_hash,"
+                            + " min(metadata->>'embeddingModel') AS embedding_model, count(*) AS chunk_count FROM "
+                            + location() + " GROUP BY metadata->>'source'",
+                    (rs, i) -> new StoredDocument(
+                            nullToEmpty(rs.getString("source")),
+                            nullToEmpty(rs.getString("title")),
+                            nullToEmpty(rs.getString("doc_version")),
+                            nullToEmpty(rs.getString("doc_hash")),
+                            nullToEmpty(rs.getString("embedding_model")),
+                            rs.getInt("chunk_count")));
+            return documents.stream()
+                    .sorted(Comparator.comparing(StoredDocument::source))
+                    .toList();
         } catch (DataAccessException e) {
             throw KnowledgeException.classify(e, embedding.modelName(), location());
         }
+    }
+
+    /** 入库写完后丢掉缓存的文档汇总，下一次 {@link #documents()} 重新查。 */
+    @Override
+    public void invalidate() {
+        cached = null;
     }
 
     /**
@@ -165,6 +240,7 @@ public class PgVectorKnowledgeStore implements KnowledgeStore {
         try {
             jdbc.execute("DROP TABLE IF EXISTS " + location());
             store = null;
+            cached = null;
         } catch (DataAccessException e) {
             throw KnowledgeException.classify(e, embedding.modelName(), location());
         }

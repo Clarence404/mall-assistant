@@ -24,6 +24,10 @@ import reactor.core.publisher.Flux;
  *
  * <p>它排在最外层（{@link #ORDER}）：熔断时连 Token 记账（{@code ops.UsageAdvisor}）都不经过，也不会进到工具调用循环里。一次 ChatClient 调用算一次，
  * 原生工具调用的几轮模型请求合起来算一次成功或失败。
+ *
+ * <p>流式调用这里只挂了「正常结束 → 成功」「出错 → 失败」。还有第三种结束方式——下游取消：用户关了页面，或者 {@code ChatService} 的空闲超时
+ * 到点。在这一层两者长得一样，分不出来，所以取消在这里不计；空闲超时由发起取消的 {@code ChatService#idleTimeout} 自己报给熔断器（审查修复，
+ * 之前流式超时完全不计入熔断）。
  */
 @Component
 public class CircuitBreakerAdvisor implements CallAdvisor, StreamAdvisor {

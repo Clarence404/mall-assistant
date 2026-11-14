@@ -21,6 +21,8 @@ spring:
     clients:                 # 作用于自动配置的 RestClient（阻塞调用）与 WebClient（流式调用）
       connect-timeout: 3s    # 建立连接最多等多久：模型服务没启动时快速失败（MODEL_UNAVAILABLE），不让用户干等
       read-timeout: 60s      # 阻塞调用要等整段回答生成完，给足时间；流式调用是两段之间的间隔
+      # 实测：模型服务挂起（连得上、不回话）时，阻塞调用等满这 60 秒后还会被下面的 spring.ai.retry 再试一次，一共约 120 秒才报错。
+      # 追问改写、意图识别这类只输出一句话的调用不该等这么久，另有短时限：assistant.guard.short-call-timeout
       # 注意：openai profile 走 OpenAI 官方 Java SDK，不用这里的设置，超时与重试见 application-openai.yml
   ai:
     model:                   # 用不到的模型能力关掉，免得 openai Starter 要求配置 api-key
@@ -69,8 +71,8 @@ spring:
         #       endpoint: /mcp
     retry:                   # 默认会重试 10 次、指数退避，模型挂了要等好几分钟才报错；客服场景快速失败
       # Spring AI 2.0 把这个值当作「失败后再重试几次」（交给 RetryPolicy.maxRetries），1 = 最多共调 2 次；改成 0 就完全不重试。
-      # 只对 Ollama 的阻塞调用生效（流式调用不经过它），重试连接失败（ResourceAccessException）和厂商返回的临时性错误
-      # （TransientAiException，如 HTTP 5xx）；4xx（参数错、模型不存在）默认不重试
+      # 只对 Ollama 的阻塞调用生效（流式调用不经过它），重试连接失败（ResourceAccessException，读超时也算，实测会再等一个 read-timeout）
+      # 和厂商返回的临时性错误（TransientAiException，如 HTTP 5xx）；4xx（参数错、模型不存在）默认不重试
       max-attempts: 1
       backoff:
         initial-interval: 500ms   # 第一次重试前等多久（默认 2 秒）
@@ -101,6 +103,7 @@ assistant:
     store: ${ASSISTANT_KNOWLEDGE_STORE:memory}   # 向量库：memory（默认，不装数据库也能跑）或 pgvector（PostgreSQL + pgvector 扩展）
     location: classpath:knowledge/*.md           # 知识文档在哪；也可以写 file:/某个目录/*.md
     ingest-on-startup: true  # 启动后自动增量入库一次；向量模型或向量库不可用时只打警告，不影响启动和对话
+    ingest-local-only: true  # POST /api/knowledge/ingest 只接受本机回环地址（127.0.0.1 / ::1）的调用，别的来源 403 KNOWLEDGE_INGEST_FORBIDDEN：入库会删数据、调模型，不能谁都能触发。要从别的机器入库改成 false；应用前面有同机的反向代理时这层保护不管用（请求看起来都来自本机），要在代理上拦
     # embedding-model（当前向量模型的名字）由各 profile 的 yml 从对应厂商的配置引用过来，用来选前缀、给表名 / 文件名加后缀
     dimensions: 0            # 向量维度：0 = 第一次用到时调一次模型探测（bge-m3 是 1024、nomic-embed-text 是 768），大于 0 = 按配置
     chunk:                   # 切块：先按标题分节，超长的节再按长度切
@@ -198,6 +201,7 @@ assistant:
     requests-per-minute: 20  # 每个调用方（登录用户按商城用户 ID，匿名按 IP）每分钟最多问几次，超了 429 RATE_LIMITED
     max-concurrent: 8        # 整个实例同时最多处理几轮对话：模型服务一次只能算几个（Ollama 默认并行 1～4），排队太长大家一起超时
     acquire-timeout: 2s      # 没有空位时最多等多久，等不到 503 TOO_BUSY（快速失败比慢慢超时好）
+    short-call-timeout: 15s  # 追问改写、意图识别这类短调用最多等多久，到点放弃并报 MODEL_TIMEOUT（见 ModelDeadline）；本地小模型一两秒就该回来。0 = 不设时限，只靠上面的 read-timeout
     circuit:                 # 模型熔断（见 ModelCircuitBreaker）
       enabled: true
       failure-threshold: 5   # 连续失败几次就熔断：之后直接返回 MODEL_CIRCUIT_OPEN，不再让每个用户等一个超时

@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
@@ -50,6 +51,15 @@ public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable
                 confirmation_id VARCHAR(36) NOT NULL UNIQUE,
                 created_at TIMESTAMPTZ NOT NULL
             )""", "CREATE INDEX IF NOT EXISTS idx_after_sales_owner ON after_sales_application (owner_key, created_at)");
+
+    /**
+     * 部分唯一索引（审查修复）：同一个用户的同一笔订单，状态是「待人工审核」的申请最多一张。
+     *
+     * <p>「部分」（{@code WHERE status = ...}）的意思是只有待审核的行参与唯一性：以后审核通过 / 驳回的申请状态变了，就不再占着位置，同一笔订单
+     * 可以再提一次。普通的唯一约束做不到这一点。有了它，两张确认单并发确认时由数据库保证只有一次插入成功。
+     */
+    static final String UNIQUE_OPEN_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS uq_after_sales_open"
+            + " ON after_sales_application (owner_key, order_no) WHERE status = 'PENDING_REVIEW'";
 
     private static final String COLUMNS = "id, owner_key, order_no, type, reason, status, confirmation_id, created_at";
 
@@ -95,6 +105,7 @@ public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable
                 JdbcTemplate template = new JdbcTemplate(dataSource);
                 if (initializeSchema) {
                     SCHEMA.forEach(template::execute);
+                    createUniqueOpenIndex(template);
                 }
                 jdbc = template;
                 log.info("售后申请单库已就绪：PostgreSQL 表 after_sales_application");
@@ -104,17 +115,37 @@ public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable
     }
 
     /**
+     * 建部分唯一索引。表里已经有重复的待审核申请（这个索引是后来加的，旧数据可能有）时建不成：只打一行警告、照常工作——这时「一笔订单一张」
+     * 退回到调用方先查后存的老办法，等人工把重复的清掉、重启后索引就建上了。不能因为它让整个售后申请功能起不来。
+     *
+     * @param template 连接
+     */
+    private static void createUniqueOpenIndex(JdbcTemplate template) {
+        try {
+            template.execute(UNIQUE_OPEN_INDEX);
+        } catch (DataAccessException e) {
+            log.warn(
+                    "售后申请单的唯一索引 uq_after_sales_open 没建成（表里可能已经有同一笔订单的多张待审核申请，清理后重启即可）：{}",
+                    e.getMostSpecificCause().getMessage());
+        }
+    }
+
+    /**
      * 存一张申请单（ch07-7）。
      *
-     * <p>要求：{@code INSERT ... ON CONFLICT (confirmation_id) DO NOTHING}（PostgreSQL 的「有就跳过」，并发的两次插入也只有一次生效），
-     * 然后按 confirmation_id 查回来返回（可能是之前那张）。时间存成 {@link Timestamp}。
+     * <p>要求：{@code INSERT ... ON CONFLICT DO NOTHING}（PostgreSQL 的「有就跳过」，并发的两次插入也只有一次生效），然后查回来返回
+     * （可能是之前那张）。时间存成 {@link Timestamp}。
+     *
+     * <p>审查修复：{@code ON CONFLICT} 后面不再写 {@code (confirmation_id)}——不指定哪个约束，就是「撞上任何一个唯一约束都跳过」，这样
+     * 「同一个确认 ID」和「这笔订单已有待审核的申请」（{@link #UNIQUE_OPEN_INDEX}）两种情况都不会报错。查回来时先按确认 ID 找；找不到说明
+     * 是被第二种情况挡下的，返回那张已有的待审核申请。
      */
     @Override
     public AfterSalesApplication create(AfterSalesApplication a) {
         JdbcTemplate template = jdbc();
         template.update(
                 "INSERT INTO after_sales_application (" + COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-                        + " ON CONFLICT (confirmation_id) DO NOTHING",
+                        + " ON CONFLICT DO NOTHING",
                 a.id(),
                 a.ownerKey(),
                 a.orderNo(),
@@ -123,11 +154,15 @@ public final class JdbcAfterSalesStore implements AfterSalesStore, AutoCloseable
                 a.status().name(),
                 a.confirmationId(),
                 Timestamp.from(a.createdAt()));
-        return template.query(
-                        "SELECT " + COLUMNS + " FROM after_sales_application WHERE confirmation_id = ?",
-                        JdbcAfterSalesStore::map,
-                        a.confirmationId())
-                .getFirst();
+        List<AfterSalesApplication> mine = template.query(
+                "SELECT " + COLUMNS + " FROM after_sales_application WHERE confirmation_id = ?",
+                JdbcAfterSalesStore::map,
+                a.confirmationId());
+        if (!mine.isEmpty()) {
+            return mine.getFirst();
+        }
+        return findOpen(a.ownerKey(), a.orderNo())
+                .orElseThrow(() -> new IllegalStateException("售后申请单没有存进去，也找不到挡住它的那一张：" + a.confirmationId()));
     }
 
     /**

@@ -1,9 +1,12 @@
 package io.github.clarence404.assistant.memory;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.clarence404.assistant.chat.ChatClientConfig;
 import io.github.clarence404.assistant.chat.FakeChatModel;
+import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.error.ModelFailure;
 import java.net.ConnectException;
 import java.time.Instant;
 import java.util.List;
@@ -135,14 +138,19 @@ class QuestionCondenserTest {
                 .isTrue();
     }
 
-    /** 模型挂了：不往外抛，退回原话（返回 null）。 */
+    /**
+     * 模型挂了：往外抛 ModelCallException（审查修复）。原来是悄悄退回原话，结果 ChatService 紧接着拿原话去识别意图，同一个挂掉的模型再等一轮超时；
+     * 现在由 ChatService 接住，跳过意图识别，直接降级或报错。
+     */
     @Test
-    void failureFallsBackToOriginal() {
+    void modelFailureIsThrownNotSwallowed() {
         FakeChatModel model = new FakeChatModel();
         model.willFailCondense(new ResourceAccessException("连不上", new ConnectException("Connection refused")));
 
-        assertThat(condenser(model, MemoryFixtures.properties()).condense("那运费谁出", HISTORY))
-                .isNull();
+        assertThatThrownBy(() -> condenser(model, MemoryFixtures.properties()).condense("那运费谁出", HISTORY))
+                .isInstanceOfSatisfying(
+                        ModelCallException.class,
+                        e -> assertThat(e.failure()).isEqualTo(ModelFailure.MODEL_UNAVAILABLE));
     }
 
     /** 历史只给最近几轮，长回答截短。 */

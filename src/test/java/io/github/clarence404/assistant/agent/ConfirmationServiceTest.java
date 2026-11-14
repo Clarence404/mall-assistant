@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.clarence404.assistant.aftersales.AfterSalesApplication;
+import io.github.clarence404.assistant.aftersales.AfterSalesStore;
+import io.github.clarence404.assistant.aftersales.InMemoryAfterSalesStore;
 import io.github.clarence404.assistant.chat.FakeChatModel;
 import io.github.clarence404.assistant.mall.StubMallApi;
 import io.github.clarence404.assistant.memory.MemoryFixtures;
@@ -12,6 +14,7 @@ import io.github.clarence404.assistant.memory.MemoryMessages;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.AfterAll;
@@ -241,6 +244,55 @@ class ConfirmationServiceTest {
             assertThat(a.confirmationId()).isEqualTo(pending.id());
         });
         assertThat(MALL.writes()).as("售后申请不调商城的写接口").isEmpty();
+    }
+
+    /**
+     * 审查修复：同一笔订单的两张确认单被「同时」确认——两边执行时都查到「还没有待审核的申请」，然后都去存。只能存成一张：
+     * 一张确认单的结果是已提交，另一张是「已经有待审核的申请，没有重复提交」。
+     *
+     * <p>并发的时机不好稳定复现，这里用一个 {@code findOpen} 永远说「没有」的申请单库，等价于「两边都在对方存之前查过了」；真正并发的情况由
+     * {@code InMemoryAfterSalesStoreTest}、{@code JdbcAfterSalesStoreIT} 直接压存储。修复前这里会存出两张。
+     */
+    @Test
+    void twoConfirmationsForTheSameOrderCreateOnlyOneApplication() {
+        AfterSalesStore racing = new InMemoryAfterSalesStore();
+        AfterSalesStore blindCheck = new AfterSalesStore() {
+            @Override
+            public AfterSalesApplication create(AfterSalesApplication application) {
+                return racing.create(application);
+            }
+
+            @Override
+            public List<AfterSalesApplication> findByOwner(String ownerKey) {
+                return racing.findByOwner(ownerKey);
+            }
+
+            @Override
+            public Optional<AfterSalesApplication> findOpen(String ownerKey, String orderNo) {
+                return Optional.empty(); // 查的那一刻对方还没存
+            }
+
+            @Override
+            public String type() {
+                return "racing";
+            }
+        };
+        agent = AgentFixtures.agent(model, MALL, new MemoryConfirmationStore(), blindCheck);
+        String shipped = StubMallApi.SHIPPED_ORDER_NO;
+        String[] script = {
+            act("queryOrder", "orderNo", shipped), act("applyAfterSales", "orderNo", shipped, "reason", "东西坏了")
+        };
+        PendingConfirmation first = propose(script);
+        PendingConfirmation second = propose(script);
+
+        ConfirmationOutcome one = decide(first.id(), APPROVE);
+        ConfirmationOutcome two = decide(second.id(), APPROVE);
+
+        assertThat(one.status()).isEqualTo(ConfirmationOutcome.Status.EXECUTED);
+        assertThat(two.status()).isEqualTo(ConfirmationOutcome.Status.FAILED);
+        assertThat(two.message()).contains("已经有待审核的售后申请", one.afterSalesId(), "没有重复提交");
+        assertThat(two.afterSalesId()).isNull();
+        assertThat(racing.findByOwner("user:10001")).hasSize(1);
     }
 
     /** 商城拒绝（409）：结果 FAILED，照抄商城的原因；也是最终结果，再点返回同一个。 */

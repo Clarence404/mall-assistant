@@ -171,7 +171,9 @@ public class ChatController {
                                                     .filter(part -> !(part instanceof AnswerPart.Text text
                                                             && text.text().isEmpty()))
                                                     .map(ChatController::partEvent)),
-                                    turn -> turn.conversation().close())
+                                    // 审查修复：等这一轮的后台工作（被取消的 Agent）停了再放开会话，见 TurnRecord#hold
+                                    turn -> record.whenSettled(
+                                            () -> turn.conversation().close()))
                             // 第 9 章：说完了先记账，再把这一轮的用量放进 done 事件推给页面
                             .concatWith(Mono.fromSupplier(() -> {
                                 outcome.set(ChatMetrics.OK);
@@ -179,11 +181,16 @@ public class ChatController {
                                 return event(StreamEvents.DONE, StreamEvents.Done.stop(budgeted(record)));
                             }))
                             .doOnError(e -> outcome.set(outcomeOf(e)))
-                            .doFinally(signal -> {
+                            // 收尾：归还并发名额、记账、记指标。两点审查修复——
+                            // 一、线程：这里可能是同步的 Redis 调用，不能跑在 Reactor「不许阻塞」的线程上。ChatService#answerStream 已经把
+                            //    交出来的信号统一换到了 boundedElastic 线程；begin 之前 / 之中出的错发生在订阅的线程（请求线程）上，也可以阻塞
+                            // 二、时机：Agent 被取消后那次模型调用还在跑，经 whenSettled 等它停了再还名额、记账（否则名额提前放了、
+                            //    后来的 Token 记不进账）；没有后台工作时立刻执行
+                            .doFinally(signal -> record.whenSettled(() -> {
                                 permit.close();
                                 ledger.commit(record);
                                 metrics.turn("stream", record, outcome.get());
-                            });
+                            }));
                 })
                 .onErrorResume(e -> {
                     if (e instanceof ChatRejection rejection) {

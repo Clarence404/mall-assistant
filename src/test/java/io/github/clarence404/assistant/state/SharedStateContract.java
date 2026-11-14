@@ -2,14 +2,18 @@ package io.github.clarence404.assistant.state;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.clarence404.assistant.aftersales.FlakyAfterSalesStore;
+import io.github.clarence404.assistant.agent.AgentFixtures;
 import io.github.clarence404.assistant.agent.AgentTool;
 import io.github.clarence404.assistant.agent.ConfirmationOutcome;
 import io.github.clarence404.assistant.agent.ConfirmationStore;
 import io.github.clarence404.assistant.agent.PendingAction;
 import io.github.clarence404.assistant.agent.PendingConfirmation;
 import io.github.clarence404.assistant.agent.StoredConfirmation;
+import io.github.clarence404.assistant.chat.FakeChatModel;
 import io.github.clarence404.assistant.guard.ConcurrencyLimiter;
 import io.github.clarence404.assistant.guard.RateLimiter;
+import io.github.clarence404.assistant.mall.StubMallApi;
 import io.github.clarence404.assistant.memory.ConversationLocks;
 import io.github.clarence404.assistant.memory.ConversationOwner;
 import io.github.clarence404.assistant.memory.OwnerCache;
@@ -282,6 +286,47 @@ abstract class SharedStateContract {
         store.complete(saved.id(), outcome, Duration.ofMinutes(65));
 
         assertThat(store.find(saved.id()).map(StoredConfirmation::outcome)).contains(outcome);
+    }
+
+    /**
+     * 审查修复：执行确认时下游抛了没人接的异常（这里是售后申请单库连不上）——确认单要落成 FAILED 的最终结果，而不是卡在「正在处理」。
+     *
+     * <p>修复前：抢占成功后 execute 抛异常，结果永远存不进去；再点一次就是等 {@code confirmation-wait} 然后 409 CONFIRMATION_IN_PROGRESS，
+     * 直到确认过期。两种存储（内存、Redis）走的是同一段业务代码，各跑一遍确认「结果存得进去、再点拿得回来」。
+     */
+    @Test
+    void crashedExecutionEndsAsFailedInsteadOfStuckInProgress() {
+        try (StubMallApi mall = StubMallApi.start()) {
+            ConfirmationStore store = confirmationStore();
+            FlakyAfterSalesStore afterSales = new FlakyAfterSalesStore();
+            FakeChatModel model = new FakeChatModel();
+            AgentFixtures.Agent agent = AgentFixtures.agent(model, mall, store, afterSales);
+            String shipped = StubMallApi.SHIPPED_ORDER_NO;
+            String conversation = "contract-" + run;
+            model.willAct(
+                    AgentFixtures.act("queryOrder", "orderNo", shipped),
+                    AgentFixtures.act("applyAfterSales", "orderNo", shipped, "reason", "东西坏了"));
+            PendingConfirmation pending = agent.run("帮我申请售后", StubMallApi.TOKEN, conversation, new ArrayList<>())
+                    .confirmation();
+            assertThat(pending).as("剧本应当以提出售后申请结束").isNotNull();
+
+            afterSales.breakNow();
+            ConfirmationOutcome outcome = agent.confirmations()
+                    .decide(pending.id(), ConfirmationOutcome.Decision.APPROVE, conversation, StubMallApi.TOKEN);
+
+            assertThat(outcome.status()).isEqualTo(ConfirmationOutcome.Status.FAILED);
+            assertThat(outcome.message()).contains("结果未知", "我的订单", shipped);
+            assertThat(store.find(pending.id()).map(StoredConfirmation::outcome))
+                    .as("结果存进了存储，不是只有抢占标记")
+                    .contains(outcome);
+
+            // 库恢复之后再点：拿到的还是那个最终结果，不会重新执行，也不会 409「正在处理」
+            afterSales.repair();
+            ConfirmationOutcome again = agent.confirmations()
+                    .decide(pending.id(), ConfirmationOutcome.Decision.APPROVE, conversation, StubMallApi.TOKEN);
+            assertThat(again).isEqualTo(outcome);
+            assertThat(afterSales.findByOwner(AgentFixtures.DEMO_USER.key())).isEmpty();
+        }
     }
 
     @Test

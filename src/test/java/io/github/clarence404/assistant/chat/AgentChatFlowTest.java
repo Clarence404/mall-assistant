@@ -2,6 +2,8 @@ package io.github.clarence404.assistant.chat;
 
 import static io.github.clarence404.assistant.agent.AgentFixtures.act;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 import io.github.clarence404.assistant.agent.AgentFixtures;
 import io.github.clarence404.assistant.agent.AgentProperties;
@@ -9,22 +11,32 @@ import io.github.clarence404.assistant.agent.AgentService;
 import io.github.clarence404.assistant.agent.AgentStep;
 import io.github.clarence404.assistant.agent.AgentTrace;
 import io.github.clarence404.assistant.agent.ConfirmationOutcome;
+import io.github.clarence404.assistant.intent.Intent;
+import io.github.clarence404.assistant.intent.IntentResult;
 import io.github.clarence404.assistant.knowledge.FakeEmbeddingModel;
 import io.github.clarence404.assistant.mall.StubMallApi;
+import io.github.clarence404.assistant.memory.ConversationException;
 import io.github.clarence404.assistant.memory.MemoryFixtures;
 import io.github.clarence404.assistant.memory.MemoryMessages;
+import io.github.clarence404.assistant.ops.TurnRecord;
 import io.github.clarence404.assistant.prompt.TestPrompts;
 import io.github.clarence404.assistant.rag.RagFixtures;
 import io.github.clarence404.assistant.rag.RagPlan;
 import io.github.clarence404.assistant.rag.RagService;
 import io.github.clarence404.assistant.rag.RagSource;
 import io.github.clarence404.assistant.rag.RagTrace;
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import reactor.core.Disposable;
 import reactor.test.StepVerifier;
 
 /**
@@ -47,6 +59,8 @@ class AgentChatFlowTest {
             "{\"intent\":\"ORDER_STATUS\",\"confidence\":0.9,\"orderNo\":\"" + PENDING + "\",\"skuId\":null}";
     private static final String CHITCHAT =
             "{\"intent\":\"CHITCHAT\",\"confidence\":0.9,\"orderNo\":null,\"skuId\":null}";
+    private static final String OUT_OF_SCOPE =
+            "{\"intent\":\"OUT_OF_SCOPE\",\"confidence\":0.9,\"orderNo\":null,\"skuId\":null}";
 
     private static final String[] CANCEL_SCRIPT = {
         act("queryOrder", "orderNo", PENDING), act("cancelOrder", "orderNo", PENDING)
@@ -152,6 +166,108 @@ class AgentChatFlowTest {
 
         ChatReply other = chat().chat("好的", MemoryFixtures.OTHER_CONVERSATION, TOKEN);
         assertThat(other.reply()).isNotEqualTo(AgentService.CHAT_CONFIRMATION_REPLY);
+    }
+
+    /**
+     * 审查修复：阻塞和流式共用一份路由判断。有待确认操作时在聊天里回「确认」，哪怕意图识别把它分成了超出范围（把握 0.9），两个接口回的都是
+     * 「请点确认按钮」。修复前阻塞接口先判拒答，这种情况回的是拒答话术，和流式不一致。
+     */
+    @Test
+    void confirmInChatBeatsRefusalOnBothEndpoints() {
+        model.willClassify(AFTER_SALES);
+        model.willAct(CANCEL_SCRIPT);
+        chat().chat("订单 " + PENDING + " 帮我取消", ID, TOKEN);
+
+        model.willClassify(OUT_OF_SCOPE);
+        ChatReply blocking = chat().chat("确认", ID, TOKEN);
+        ChatTurn turn = chat().begin("确认", ID, TOKEN);
+        List<AnswerPart> parts = chat().answerStream(turn).collectList().block(Duration.ofSeconds(5));
+
+        assertThat(blocking.reply()).isEqualTo(AgentService.CHAT_CONFIRMATION_REPLY);
+        assertThat(parts)
+                .filteredOn(p -> p instanceof AnswerPart.Text)
+                .extracting(p -> ((AnswerPart.Text) p).text())
+                .containsExactly(AgentService.CHAT_CONFIRMATION_REPLY);
+        assertThat(MALL.writes()).isEmpty();
+    }
+
+    /** 路由顺序本身（阻塞、流式共用）：没有待确认操作、不办事时，超出范围 → 拒答，规则类 → RAG，其余 → 工具。 */
+    @Test
+    void routeOrderIsSharedByBothEndpoints() {
+        ChatService service = chat();
+
+        assertThat(service.route("帮我写一段冒泡排序", new IntentResult(Intent.OUT_OF_SCOPE, 0.9, null, null), TOKEN, ID))
+                .isInstanceOf(ChatRoute.Refuse.class);
+        assertThat(service.route("七天无理由退货要什么条件", new IntentResult(Intent.POLICY, 0.9, null, null), TOKEN, ID))
+                .isEqualTo(new ChatRoute.Rag(null));
+        assertThat(service.route("帮我退款", new IntentResult(Intent.AFTER_SALES, 0.9, null, null), null, ID))
+                .as("没登录想办事：走 RAG，后面接一句登录提示")
+                .isEqualTo(new ChatRoute.Rag(AgentService.LOGIN_HINT));
+        assertThat(service.route("帮我退款", new IntentResult(Intent.AFTER_SALES, 0.9, null, null), TOKEN, ID))
+                .isInstanceOf(ChatRoute.Agent.class);
+        assertThat(service.route("你好", IntentResult.unknown(), TOKEN, ID)).isInstanceOf(ChatRoute.Tools.class);
+    }
+
+    /**
+     * 审查修复：流式办事时页面关了（取消订阅），Agent 线程还在等当前这次模型调用（这次调用不响应线程打断的情况）——这期间会话的「正在回答」标记不能放，
+     * 等那次调用返回、线程真正退出才放；回来之后也不再生成确认单。
+     *
+     * <p>修复前：取消的一瞬间会话就放开了（同一个会话可以再发一句，两轮同时在跑），而后台那次调用返回后照样提出取消、留下一张确认单。
+     */
+    @Test
+    void cancelledAgentStreamHoldsTheConversationUntilTheAgentThreadExits() throws Exception {
+        CountDownLatch thinking = new CountDownLatch(1);
+        CountDownLatch answer = new CountDownLatch(1);
+        // 假模型：Agent 的那一步卡住不回，直到测试放行。取消订阅时 Reactor 会打断（interrupt）跑 Agent 的线程，实测 Ollama 的阻塞 HTTP 调用
+        // 被打断后会立刻中止；这里模拟的是「不理会打断」的那种调用（不是每种客户端都响应打断），所以被打断了也接着等
+        model = new FakeChatModel() {
+            @Override
+            public ChatResponse call(Prompt prompt) {
+                if (isAgentStep(prompt)) {
+                    thinking.countDown();
+                    boolean interrupted = false;
+                    while (true) {
+                        try {
+                            answer.await(10, TimeUnit.SECONDS);
+                            break;
+                        } catch (InterruptedException e) {
+                            interrupted = true;
+                        }
+                    }
+                    if (interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                return super.call(prompt);
+            }
+        };
+        agent = AgentFixtures.agent(model, MALL);
+        model.willClassify(AFTER_SALES);
+        model.willAct(act("cancelOrder", "orderNo", PENDING));
+        TurnRecord record = new TurnRecord(AgentFixtures.DEMO_USER.key(), ID);
+        AtomicBoolean settled = new AtomicBoolean();
+        ChatTurn turn = chat().begin("订单 " + PENDING + " 帮我取消", ID, TOKEN, record);
+
+        Disposable page = chat().answerStream(turn).subscribe();
+        assertThat(thinking.await(5, TimeUnit.SECONDS)).as("Agent 已经在等模型").isTrue();
+        page.dispose(); // 页面关了
+        record.whenSettled(() -> settled.set(true)); // Controller 里还名额、记账也是这样登记的
+
+        // Agent 线程还没退出：会话还占着，再发一句是「正忙」；收尾还没执行
+        assertThatThrownBy(() -> chat().begin("在吗", ID, TOKEN))
+                .isInstanceOfSatisfying(
+                        ConversationException.class,
+                        e -> assertThat(e.failure()).isEqualTo(ConversationException.Failure.CONVERSATION_BUSY));
+        assertThat(settled).isFalse();
+
+        answer.countDown(); // 模型终于回了
+        await().atMost(Duration.ofSeconds(5)).untilTrue(settled);
+
+        // 线程退出后会话放开了；回来的那一步（提出取消）没有被执行成一张确认单
+        chat().begin("在吗", ID, TOKEN).conversation().close();
+        assertThat(agent.confirmations().pendingFor(AgentFixtures.DEMO_USER, ID))
+                .isEmpty();
+        assertThat(MALL.writes()).isEmpty();
     }
 
     /** 点确认之后，结果在记忆里：下一轮 Agent 的提示词历史里有「（点了确认）…」和执行结果。 */

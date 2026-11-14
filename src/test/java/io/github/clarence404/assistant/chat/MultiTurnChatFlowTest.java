@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.error.ModelFailure;
 import io.github.clarence404.assistant.mall.StubMallApi;
 import io.github.clarence404.assistant.memory.ConversationOwner;
 import io.github.clarence404.assistant.memory.MemoryFixtures;
@@ -180,19 +181,47 @@ class MultiTurnChatFlowTest {
                 .contains("那运费谁出");
     }
 
-    /** 第一句不改写（没有历史）；改写失败时用原话检索，照样回答。 */
+    /** 第一句不改写（没有历史）；改写得不可信（这里是结果太长，模型直接开始回答了）时用原话检索，照样回答。 */
     @Test
-    void condenseOnlyWithHistoryAndFallsBackOnFailure() {
+    void condenseOnlyWithHistoryAndFallsBackWhenImplausible() {
         model.willClassify(POLICY);
         model.willReply("签收后 7 天内[1]。");
         ChatReply first = service().chat("七天无理由退货要什么条件", ID, null);
         assertThat(model.condensePrompts()).isEmpty();
         assertThat(first.memory().condensedQuestion()).isNull();
 
-        model.willFailCondense(new ResourceAccessException("连不上", new ConnectException("Connection refused")));
+        model.willCondense("非质量问题的退货运费由买家承担，质量问题由商城承担。".repeat(10));
         ChatReply second = service().chat("退货运费谁出", ID, null);
         assertThat(second.memory().condensedQuestion()).isNull();
         assertThat(second.rag().query()).isEqualTo("退货运费谁出");
+    }
+
+    /**
+     * 审查修复：改写这一步模型就调不通了——不再拿原话去调意图识别（同一个挂掉的模型再等一轮超时，一轮白等两次），这一轮直接失败；
+     * 会话要放开（下一句还能问），半截的一轮不进记忆。
+     */
+    @Test
+    void modelDownDuringCondenseSkipsIntentAndFailsFast() {
+        model.willClassify(POLICY);
+        model.willReply("签收后 7 天内[1]。");
+        service().chat("七天无理由退货要什么条件", ID, null);
+        int classifications = model.classificationPrompts().size();
+        int stored = stored(ConversationOwner.ANONYMOUS).size();
+
+        model.willFailCondense(new ResourceAccessException("连不上", new ConnectException("Connection refused")));
+
+        assertThatThrownBy(() -> service().chat("退货运费谁出", ID, null))
+                .isInstanceOfSatisfying(
+                        ModelCallException.class,
+                        e -> assertThat(e.failure()).isEqualTo(ModelFailure.MODEL_UNAVAILABLE));
+        assertThat(model.classificationPrompts()).as("改写失败后没有再去调意图识别").hasSize(classifications);
+        assertThat(stored(ConversationOwner.ANONYMOUS)).as("失败的一轮不进记忆").hasSize(stored);
+
+        // 会话没有被卡住：模型恢复后同一个会话照常回答
+        model.willFailCondense(null);
+        model.willCondense("七天无理由退货的运费谁出");
+        model.willReply("买家承担[1]。");
+        assertThat(service().chat("那运费谁出", ID, null).reply()).contains("买家承担");
     }
 
     /** 订单号沿用：第二句「它什么时候下的单」没带订单号，从上一句沿用，照样直接查这一笔（而不是列出最近的订单）。 */

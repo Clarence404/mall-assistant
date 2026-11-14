@@ -5,6 +5,7 @@ import io.github.clarence404.assistant.agent.AgentResult;
 import io.github.clarence404.assistant.agent.AgentService;
 import io.github.clarence404.assistant.error.ModelCallException;
 import io.github.clarence404.assistant.guard.GuardProperties;
+import io.github.clarence404.assistant.guard.ModelCircuitBreaker;
 import io.github.clarence404.assistant.intent.Intent;
 import io.github.clarence404.assistant.intent.IntentResult;
 import io.github.clarence404.assistant.intent.IntentService;
@@ -29,6 +30,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,7 +51,7 @@ import tools.jackson.databind.json.JsonMapper;
  * 调用失败统一转成 {@link ModelCallException}。
  *
  * <p>所在层：业务层（第 1 章引入 {@link #reply} / {@link #stream}，第 2 章加上意图识别与拒答，第 3 章加上工具调用，第 5 章加上 RAG，
- * 第 6 章加上多轮对话与记忆，第 7 章加上售后 Agent，第 9 章加上 Token 记账与降级）。上游是 {@link ChatController}；下游是 {@link IntentService}（识别意图）、{@link AssistantPrompts}（系统提示词与拒答话术）、
+ * 第 6 章加上多轮对话与记忆，第 7 章加上售后 Agent，第 9 章加上 Token 记账与降级；第 10 章之后的一轮审查修复见各方法里的「审查修复」）。上游是 {@link ChatController}；下游是 {@link IntentService}（识别意图）、{@link AssistantPrompts}（系统提示词与拒答话术）、
  * {@link MallTools}（查订单、查商品）、{@link RagService}（检索知识库、拼带资料的提示词）、{@link ConversationMemory}（会话历史）、
  * {@link QuestionCondenser}（追问改写）、{@link AgentService}（第 7 章：办售后的事）和 {@link ChatClient}（真正调模型）。
  *
@@ -141,6 +143,9 @@ public class ChatService {
     private final ExternalMcpTools externalTools;
     private final GuardProperties.Degrade degrade;
 
+    /** 模型熔断器（审查修复）：流式回答的空闲超时要报给它，见 {@link #idleTimeout}；手工组装的旧构造器里是 null。 */
+    private final ModelCircuitBreaker breaker;
+
     /**
      * 创建对话服务（Spring 注入）。
      *
@@ -156,6 +161,7 @@ public class ChatService {
      * @param agent 售后 Agent（第 7 章）
      * @param externalTools 外部 MCP 服务的工具（第 8 章，默认没有）：和 {@link MallTools} 的一起注册给模型
      * @param guard 第 9 章：{@code assistant.guard.*}，这里只用降级的配置
+     * @param breaker 模型熔断器（审查修复）：流式回答空闲超时的时候报一次失败
      */
     @Autowired
     public ChatService(
@@ -170,8 +176,10 @@ public class ChatService {
             QuestionCondenser condenser,
             AgentService agent,
             ExternalMcpTools externalTools,
-            GuardProperties guard) {
+            GuardProperties guard,
+            ModelCircuitBreaker breaker) {
         this.chatClient = chatClient;
+        this.breaker = breaker;
         this.degrade = guard == null ? null : guard.degrade();
         this.externalTools = externalTools;
         this.properties = properties;
@@ -183,6 +191,51 @@ public class ChatService {
         this.memory = memory;
         this.condenser = condenser;
         this.agent = agent;
+    }
+
+    /**
+     * 带降级、不接熔断器的对话服务（第 9 章的写法，测试手工 new 它）：流式超时不计入熔断。
+     *
+     * @param chatClient 共享的 ChatClient
+     * @param properties {@code assistant.chat.*}
+     * @param prompts 系统提示词与拒答话术
+     * @param intentService 意图识别
+     * @param mallTools 查订单、查商品的工具
+     * @param toolProperties {@code assistant.tools.*}
+     * @param ragService 检索增强回答
+     * @param memory 会话记忆
+     * @param condenser 追问改写
+     * @param agent 售后 Agent
+     * @param externalTools 外部 MCP 服务的工具
+     * @param guard {@code assistant.guard.*}，这里只用降级的配置；null = 不降级
+     */
+    public ChatService(
+            ChatClient chatClient,
+            ChatProperties properties,
+            AssistantPrompts prompts,
+            IntentService intentService,
+            MallTools mallTools,
+            ToolProperties toolProperties,
+            RagService ragService,
+            ConversationMemory memory,
+            QuestionCondenser condenser,
+            AgentService agent,
+            ExternalMcpTools externalTools,
+            GuardProperties guard) {
+        this(
+                chatClient,
+                properties,
+                prompts,
+                intentService,
+                mallTools,
+                toolProperties,
+                ragService,
+                memory,
+                condenser,
+                agent,
+                externalTools,
+                guard,
+                null);
     }
 
     /**
@@ -224,7 +277,7 @@ public class ChatService {
                 condenser,
                 agent,
                 externalTools,
-                null);
+                (GuardProperties) null);
     }
 
     /**
@@ -374,9 +427,8 @@ public class ChatService {
             ChatTurn turn = begin(message, conversationId, mallToken, record);
             try (Conversation conversation = turn.conversation()) {
                 IntentResult intent = turn.intent();
-                ChatReply reply = shouldRefuse(intent)
-                        ? new ChatReply(prompts.refusal(), intent, List.of())
-                        : answer(message, intent, mallToken, conversation, record);
+                // 审查修复：拒答也归路由决策管（原来在这里先判，和流式的顺序不一样），见 ChatRoute
+                ChatReply reply = answer(message, intent, mallToken, conversation, record);
                 conversation.save(message, reply.reply());
                 return reply.withMemory(conversation.trace()).withUsage(record.usage());
             }
@@ -414,8 +466,14 @@ public class ChatService {
         try (TurnRecord.Binding bound = record.bind()) {
             Conversation conversation = memory == null ? Conversation.none() : memory.open(conversationId, mallToken);
             try {
-                String question = condense(message, conversation);
-                IntentResult intent = conversation.carryOver(classify(question), message);
+                IntentResult recognized;
+                try {
+                    recognized = classify(condense(message, conversation));
+                } catch (CondenseFailed e) {
+                    // 审查修复：改写这一步模型就调不通了，不再拿原话去识别意图（同一个挂掉的模型再等一轮超时），直接走降级或报错
+                    recognized = whenModelDown(message, e.failure());
+                }
+                IntentResult intent = conversation.carryOver(recognized, message);
                 record.intent(intent.intent().name());
                 return new ChatTurn(message, intent, mallToken, conversation, record);
             } catch (RuntimeException e) {
@@ -440,15 +498,43 @@ public class ChatService {
         try {
             return intentService.classify(question);
         } catch (ModelCallException e) {
-            IntentResult policy = new IntentResult(Intent.POLICY, 0.0, null, null);
-            if (degrade == null || !degrade.enabled() || !ragService.handles(policy)) {
-                throw e;
-            }
-            if (ragService.plan(question).shortCircuited()) {
-                throw e;
-            }
-            log.warn("意图识别时模型不可用（{}），但知识库里检索到了相关规定：按规则类问题处理，回答时降级给原文", e.failure());
-            return policy;
+            return whenModelDown(question, e);
+        }
+    }
+
+    /**
+     * 这一轮开头（追问改写或意图识别）模型就调不通时怎么办：开了降级、而且知识库里检索得到相关规定，就按规则类问题处理（把握记为 0）；
+     * 否则把异常照旧抛出（503）。
+     *
+     * @param question 拿去检索的问题（改写失败时是用户原话）
+     * @param e 模型调用失败
+     * @return 把握为 0 的 POLICY 意图
+     * @throws ModelCallException 没开降级或检索不到
+     */
+    private IntentResult whenModelDown(String question, ModelCallException e) {
+        IntentResult policy = new IntentResult(Intent.POLICY, 0.0, null, null);
+        if (degrade == null || !degrade.enabled() || !ragService.handles(policy)) {
+            throw e;
+        }
+        if (ragService.plan(question).shortCircuited()) {
+            throw e;
+        }
+        log.warn("这一轮开头模型就不可用（{}），但知识库里检索到了相关规定：按规则类问题处理，回答时降级给原文", e.failure());
+        return policy;
+    }
+
+    /** 追问改写时模型调不通（内部用）：和意图识别自己的 {@link ModelCallException} 区分开，{@link #begin} 才知道该不该跳过意图识别。 */
+    private static final class CondenseFailed extends RuntimeException {
+
+        private final transient ModelCallException failure;
+
+        CondenseFailed(ModelCallException failure) {
+            super(failure);
+            this.failure = failure;
+        }
+
+        ModelCallException failure() {
+            return failure;
         }
     }
 
@@ -484,26 +570,59 @@ public class ChatService {
         return answer(message, intent, mallToken, conversation, current != null ? current : TurnRecord.detached());
     }
 
-    /** 意图已知时的阻塞回答，带上这一轮的账本（第 9 章）。 */
-    private ChatReply answer(
-            String message, IntentResult intent, String mallToken, Conversation conversation, TurnRecord record) {
+    /**
+     * 这一轮走哪条路（审查修复：阻塞、流式共用这一份判断，顺序见 {@link ChatRoute}）。
+     *
+     * <p>只做判断，不调模型、不写任何东西；唯一的外部调用是「这个会话有没有待确认操作」（{@link AgentService#chatConfirmationReply}，
+     * 只在登录了而且这句话像「确认」时才查）。
+     *
+     * @param message 用户原话
+     * @param intent 已识别的意图
+     * @param mallToken 商城令牌，可以为 null
+     * @param conversationId 会话 ID，可以为 null
+     * @return 路由
+     */
+    ChatRoute route(String message, IntentResult intent, String mallToken, String conversationId) {
         if (agent != null) {
-            String guard = agent.chatConfirmationReply(message, mallToken, conversation.conversationId());
-            if (guard != null) {
-                return new ChatReply(guard, intent, List.of());
+            String reminder = agent.chatConfirmationReply(message, mallToken, conversationId);
+            if (reminder != null) {
+                return new ChatRoute.ConfirmInChat(reminder);
             }
             if (agent.handles(intent, message, mallToken)) {
+                return new ChatRoute.Agent();
+            }
+        }
+        if (shouldRefuse(intent)) {
+            return new ChatRoute.Refuse();
+        }
+        if (ragService.handles(intent)) {
+            return new ChatRoute.Rag(agent == null ? null : agent.loginHint(intent, message, mallToken));
+        }
+        return new ChatRoute.Tools();
+    }
+
+    /** 意图已知时的阻塞回答，带上这一轮的账本（第 9 章）；按 {@link #route} 的结果分路。 */
+    private ChatReply answer(
+            String message, IntentResult intent, String mallToken, Conversation conversation, TurnRecord record) {
+        return switch (route(message, intent, mallToken, conversation.conversationId())) {
+            case ChatRoute.ConfirmInChat confirm -> new ChatReply(confirm.reply(), intent, List.of());
+            case ChatRoute.Agent ignored -> {
                 ChatReply reply = agentAnswer(message, intent, mallToken, conversation);
                 record.agent(
                         reply.agent().steps().size(), reply.agent().stopReason().name());
-                return reply;
+                yield reply;
             }
-        }
-        if (ragService.handles(intent)) {
-            ChatReply reply = ragAnswer(message, intent, conversation, record);
-            String hint = agent == null ? null : agent.loginHint(intent, message, mallToken);
-            return hint == null ? reply : reply.withReply(reply.reply() + "\n\n" + hint);
-        }
+            case ChatRoute.Refuse ignored -> new ChatReply(prompts.refusal(), intent, List.of());
+            case ChatRoute.Rag rag -> {
+                ChatReply reply = ragAnswer(message, intent, conversation, record);
+                yield rag.loginHint() == null ? reply : reply.withReply(reply.reply() + "\n\n" + rag.loginHint());
+            }
+            case ChatRoute.Tools ignored -> toolAnswer(message, intent, mallToken, conversation);
+        };
+    }
+
+    /** 第 3 章的阻塞回答：直接查询或交给模型调工具，再用 {@link ToolResultGuard} 做一道事后检查。 */
+    private ChatReply toolAnswer(String message, IntentResult intent, String mallToken, Conversation conversation) {
         ToolCallRecorder recorder = new ToolCallRecorder();
         try {
             String content = answerRequest(message, intent, mallToken, recorder, conversation.history())
@@ -544,31 +663,30 @@ public class ChatService {
      * {@code Schedulers.boundedElastic()} 上执行（流式回答的最后一个信号可能来自网络 IO 线程，不能在那里阻塞）。不管怎么结束，
      * {@code doFinally} 都关掉会话（放开「正在回答」的标记）。
      *
+     * <p>审查修复的三处：分路改用 {@link #route}（和阻塞接口同一份判断）；交给下游之前统一换到 {@code boundedElastic} 线程（收尾里有阻塞的
+     * Redis 调用）；关会话经过 {@link TurnRecord#whenSettled}（Agent 被取消后要等它真正停下）。
+     *
      * @param turn 这一轮（{@link #begin} 的结果）
      * @return 记忆情况、文字片段、工具调用记录（或 RAG 引用来源）的序列；拒答时只有一段文字。出错时序列以 {@link ModelCallException} 结束
      */
     public Flux<AnswerPart> answerStream(ChatTurn turn) {
         Conversation conversation = turn.conversation();
         TurnRecord record = turn.record();
-        Flux<AnswerPart> parts;
-        String guard = agent == null
-                ? null
-                : agent.chatConfirmationReply(turn.message(), turn.mallToken(), conversation.conversationId());
-        if (guard != null) {
-            parts = Flux.concat(memoryPart(conversation), Flux.just(new AnswerPart.Text(guard)));
-        } else if (agent != null && agent.handles(turn.intent(), turn.message(), turn.mallToken())) {
-            parts = Flux.concat(memoryPart(conversation), agentStream(turn, conversation));
-        } else if (shouldRefuse(turn.intent())) {
-            parts = Flux.concat(memoryPart(conversation), Flux.just(new AnswerPart.Text(prompts.refusal())));
-        } else if (ragService.handles(turn.intent())) {
-            String hint = agent == null ? null : agent.loginHint(turn.intent(), turn.message(), turn.mallToken());
-            parts = hint == null
-                    ? ragStream(turn.message(), conversation, record)
-                    : ragStream(turn.message(), conversation, record)
-                            .concatWith(Flux.just(new AnswerPart.Text("\n\n" + hint)));
-        } else {
-            parts = Flux.concat(memoryPart(conversation), toolStream(turn, conversation));
-        }
+        // 审查修复：和阻塞接口共用同一份路由判断（原来这里的 if / else 和阻塞那边顺序不一样）
+        Flux<AnswerPart> parts = switch (route(
+                turn.message(), turn.intent(), turn.mallToken(), conversation.conversationId())) {
+            case ChatRoute.ConfirmInChat confirm ->
+                Flux.concat(memoryPart(conversation), Flux.just(new AnswerPart.Text(confirm.reply())));
+            case ChatRoute.Agent ignored -> Flux.concat(memoryPart(conversation), agentStream(turn, conversation));
+            case ChatRoute.Refuse ignored ->
+                Flux.concat(memoryPart(conversation), Flux.just(new AnswerPart.Text(prompts.refusal())));
+            case ChatRoute.Rag rag ->
+                rag.loginHint() == null
+                        ? ragStream(turn.message(), conversation, record)
+                        : ragStream(turn.message(), conversation, record)
+                                .concatWith(Flux.just(new AnswerPart.Text("\n\n" + rag.loginHint())));
+            case ChatRoute.Tools ignored -> Flux.concat(memoryPart(conversation), toolStream(turn, conversation));
+        };
         StringBuilder reply = new StringBuilder();
         return parts.doOnNext(part -> {
                     if (part instanceof AnswerPart.Text text) {
@@ -582,7 +700,12 @@ public class ChatService {
                             }
                         })
                         .subscribeOn(Schedulers.boundedElastic()))
-                .doFinally(signal -> conversation.close());
+                // 审查修复：往下游的每个信号都换到 boundedElastic 的线程上再交出去。实测空闲超时（timeout）的错误信号是在 Reactor 的
+                // parallel 线程上发出的——那是「不许阻塞」的线程，而后面的收尾（这里的关会话、Controller 里的还名额和记账）在 Redis 模式下
+                // 都是同步的 Redis 调用。在这里统一换一次线程，后面所有收尾都在可以阻塞的线程上，不用每处各自操心
+                .publishOn(Schedulers.boundedElastic())
+                // 审查修复：whenSettled——这一轮还有后台工作没停（Agent 被取消后那次模型调用还在跑）就等它停了再放开会话，见 TurnRecord#hold
+                .doFinally(signal -> record.whenSettled(conversation::close));
     }
 
     /**
@@ -621,14 +744,22 @@ public class ChatService {
      *   <li>不加第 1 章的空闲超时 {@code streamTimeout}：Agent 两步之间可能就要十几秒（一次模型调用），总时长由 {@code assistant.agent.timeout} 管
      * </ul>
      *
+     * <p>审查修复：页面关掉后 Agent 不会立刻停（要等当前这次模型调用返回，{@code AgentLoop} 在它返回后再查一次「页面关了没有」，关了就不再
+     * 执行工具、不再生成确认单）。这期间用 {@link TurnRecord#hold} 占着，会话、并发名额、记账等这个线程真正退出才放。
+     *
      * @param turn 这一轮
      * @param conversation 会话句柄
      * @return Agent 的步骤、待确认操作与回答
      */
     Flux<AnswerPart> agentStream(ChatTurn turn, Conversation conversation) {
         return Flux.<AnswerPart>create(sink -> {
+                    // 审查修复：告诉这一轮「有后台工作在跑」。页面关掉（取消订阅）时这个线程不会立刻停——正在等的那次模型调用要等它返回。
+                    // 占着的这段时间里，会话的「正在回答」标记、并发名额、记账都先不放（见 TurnRecord#hold），这个线程退出时（finally）才放：
+                    // 否则名额和锁提前放了，实际上模型还在为这一轮干活，后来的 Token 也记不进已经提交的账里
+                    TurnRecord.Hold running = turn.record().hold();
                     // 第 9 章：这里已经在 boundedElastic 线程上了，Agent 每一步的模型调用要找得到这一轮的账本，先绑定
-                    try (TurnRecord.Binding bound = turn.record().bind()) {
+                    try (running;
+                            TurnRecord.Binding bound = turn.record().bind()) {
                         AgentResult result = agent.run(
                                 turn.message(),
                                 conversation.history(),
@@ -665,7 +796,7 @@ public class ChatService {
                             .advisors(UsageAdvisor.stage("answer", turn.record()))
                             .stream()
                             .content()
-                            .timeout(properties.streamTimeout())
+                            .transform(this::idleTimeout)
                             .concatMap(text -> Flux.concat(newToolUses(recorder), Flux.just(new AnswerPart.Text(text))))
                             .concatWith(Flux.defer(() -> newToolUses(recorder)));
                 })
@@ -858,7 +989,7 @@ public class ChatService {
                             .advisors(UsageAdvisor.stage("rag", record))
                             .stream()
                             .content()
-                            .timeout(properties.streamTimeout())
+                            .transform(this::idleTimeout)
                             .doOnNext(t -> spoke.set(true))
                             .<AnswerPart>map(AnswerPart.Text::new)
                             .onErrorResume(e -> {
@@ -877,8 +1008,10 @@ public class ChatService {
     }
 
     /**
-     * 这一轮的独立问题（第 6 章）：没有历史就是原话；有历史时交给 {@link QuestionCondenser} 改写，改写失败或不可信也退回原话。改写结果记进会话
+     * 这一轮的独立问题（第 6 章）：没有历史就是原话；有历史时交给 {@link QuestionCondenser} 改写，改写得不可信就退回原话。改写结果记进会话
      * （调试信息里显示，RAG 路径用 {@link Conversation#question} 取回）。
+     *
+     * <p>审查修复：改写时模型调不通不再退回原话，而是抛 {@code CondenseFailed}，由 {@link #begin} 跳过意图识别、直接走降级或报错。
      *
      * @param message 用户原话
      * @param conversation 会话句柄
@@ -888,7 +1021,12 @@ public class ChatService {
         if (condenser == null || conversation.window().messages().isEmpty()) {
             return message;
         }
-        String condensed = condenser.condense(message, conversation.window().messages());
+        String condensed;
+        try {
+            condensed = condenser.condense(message, conversation.window().messages());
+        } catch (ModelCallException e) {
+            throw new CondenseFailed(e);
+        }
         conversation.condensed(condensed);
         return condensed != null ? condensed : message;
     }
@@ -1013,6 +1151,9 @@ public class ChatService {
     /**
      * 阻塞调用（第 1 章）：只带系统提示词和用户原话，不识别意图、不用工具。超时由 HTTP 客户端的 read-timeout 控制（见 application.yml）。
      *
+     * <p>第 2 章起对话接口改走 {@link #chat}，主代码里已经没有地方调它了；留着是因为第 1 章的讲义（docs/ch01.md）和 {@code ChatServiceTest}
+     * 还在用它讲「最简单的一次模型调用」。{@link #stream(String)} 同理。
+     *
      * <p>{@code chatClient.prompt()...call()} 这一串就是在拼一个 Prompt（系统消息 + 用户消息）发给 ChatModel；
      * {@code .system(prompts::applySystem)} 每次请求都重新渲染系统提示词模板（「今天」等变量才是最新的）；
      * {@code .content()} 取回答的纯文本。
@@ -1052,7 +1193,30 @@ public class ChatService {
     public Flux<String> stream(String message) {
         return chatClient.prompt().system(prompts::applySystem).user(message).stream()
                 .content()
-                .timeout(properties.streamTimeout())
+                .transform(this::idleTimeout)
                 .onErrorMap(ModelCallException::from);
+    }
+
+    /**
+     * 流式回答的空闲超时（第 1 章的 {@code timeout(streamTimeout)}），外加一件事：超时了给熔断器报一次失败（审查修复）。
+     *
+     * <p>为什么要在这里报：熔断器是通过 {@code CircuitBreakerAdvisor} 挂在模型调用上的，流式那一路它只看得到「正常结束」和「出错」两种信号。
+     * 而 Reactor 的 {@code timeout} 到点时，是<b>取消</b>上游、自己往下游发一个 {@link TimeoutException}——在 advisor 那一层看到的只是一次取消，
+     * 和用户关掉页面没有区别，所以原来「模型挂起、流式一直超时」不计入熔断，每个用户都要各等满 30 秒。取消的原因只有发起取消的这一层知道，
+     * 于是由它来报：超时算模型失败；用户主动取消（页面关了）不经过这里的 {@code doOnError}，不算。
+     *
+     * <p>{@code doOnError} 紧跟在 {@code timeout} 后面，只认 {@link TimeoutException}：模型自己报的错（连不上、5xx）已经由 advisor 记过一次，
+     * 不能再记第二次。
+     *
+     * @param stream 模型的文字片段
+     * @param <T> 片段类型
+     * @return 加了空闲超时的序列
+     */
+    private <T> Flux<T> idleTimeout(Flux<T> stream) {
+        return stream.timeout(properties.streamTimeout()).doOnError(TimeoutException.class, e -> {
+            if (breaker != null) {
+                breaker.onFailure();
+            }
+        });
     }
 }

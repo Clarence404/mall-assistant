@@ -1,5 +1,7 @@
 package io.github.clarence404.assistant.memory;
 
+import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.guard.ModelDeadline;
 import io.github.clarence404.assistant.ops.UsageAdvisor;
 import io.github.clarence404.assistant.rag.Terms;
 import java.util.ArrayList;
@@ -16,6 +18,7 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
@@ -42,7 +45,16 @@ import org.springframework.stereotype.Component;
  * </ul>
  *
  * <p>代价：每个追问多一次模型调用（本地 1.5b 约 0.5～2 秒，命令行模型 3～7 秒），所以有开关 {@code assistant.memory.condense.enabled}；温度 0，
- * 同样的历史得到同样的改写。改写失败（模型挂了、超时、输出明显不对）不影响回答，退回原话。
+ * 同样的历史得到同样的改写。输出明显不对（太长、跑题、没改）不影响回答，退回原话。
+ *
+ * <p>审查修复——模型调不通和「改写得不好」分开处理：
+ *
+ * <ul>
+ *   <li>模型<b>调不通</b>（连不上、超时、熔断中）：不再悄悄退回原话，而是抛 {@link ModelCallException}。原来退回原话之后，{@code ChatService}
+ *       紧接着拿原话去识别意图——同一个挂掉的模型再等一轮超时，一轮对话白等两次。现在由 {@code ChatService#begin} 接住，直接走降级或报错
+ *   <li>这一次调用套上 {@link ModelDeadline} 的短时限（{@code assistant.guard.short-call-timeout}，默认 15 秒）：改写只输出一句话，
+ *       不该按「生成一整段回答」的 60 秒读超时去等
+ * </ul>
  */
 @Component
 public class QuestionCondenser {
@@ -84,16 +96,30 @@ public class QuestionCondenser {
     private final ChatClient chatClient;
     private final MemoryProperties properties;
     private final Resource systemPrompt = new ClassPathResource("prompts/memory-condense.st");
+    private final ModelDeadline deadline;
 
     /**
-     * 创建。
+     * 创建，不设短时限（测试手工 new 它）。
      *
      * @param chatClient 共享的 ChatClient
      * @param properties {@code assistant.memory.*}（开关、看几轮、结果最长多少字）
      */
     public QuestionCondenser(ChatClient chatClient, MemoryProperties properties) {
+        this(chatClient, properties, ModelDeadline.none());
+    }
+
+    /**
+     * 创建（Spring 注入）。
+     *
+     * @param chatClient 共享的 ChatClient
+     * @param properties {@code assistant.memory.*}（开关、看几轮、结果最长多少字）
+     * @param deadline 短调用的时限（审查修复）
+     */
+    @Autowired
+    public QuestionCondenser(ChatClient chatClient, MemoryProperties properties, ModelDeadline deadline) {
         this.chatClient = chatClient;
         this.properties = properties;
+        this.deadline = deadline;
     }
 
     /**
@@ -107,46 +133,54 @@ public class QuestionCondenser {
      *       {@link #USER_TEMPLATE}，{@code history} 是最近 {@code condense.history-turns} 轮的 {@link #transcript}，{@code question} 是用户这一句；
      *       温度 {@link #TEMPERATURE}；不注册工具
      *   <li>模型的输出用 {@link #clean} 清理；清理后为空、超过 {@code condense.max-chars} 个字、和原话一样、或者 {@link #plausible} 不通过，都返回 null
-     *   <li>模型调用失败（任何 RuntimeException）：记一行 warn，返回 null，不往外抛
+     *   <li>模型调用失败（任何 RuntimeException，含短时限到点）：归类成 {@link ModelCallException} 抛出（审查修复前是记一行 warn、返回 null；
+     *       改的原因见类说明）
      * </ul>
      *
      * @param message 用户这一句（原话）
      * @param history 带给模型的历史，按时间从早到晚
      * @return 改写后的问题；没改写时为 null（调用方就用原话）
+     * @throws ModelCallException 模型调不通（连不上、超时、熔断中）
      */
     public String condense(String message, List<Message> history) {
         if (!properties.condense().enabled() || history.isEmpty()) {
             return null;
         }
         String transcript = transcript(history, properties.condense().historyTurns());
+        String output;
         try {
-            String output = chatClient
-                    .prompt()
-                    .system(systemPrompt)
-                    .messages(examples())
-                    .user(u ->
-                            u.text(USER_TEMPLATE).param("history", transcript).param("question", message))
-                    .options(ChatOptions.builder().temperature(TEMPERATURE))
-                    .advisors(UsageAdvisor.stage("condense")) // 第 9 章：Token 记账时标明这是追问改写
-                    .call()
-                    .content();
-            String condensed = clean(output);
-            if (condensed.isEmpty()
-                    || condensed.length() > properties.condense().maxChars()
-                    || condensed.equals(message.strip())) {
-                log.info("追问改写「{}」→「{}」：没有改写或结果太长，用原话", message, condensed);
-                return null;
-            }
-            if (!plausible(message, condensed)) {
-                log.info("追问改写「{}」→「{}」：丢了原话里的关键词（改跑题了），用原话", message, condensed);
-                return null;
-            }
-            log.info("追问改写「{}」→「{}」", message, condensed);
-            return condensed;
+            output = deadline.call(
+                    "condense",
+                    () -> chatClient
+                            .prompt()
+                            .system(systemPrompt)
+                            .messages(examples())
+                            .user(u -> u.text(USER_TEMPLATE)
+                                    .param("history", transcript)
+                                    .param("question", message))
+                            .options(ChatOptions.builder().temperature(TEMPERATURE))
+                            .advisors(UsageAdvisor.stage("condense")) // 第 9 章：Token 记账时标明这是追问改写
+                            .call()
+                            .content());
         } catch (RuntimeException e) {
-            log.warn("追问改写失败，用原话：{}", e.toString());
+            // 模型调不通：往外抛，由 ChatService#begin 决定降级还是报错（不再退回原话去等下一次超时）
+            ModelCallException failure = ModelCallException.from(e);
+            log.warn("追问改写时模型不可用（{}）：{}", failure.failure(), e.toString());
+            throw failure;
+        }
+        String condensed = clean(output);
+        if (condensed.isEmpty()
+                || condensed.length() > properties.condense().maxChars()
+                || condensed.equals(message.strip())) {
+            log.info("追问改写「{}」→「{}」：没有改写或结果太长，用原话", message, condensed);
             return null;
         }
+        if (!plausible(message, condensed)) {
+            log.info("追问改写「{}」→「{}」：丢了原话里的关键词（改跑题了），用原话", message, condensed);
+            return null;
+        }
+        log.info("追问改写「{}」→「{}」", message, condensed);
+        return condensed;
     }
 
     /**

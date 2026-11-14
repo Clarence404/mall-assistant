@@ -1,6 +1,9 @@
 package io.github.clarence404.assistant.intent;
 
 import io.github.clarence404.assistant.chat.ChatRequest;
+import io.github.clarence404.assistant.guard.CallerResolver;
+import io.github.clarence404.assistant.guard.ChatGuard;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -10,25 +13,44 @@ import org.springframework.web.bind.annotation.RestController;
  * 单独的意图识别接口 {@code POST /api/intent}，方便调试提示词、对比模型（不必走完整的对话流程）。
  *
  * <p>所在层：接口层（第 2 章引入）。上游是 HTTP 客户端；下游是 {@link IntentService}。请求体与对话接口共用 {@link ChatRequest}。
+ *
+ * <p>审查修复：这个调试接口每次都要调一次模型，原来却绕过了第 9 章的进门检查——对话接口限了流，从这里照样能把模型打满。现在和对话接口一样先过
+ * {@link ChatGuard#admit}（每日预算、每分钟次数、并发名额；按来源 IP 算，和匿名对话共用同一个计数）。
  */
 @RestController
 public class IntentController {
 
     private final IntentService intentService;
+    private final ChatGuard guard;
+    private final CallerResolver callers;
 
-    public IntentController(IntentService intentService) {
+    /**
+     * 创建接口。
+     *
+     * @param intentService 意图识别
+     * @param guard 进门检查（审查修复）
+     * @param callers 这次请求算谁的
+     */
+    public IntentController(IntentService intentService, ChatGuard guard, CallerResolver callers) {
         this.intentService = intentService;
+        this.guard = guard;
+        this.callers = callers;
     }
 
     /**
      * 只做意图识别：{"message": "..."} → IntentResult；模型调不通时由 ApiExceptionHandler 转成 503。
      *
      * @param request 请求体，校验规则同对话接口
+     * @param http 取来源地址（按 IP 限流）
      * @return 校验过的意图识别结果；模型输出解析不了时是 UNKNOWN 兜底结果，而不是报错
      * @throws io.github.clarence404.assistant.error.ModelCallException 模型连不上或超时
+     * @throws io.github.clarence404.assistant.guard.ChatRejection 进门被挡下（429 / 503）
      */
     @PostMapping("/api/intent")
-    public IntentResult classify(@Valid @RequestBody ChatRequest request) {
-        return intentService.classify(request.message());
+    public IntentResult classify(@Valid @RequestBody ChatRequest request, HttpServletRequest http) {
+        // 进门：占一个并发名额，识别完（不管成功失败）归还
+        try (ChatGuard.Permit permit = guard.admit(callers.resolve(null, http.getRemoteAddr()))) {
+            return intentService.classify(request.message());
+        }
     }
 }

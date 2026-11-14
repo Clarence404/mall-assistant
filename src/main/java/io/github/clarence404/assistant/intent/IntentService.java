@@ -1,11 +1,13 @@
 package io.github.clarence404.assistant.intent;
 
 import io.github.clarence404.assistant.error.ModelCallException;
+import io.github.clarence404.assistant.guard.ModelDeadline;
 import io.github.clarence404.assistant.ops.UsageAdvisor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -25,6 +27,9 @@ import tools.jackson.core.JacksonException;
  * 连接失败、超时是「模型服务本身有问题」，马上再调大概率还是失败，只会让用户多等一倍时间。HTTP 层面的重试已经交给底层客户端
  * （ollama 下是 {@code spring.ai.retry.*}，openai 下是 {@code spring.ai.openai.max-retries}，见各 yml），这里不再叠加一层。重试只做一次：每次都是一次完整的模型调用，
  * 次数越多越慢、越费 token。
+ *
+ * <p>审查修复：每次模型调用套上 {@link ModelDeadline} 的短时限（{@code assistant.guard.short-call-timeout}，默认 15 秒）。意图识别的输出只是
+ * 一个小 JSON，正常一两秒；原来模型服务挂起时要等满 HTTP 读超时再加一次重试（60 + 60 秒）才报错。
  *
  * <p>所在层：业务层（第 2 章引入）。上游是 {@code ChatService}（每次对话先调它）和 {@link IntentController}；下游是共享的
  * {@link ChatClient} 和提示词文件 {@code prompts/intent-v2.st}（第 5 章加了规则类 POLICY；第 2～4 章用的 intent-v1.st 留着对比）。
@@ -67,17 +72,34 @@ public class IntentService {
 
     private final ChatClient chatClient;
     private final Resource intentPrompt;
+    private final ModelDeadline deadline;
 
     /**
-     * 创建意图识别服务。
+     * 创建意图识别服务，不设短时限（前几章的测试手工 new 它）。
      *
      * @param chatClient 共享的 ChatClient（见 {@code ChatClientConfig}）
      * @param intentPrompt 意图识别的系统提示词：取值说明 + few-shot 示例（给模型看几个「输入 → 输出」的例子，比纯文字说明更管用）；
      *     测试里可以换成别的文件
      */
-    public IntentService(ChatClient chatClient, @Value("classpath:prompts/intent-v2.st") Resource intentPrompt) {
+    public IntentService(ChatClient chatClient, Resource intentPrompt) {
+        this(chatClient, intentPrompt, ModelDeadline.none());
+    }
+
+    /**
+     * 创建意图识别服务（Spring 注入）。
+     *
+     * @param chatClient 共享的 ChatClient
+     * @param intentPrompt 意图识别的系统提示词
+     * @param deadline 短调用的时限（审查修复）：模型挂起时不等满读超时
+     */
+    @Autowired
+    public IntentService(
+            ChatClient chatClient,
+            @Value("classpath:prompts/intent-v2.st") Resource intentPrompt,
+            ModelDeadline deadline) {
         this.chatClient = chatClient;
         this.intentPrompt = intentPrompt;
+        this.deadline = deadline;
     }
 
     /**
@@ -120,14 +142,19 @@ public class IntentService {
     IntentResult callModel(String message, boolean strict) {
         String template = strict ? USER_TEMPLATE + "\n\n" + STRICT_REMINDER : USER_TEMPLATE;
         try {
-            return chatClient
-                    .prompt()
-                    .system(intentPrompt)
-                    .user(u -> u.text(template).param("message", message))
-                    .options(ChatOptions.builder().temperature(TEMPERATURE).maxTokens(MAX_TOKENS))
-                    .advisors(UsageAdvisor.stage("intent")) // 第 9 章：Token 记账时标明这是意图识别
-                    .call()
-                    .entity(IntentResult.class, spec -> spec.useProviderStructuredOutput());
+            // 审查修复：整次调用（含解析）放在短时限里，到点抛 MODEL_TIMEOUT；解析异常照旧原样抛出，由下面的 catch 接住
+            return deadline.call(
+                    "intent",
+                    () -> chatClient
+                            .prompt()
+                            .system(intentPrompt)
+                            .user(u -> u.text(template).param("message", message))
+                            .options(ChatOptions.builder()
+                                    .temperature(TEMPERATURE)
+                                    .maxTokens(MAX_TOKENS))
+                            .advisors(UsageAdvisor.stage("intent")) // 第 9 章：Token 记账时标明这是意图识别
+                            .call()
+                            .entity(IntentResult.class, spec -> spec.useProviderStructuredOutput()));
         } catch (JacksonException e) {
             log.info("意图识别：输出不是合法的 JSON：{}", e.getOriginalMessage());
             return null;

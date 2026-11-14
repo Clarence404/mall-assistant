@@ -8,6 +8,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.content.Content;
@@ -15,6 +16,8 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
+import org.springframework.core.io.Resource;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -36,6 +39,10 @@ import tools.jackson.databind.json.JsonMapper;
  *   <li>没有「列出全部块」的公开方法，存块的 Map 是 protected 字段 {@code store}，这里用一个子类把它露出来
  *   <li>{@code save(File)} 不会自动建父目录
  * </ul>
+ *
+ * <p>审查修复：每次检索都要用到「第一块向量的维度」（和当前模型核对）与「文档汇总」（核对模型名、判断关键词索引要不要重建）。原来每次都现算——
+ * 前者要把一整块（含上千个数的向量）用 Jackson 转成 Map，后者要把全部块过一遍。现在两样都缓存在 {@link InspectableSimpleVectorStore}
+ * 里，库里的内容一变（写入、删除、从文件读回、清空）就作废。
  */
 public class MemoryKnowledgeStore implements KnowledgeStore {
 
@@ -89,9 +96,7 @@ public class MemoryKnowledgeStore implements KnowledgeStore {
         if (!embedding.configured()) {
             return List.of();
         }
-        List<Map<String, Object>> metadata =
-                store().contents().stream().map(Content::getMetadata).toList();
-        return StoredDocument.summarize(metadata);
+        return store().documents();
     }
 
     /** 遍历内部 Map：键是块 ID，值里有文字和元数据（第 5 章关键词检索用）。 */
@@ -162,8 +167,96 @@ public class MemoryKnowledgeStore implements KnowledgeStore {
 
         private static final JsonMapper JSON = JsonMapper.builder().build();
 
+        /** 「还没算过」的维度。 */
+        private static final int UNKNOWN = Integer.MIN_VALUE;
+
+        /** 库里的内容每变一次加一：算缓存的线程用它判断「我算的时候库有没有变」，变了就不存（免得把旧结果当新的缓存下来）。 */
+        private final AtomicLong version = new AtomicLong();
+
+        private volatile int cachedDimensions = UNKNOWN;
+        private volatile List<StoredDocument> cachedDocuments;
+
+        /** 真正去算维度的次数（测试用它确认「连着检索不会每次都算」）。 */
+        private final AtomicLong dimensionProbes = new AtomicLong();
+
         InspectableSimpleVectorStore(EmbeddingModel embeddingModel) {
             super(SimpleVectorStore.builder(embeddingModel));
+        }
+
+        /** 库里的内容变了：版本加一，缓存作废。 */
+        private void changed() {
+            version.incrementAndGet();
+            cachedDimensions = UNKNOWN;
+            cachedDocuments = null;
+        }
+
+        // 下面四个方法是 SimpleVectorStore 改动内容的全部入口（add / delete 最终都走 doAdd / doDelete）。
+        // 写在 finally 里：写到一半抛了异常，内容也可能已经变了。
+
+        @Override
+        public void doAdd(List<Document> documents) {
+            try {
+                super.doAdd(documents);
+            } finally {
+                changed();
+            }
+        }
+
+        @Override
+        public void doDelete(List<String> idList) {
+            try {
+                super.doDelete(idList);
+            } finally {
+                changed();
+            }
+        }
+
+        @Override
+        public void doDelete(Filter.Expression filterExpression) {
+            try {
+                super.doDelete(filterExpression);
+            } finally {
+                changed();
+            }
+        }
+
+        @Override
+        public void load(Resource resource) {
+            try {
+                super.load(resource);
+            } finally {
+                changed();
+            }
+        }
+
+        @Override
+        public void load(java.io.File file) {
+            try {
+                super.load(file);
+            } finally {
+                changed();
+            }
+        }
+
+        /** 按 source 汇总的文档列表，带缓存；库里的内容没变就不重新算。 */
+        List<StoredDocument> documents() {
+            List<StoredDocument> current = cachedDocuments;
+            if (current != null) {
+                return current;
+            }
+            long seen = version.get();
+            List<Map<String, Object>> metadata =
+                    contents().stream().map(Content::getMetadata).toList();
+            List<StoredDocument> computed = StoredDocument.summarize(metadata);
+            if (version.get() == seen) {
+                cachedDocuments = computed;
+            }
+            return computed;
+        }
+
+        /** 真正去算维度的次数。 */
+        long dimensionProbes() {
+            return dimensionProbes.get();
         }
 
         /**
@@ -184,14 +277,25 @@ public class MemoryKnowledgeStore implements KnowledgeStore {
          * （SimpleVectorStore 存 JSON 文件时也是用 Jackson 序列化它的）。
          */
         int firstDimensions() {
+            int current = cachedDimensions;
+            if (current != UNKNOWN) {
+                return current;
+            }
+            long seen = version.get();
+            dimensionProbes.incrementAndGet();
             Object first = this.store.values().iterator().next();
             Map<?, ?> json = JSON.convertValue(first, Map.class);
-            return json.get("embedding") instanceof List<?> list ? list.size() : -1;
+            int computed = json.get("embedding") instanceof List<?> list ? list.size() : -1;
+            if (version.get() == seen) {
+                cachedDimensions = computed;
+            }
+            return computed;
         }
 
         /** 清空。 */
         void clear() {
             this.store.clear();
+            changed();
         }
     }
 }

@@ -17,7 +17,13 @@ public enum KnowledgeFailure {
      * 库里已有的向量和当前模型对不上（维度不同，或元数据里记的是别的模型）。不重建就一直错，重试没用，所以是 409 Conflict：
      * 请求本身没问题，和服务端现有的数据冲突了。
      */
-    INDEX_MODEL_MISMATCH(HttpStatus.CONFLICT, "知识库需要重建");
+    INDEX_MODEL_MISMATCH(HttpStatus.CONFLICT, "知识库需要重建"),
+
+    /**
+     * 不允许从这个来源触发入库（审查修复）：入库接口默认只接受本机回环地址的调用（{@code assistant.knowledge.ingest-local-only}），
+     * 见 {@link KnowledgeController#ingest}。
+     */
+    KNOWLEDGE_INGEST_FORBIDDEN(HttpStatus.FORBIDDEN, "不允许从这里入库");
 
     private final HttpStatus status;
     private final String title;

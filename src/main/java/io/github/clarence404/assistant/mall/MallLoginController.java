@@ -1,5 +1,8 @@
 package io.github.clarence404.assistant.mall;
 
+import io.github.clarence404.assistant.guard.CallerResolver;
+import io.github.clarence404.assistant.guard.ChatGuard;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -18,29 +21,41 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>为什么要经智能客服转一道，而不是页面直接调 9000：页面是从 8088 打开的，直接调 9000 属于跨域，要商城那边开 CORS；
  * 转一道之后页面只和 8088 打交道。令牌回到页面后，由页面在每次提问时放进 {@code Authorization} 请求头带回来，
  * 智能客服本身不保存任何人的登录状态（没有会话），重启也不影响。刷新令牌不往外给：页面用不上，少暴露一样东西。
+ *
+ * <p>审查修复：登录代理原来不限次数，等于替商城开了一个可以随便试密码的口子（商城自己的登录限流是按它看到的来源算的，而它看到的来源
+ * 永远是智能客服这台机器）。现在先过 {@link ChatGuard#throttle}：按来源 IP，每分钟次数和对话接口共用一个上限。
  */
 @RestController
 public class MallLoginController {
 
     private final MallApiClient mallApi;
+    private final ChatGuard guard;
+    private final CallerResolver callers;
 
     /**
      * 创建登录代理接口。
      *
      * @param mallApi 商城客户端
+     * @param guard 限流（审查修复）
+     * @param callers 这次请求算谁的
      */
-    public MallLoginController(MallApiClient mallApi) {
+    public MallLoginController(MallApiClient mallApi, ChatGuard guard, CallerResolver callers) {
         this.mallApi = mallApi;
+        this.guard = guard;
+        this.callers = callers;
     }
 
     /**
      * 登录。
      *
      * @param request 手机号与密码，密码不记日志
+     * @param http 取来源地址（按 IP 限流）
      * @return 200 {@code {"accessToken": "...", "expiresIn": 1800}}；手机号或密码错 401；商城不可用 503；均为 ProblemDetail，带 code
+     * @throws io.github.clarence404.assistant.guard.ChatRejection 太频繁（429 RATE_LIMITED）
      */
     @PostMapping("/api/mall/login")
-    public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request) {
+    public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request, HttpServletRequest http) {
+        guard.throttle(callers.resolve(null, http.getRemoteAddr()));
         MallResult<MallModels.Tokens> result = mallApi.login(request.phone(), request.password());
         if (result.isOk()) {
             return ResponseEntity.ok(

@@ -77,6 +77,16 @@ public class ConfirmationService {
     /** 等别人（可能在另一个实例上）执行完时，隔多久看一次结果。 */
     static final Duration POLL_INTERVAL = Duration.ofMillis(20);
 
+    /**
+     * 执行时出了意料之外的异常（不是商城明确拒绝，而是代码或下游抛了没人接的异常）时给用户的话：这时候到底办没办成，我们不知道（审查修复）。
+     *
+     * @param orderNo 订单号
+     * @return 固定话术
+     */
+    static String unknownResult(String orderNo) {
+        return "执行时出了意外，结果未知：可能已经办了，也可能没有。请到「我的订单」里核对订单 " + orderNo + " 的状态；确实没办成的话，再说一次要办的事。";
+    }
+
     private final MallApiClient mallApi;
     private final AfterSalesStore afterSales;
     private final ConversationMemory memory;
@@ -363,7 +373,7 @@ public class ConfirmationService {
                         "好的，没有执行：" + entry.action().summary() + "。订单没有任何变化。",
                         null,
                         now)
-                : execute(entry, owner, mallToken, now);
+                : executeSafely(entry, owner, mallToken, now);
         try {
             store.complete(id, outcome, keep);
         } catch (StateUnavailableException e) {
@@ -371,8 +381,44 @@ public class ConfirmationService {
             log.error("确认 {} 已执行（{}），但结果没能存进共享状态：{}", id, outcome.status(), e.toString());
         }
         log.info("确认 {}：{} → {}", id, decision, outcome.status());
-        remember(entry, outcome, mallToken);
+        try {
+            remember(entry, outcome, mallToken);
+        } catch (RuntimeException e) {
+            // 结果已经定了、也存好了：写回会话记忆失败（比如记忆库连不上）不能让这次确认变成 500
+            log.warn("确认 {} 的结果写回会话记忆时出错：{}", id, e.toString());
+        }
         return outcome;
+    }
+
+    /**
+     * 执行写操作，任何意料之外的异常都落成一个 FAILED 的最终结果（审查修复）。
+     *
+     * <p>为什么要包这一层：{@link #decide} 先抢占（{@link ConfirmationStore#claim}）再执行、最后存结果。抢占是不释放的——如果执行这一步抛了
+     * 异常（售后申请单库连不上、参数里的类型不认识……）而没人接，结果就永远存不进去：这张确认单卡在「正在处理」，用户再点只会等 10 秒然后 409，
+     * 直到确认过期。包起来之后，异常变成一个明确的终态，话术如实告诉用户「结果未知，请去核对」，再点返回的也是它。
+     *
+     * <p>为什么是 FAILED 而不是放开抢占让用户重试：异常抛出时写操作可能已经发给商城了（比如响应解析时出错），放开重试就可能执行两次——
+     * 「最多执行一次」比「一定成功」重要。
+     *
+     * @param entry 待确认操作
+     * @param owner 确认的人
+     * @param token 确认的人的商城令牌
+     * @param now 现在
+     * @return 结果，从不抛异常
+     */
+    private ConfirmationOutcome executeSafely(
+            StoredConfirmation entry, ConversationOwner owner, String token, Instant now) {
+        try {
+            return execute(entry, owner, token, now);
+        } catch (RuntimeException e) {
+            log.error("确认 {} 执行时抛出了没有预料到的异常，按「结果未知」记为失败", entry.id(), e);
+            return outcome(
+                    entry,
+                    ConfirmationOutcome.Status.FAILED,
+                    unknownResult(entry.action().orderNo()),
+                    null,
+                    now);
+        }
     }
 
     /** 已经有结果：决定相同原样返回（幂等），不同是 409。 */
@@ -520,6 +566,16 @@ public class ConfirmationService {
         } catch (RuntimeException e) {
             log.warn("售后申请单保存失败：{}", e.toString());
             return outcome(entry, ConfirmationOutcome.Status.FAILED, "售后申请单暂时存不进去，没有提交成功，请稍后再说一次。", null, now);
+        }
+        if (!entry.id().equals(saved.confirmationId())) {
+            // 审查修复：存储返回的是别的确认单建的那张——上面 findOpen 查的时候还没有，存的时候已经有了（同一笔订单的两张确认单被同时确认）。
+            // 「一笔订单只有一张待审核的申请」由存储的原子操作保证（见 AfterSalesStore#create），这里如实告诉用户没有重复提交
+            return outcome(
+                    entry,
+                    ConfirmationOutcome.Status.FAILED,
+                    "订单 " + orderNo + " 已经有待审核的售后申请 " + saved.id() + "，没有重复提交。",
+                    null,
+                    now);
         }
         return outcome(
                 entry,

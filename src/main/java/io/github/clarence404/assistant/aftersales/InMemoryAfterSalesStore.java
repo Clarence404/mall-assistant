@@ -15,10 +15,24 @@ public final class InMemoryAfterSalesStore implements AfterSalesStore {
 
     private final Map<String, AfterSalesApplication> byConfirmation = new ConcurrentHashMap<>();
 
+    /**
+     * 存一张申请单。整个方法加锁（审查修复）：「这个确认存过没有」「这笔订单有没有待审核的」「存」三步要一气呵成，中间不能插进另一个线程；
+     * 申请单一天也没几张，一把锁足够。
+     */
     @Override
-    public AfterSalesApplication create(AfterSalesApplication application) {
-        AfterSalesApplication existing = byConfirmation.putIfAbsent(application.confirmationId(), application);
-        return existing != null ? existing : application;
+    public synchronized AfterSalesApplication create(AfterSalesApplication application) {
+        AfterSalesApplication sameConfirmation = byConfirmation.get(application.confirmationId());
+        if (sameConfirmation != null) {
+            return sameConfirmation;
+        }
+        if (application.status() == AfterSalesApplication.Status.PENDING_REVIEW) {
+            Optional<AfterSalesApplication> open = findOpen(application.ownerKey(), application.orderNo());
+            if (open.isPresent()) {
+                return open.get();
+            }
+        }
+        byConfirmation.put(application.confirmationId(), application);
+        return application;
     }
 
     @Override

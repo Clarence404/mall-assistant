@@ -67,15 +67,52 @@ public final class AgentFixtures {
         return agent(new ChatClientConfig().chatClient(ChatClient.builder(model)), rag, mall, properties);
     }
 
+    /**
+     * 组装一套 Agent，指定待确认操作存在哪、售后申请单存在哪（审查修复的测试用：两种确认存储跑同一套，售后申请单库可以换成会出错的）。
+     *
+     * @param model 假模型
+     * @param mall 假商城
+     * @param store 待确认操作的存储（内存或 Redis）
+     * @param afterSales 售后申请单库
+     * @return 组装好的 Agent
+     */
+    public static Agent agent(
+            FakeChatModel model, StubMallApi mall, ConfirmationStore store, AfterSalesStore afterSales) {
+        ChatClient chatClient = new ChatClientConfig().chatClient(ChatClient.builder(model));
+        return agent(
+                chatClient,
+                RagFixtures.service(chatClient, RagFixtures.fakeKnowledgeBase(), RagFixtures.properties()),
+                mall,
+                AgentProperties.defaults(AgentProperties.Mode.LOOP),
+                store,
+                afterSales);
+    }
+
     private static Agent agent(ChatClient chatClient, RagService rag, StubMallApi mall, AgentProperties properties) {
+        return agent(chatClient, rag, mall, properties, new MemoryConfirmationStore(), new InMemoryAfterSalesStore());
+    }
+
+    private static Agent agent(
+            ChatClient chatClient,
+            RagService rag,
+            StubMallApi mall,
+            AgentProperties properties,
+            ConfirmationStore store,
+            AfterSalesStore afterSales) {
         MemoryFixtures.Memory memory = MemoryFixtures.memory(chatClient, mall, MemoryFixtures.properties());
         MallApiClient mallApi =
                 new MallApiClient(new MallApiProperties(mall.baseUrl(), Duration.ofSeconds(1), Duration.ofSeconds(2)));
         MallTools mallTools = new MallTools(mallApi);
         AssistantPrompts prompts = TestPrompts.prompts("v3");
-        AfterSalesStore afterSales = new InMemoryAfterSalesStore();
         ConfirmationService confirmations = new ConfirmationService(
-                mallApi, afterSales, memory.memory(), memory.owners(), properties, memory.clock());
+                mallApi,
+                afterSales,
+                memory.memory(),
+                memory.owners(),
+                properties,
+                memory.clock(),
+                store,
+                Duration.ofSeconds(2));
         AgentToolbox toolbox = new AgentToolbox(mallApi, mallTools, rag, properties);
         WriteActionGuard guard = new WriteActionGuard(afterSales);
         AgentLoop loop = new AgentLoop(

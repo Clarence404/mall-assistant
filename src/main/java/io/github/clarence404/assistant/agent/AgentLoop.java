@@ -102,6 +102,11 @@ public class AgentLoop {
             }
             long start = System.nanoTime();
             AgentDecision decision = planner.decide(run);
+            // 审查修复：模型想这一步要好几秒到十几秒，页面可能就是在这期间关掉的。回来之后再查一次——关了就到此为止：
+            // 不执行它选的工具，更不能替一个已经走掉的用户生成确认单（没人看得到那张卡片，却留下一个 5 分钟内有效的待确认操作）
+            if (cancelled.getAsBoolean()) {
+                return stop(run, AgentReplies.cancelled(), AgentTrace.StopReason.CANCELLED);
+            }
             AgentAction.Parsed parsed = AgentAction.parse(decision);
             if (!parsed.valid()) {
                 run.record(step(

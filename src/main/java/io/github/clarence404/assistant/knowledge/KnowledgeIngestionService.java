@@ -71,10 +71,18 @@ public class KnowledgeIngestionService {
             if (rebuild) {
                 store.reset();
             }
+            // 入库前先丢掉缓存的文档汇总：增量比较要按库里此刻的真实内容算（pgvector 多实例时，别的实例可能刚入过库）
+            store.invalidate();
             List<StoredDocument> stored = store.documents();
             ensureSameModel(stored, embedding, store);
             IngestPlan plan = new IngestPlanner(factory).plan(documents, stored);
-            List<IngestReport.DocumentChange> changes = apply(plan, factory);
+            List<IngestReport.DocumentChange> changes;
+            try {
+                changes = apply(plan, factory);
+            } finally {
+                // 写完（或者写到一半失败）库里的内容都变了：让缓存失效，下一次检索重新汇总、重建关键词索引
+                store.invalidate();
+            }
             store.persist();
             List<StoredDocument> after = store.documents();
             IngestReport report = report(rebuild, changes, after, (System.nanoTime() - start) / 1_000_000);
